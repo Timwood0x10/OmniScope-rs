@@ -185,5 +185,40 @@ info:
 	@echo "$(BLUE)Project Information:$(NC)"
 	@echo "  Name:    $(PROJECT_NAME)"
 	@echo "  Version: $(VERSION)"
-	@echo "  Rust:    $$(rustc --version)"
-	@echo "  Cargo:   $$(cargo --version)"
+	@echo "  Rust:    $(rustc --version)"
+	@echo "  Cargo:   $(cargo --version)"
+
+## cache-stats: Show sccache statistics
+.PHONY: cache-stats
+cache-stats:
+	@echo "$(BLUE)Showing sccache statistics...$(NC)"
+	@sccache --show-stats 2>/dev/null || echo "sccache not running"
+
+## cache-clear: Clear sccache cache
+.PHONY: cache-clear
+cache-clear:
+	@echo "$(YELLOW)Clearing sccache cache...$(NC)"
+	@sccache --stop-server 2>/dev/null || true
+	@sccache --start-server 2>/dev/null || echo "sccache not available"
+
+## build-timed: Build with timing information
+.PHONY: build-timed
+build-timed:
+	@echo "$(BLUE)Building with timing information...$(NC)"
+	@time $(CARGO_BUILD) --timings
+
+## check-features: Check all feature combinations
+.PHONY: check-features
+check-features:
+	@echo "$(BLUE)Checking all feature combinations...$(NC)"
+	$(CARGO) hack check --each-feature
+
+## optimize: Apply all optimizations and rebuild
+.PHONY: optimize
+optimize: clean
+	@echo "$(BLUE)Applying optimizations...$(NC)"
+	@echo "  - Using sccache for compilation caching"
+	@echo "  - Using fast linker (zld/mold)"
+	@echo "  - Building with LTO and optimization level 3"
+	$(CARGO_BUILD) --release --timings
+	@echo "$(GREEN)Optimized build complete!$(NC)"

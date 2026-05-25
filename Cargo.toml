@@ -88,3 +88,27 @@ proptest = "1.4"
 quickcheck = "1.0"
 assert_matches = "1.5"
 pretty_assertions = "1.4"
+
+
+# Cargo.toml
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.bench]
+inherits = "release"
+debug = true
+
+[profile.test]
+opt-level = 2
+debug = true
