@@ -3,7 +3,7 @@
 //! This module provides function summaries for efficient inter-procedural
 //! dataflow analysis.
 
-use crate::graph::{ValueType, MemoryLocation};
+use crate::graph::{MemoryLocation, ValueType};
 use omniscope_types::FunctionId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn test_function_summary_side_effects() {
         let mut summary = FunctionSummary::new(1, "test_func");
-        
+
         summary.mark_modified("global_var");
         assert!(summary.has_side_effects());
         assert!(!summary.is_pure());
@@ -239,10 +239,10 @@ mod tests {
     #[test]
     fn test_summary_cache() {
         let mut cache = SummaryCache::new();
-        
+
         let summary = FunctionSummary::new(1, "test_func");
         cache.insert(summary);
-        
+
         assert_eq!(cache.count(), 1);
         assert!(cache.get(1).is_some());
     }

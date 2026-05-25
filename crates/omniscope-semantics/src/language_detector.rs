@@ -81,24 +81,19 @@ impl LanguageDetector {
             LanguagePattern::new(Language::Rust, "_ZN4core").prefix(),
             LanguagePattern::new(Language::Rust, "_ZN5alloc").prefix(),
             LanguagePattern::new(Language::Rust, "std::").contains(),
-            
             // C++ patterns
             LanguagePattern::new(Language::Cpp, "_Z").prefix(), // C++ mangling
             LanguagePattern::new(Language::Cpp, "std::").contains(),
             LanguagePattern::new(Language::Cpp, "::").contains(),
-            
             // Go patterns
             LanguagePattern::new(Language::Go, "main.").prefix(),
             LanguagePattern::new(Language::Go, "runtime.").prefix(),
             LanguagePattern::new(Language::Go, ".").contains(),
-            
             // Zig patterns
             LanguagePattern::new(Language::Zig, "zig.").prefix(),
-            
             // Python patterns
             LanguagePattern::new(Language::Python, "Py").prefix(),
             LanguagePattern::new(Language::Python, "PyObject").contains(),
-            
             // Java patterns
             LanguagePattern::new(Language::Java, "Java_").prefix(),
             LanguagePattern::new(Language::Java, "JNI").contains(),
@@ -165,10 +160,10 @@ mod tests {
     #[test]
     fn test_detect_rust() {
         let detector = LanguageDetector::new();
-        
+
         let lang = detector.detect_from_function("_ZN4core3str4len");
         assert_eq!(lang, Language::Rust);
-        
+
         let lang = detector.detect_from_module("lib.rs");
         assert_eq!(lang, Language::Rust);
     }
@@ -176,10 +171,10 @@ mod tests {
     #[test]
     fn test_detect_cpp() {
         let detector = LanguageDetector::new();
-        
+
         let lang = detector.detect_from_function("_Z3fooi");
         assert_eq!(lang, Language::Cpp);
-        
+
         let lang = detector.detect_from_module("main.cpp");
         assert_eq!(lang, Language::Cpp);
     }
@@ -187,7 +182,7 @@ mod tests {
     #[test]
     fn test_detect_c() {
         let detector = LanguageDetector::new();
-        
+
         let lang = detector.detect_from_module("main.c");
         assert_eq!(lang, Language::C);
     }
@@ -195,13 +190,9 @@ mod tests {
     #[test]
     fn test_detect_from_functions() {
         let detector = LanguageDetector::new();
-        
-        let functions = vec![
-            "_ZN4core3str4len",
-            "_ZN5alloc5alloc",
-            "unknown_func",
-        ];
-        
+
+        let functions = vec!["_ZN4core3str4len", "_ZN5alloc5alloc", "unknown_func"];
+
         let lang = detector.detect_from_functions(&functions);
         assert_eq!(lang, Language::Rust);
     }

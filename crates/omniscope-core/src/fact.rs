@@ -1,4 +1,3 @@
-
 //! Fact system for OmniScope
 //!
 //! Facts represent analysis findings that can be used by multiple passes.

@@ -38,19 +38,13 @@ impl IRLoader {
         if !path.exists() {
             return Err(IRLoadError::FileOpen {
                 path: path.to_path_buf(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "file not found",
-                ),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"),
             }
             .into());
         }
 
         // Determine format from extension
-        let extension = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
         match extension {
             "ll" | "bc" => {

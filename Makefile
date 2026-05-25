@@ -37,55 +37,55 @@ help:
 .PHONY: build
 build:
 	@echo "$(BLUE)Building $(PROJECT_NAME) in debug mode...$(NC)"
-	$(CARGO_BUILD)
+	$(CARGO) build --workspace
 
 ## release: Build the project in release mode with optimizations
 .PHONY: release
 release:
 	@echo "$(BLUE)Building $(PROJECT_NAME) in release mode...$(NC)"
-	$(CARGO_BUILD) --release
+	$(CARGO) build --workspace --release
 
 ## test: Run all tests
 .PHONY: test
 test:
 	@echo "$(BLUE)Running tests...$(NC)"
-	$(CARGO_TEST) --all-features
+	$(CARGO) test --workspace --all-features
 
 ## test-verbose: Run tests with verbose output
 .PHONY: test-verbose
 test-verbose:
 	@echo "$(BLUE)Running tests with verbose output...$(NC)"
-	$(CARGO_TEST) --all-features -- --nocapture
+	$(CARGO) test --workspace --all-features -- --nocapture
 
 ## test-release: Run tests in release mode
 .PHONY: test-release
 test-release:
 	@echo "$(BLUE)Running tests in release mode...$(NC)"
-	$(CARGO_TEST) --release --all-features
+	$(CARGO) test --workspace --release --all-features
 
 ## check: Run clippy checks (must show 0 errors)
 .PHONY: check
 check:
 	@echo "$(BLUE)Running clippy checks...$(NC)"
-	$(CARGO_CLIPPY) --all-targets --all-features -- -D warnings
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
 
 ## check-strict: Run clippy with all pedantic lints
 .PHONY: check-strict
 check-strict:
 	@echo "$(BLUE)Running clippy with pedantic lints...$(NC)"
-	$(CARGO_CLIPPY) --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery
+	$(CARGO) clippy --workspace --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery
 
 ## fmt: Format code using rustfmt
 .PHONY: fmt
 fmt:
 	@echo "$(BLUE)Formatting code...$(NC)"
-	$(CARGO_FMT)
+	$(CARGO) fmt --all
 
 ## fmt-check: Check if code is formatted correctly
 .PHONY: fmt-check
 fmt-check:
 	@echo "$(BLUE)Checking code formatting...$(NC)"
-	$(CARGO_FMT) -- --check
+	$(CARGO) fmt --all -- --check
 
 ## clean: Clean build artifacts
 .PHONY: clean

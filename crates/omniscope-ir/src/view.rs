@@ -40,7 +40,9 @@ impl<'ctx> FunctionView<'ctx> {
 
     /// Returns an iterator over basic blocks
     pub fn basic_blocks(&self) -> impl Iterator<Item = BasicBlockView<'ctx>> {
-        self.func.basic_blocks().map(|block| BasicBlockView::new(block))
+        self.func
+            .basic_blocks()
+            .map(|block| BasicBlockView::new(block))
     }
 
     /// Returns true if this is a declaration
@@ -104,7 +106,9 @@ impl<'ctx> BasicBlockView<'ctx> {
 
     /// Returns an iterator over instructions
     pub fn instructions(&self) -> impl Iterator<Item = InstructionView<'ctx>> {
-        self.block.instructions().map(|inst| InstructionView::new(inst))
+        self.block
+            .instructions()
+            .map(|inst| InstructionView::new(inst))
     }
 
     /// Returns the inner block
@@ -186,18 +190,12 @@ impl<'ctx> ModuleView<'ctx> {
 
     /// Returns the module name
     pub fn name(&self) -> &str {
-        self.module
-            .get_name()
-            .to_str()
-            .unwrap_or("<unknown>")
+        self.module.get_name().to_str().unwrap_or("<unknown>")
     }
 
     /// Returns the number of functions
     pub fn function_count(&self) -> usize {
-        self.module
-            .get_functions()
-            .into_iter()
-            .count()
+        self.module.get_functions().into_iter().count()
     }
 
     /// Returns an iterator over functions

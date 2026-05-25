@@ -93,8 +93,8 @@ mod tests {
         let extractor = DebugInfoExtractor::new();
         assert!(extractor.base_path.is_none());
 
-        let extractor_with_base = DebugInfoExtractor::new()
-            .with_base_path(PathBuf::from("/project"));
+        let extractor_with_base =
+            DebugInfoExtractor::new().with_base_path(PathBuf::from("/project"));
         assert!(extractor_with_base.base_path.is_some());
     }
 

@@ -15,7 +15,7 @@ pub mod graph;
 // Re-exports
 pub use analysis::{AnalysisDomain, BackwardAnalysis, ForwardAnalysis};
 pub use function_summary::{AbstractValue, FunctionSummary, SideEffect, SummaryCache};
-pub use graph::{DataFlowGraph, DataNode, DataEdge, EdgeType, ValueType, MemoryLocation};
+pub use graph::{DataEdge, DataFlowGraph, DataNode, EdgeType, MemoryLocation, ValueType};
 
 #[cfg(test)]
 mod tests {

@@ -73,23 +73,22 @@ impl ZoneClassifier {
         match language {
             Language::Rust => {
                 // Rust unsafe functions
-                function_name.contains("unsafe") ||
-                function_name.contains("transmute") ||
-                function_name.contains("from_raw") ||
-                function_name.contains("as_ptr")
+                function_name.contains("unsafe")
+                    || function_name.contains("transmute")
+                    || function_name.contains("from_raw")
+                    || function_name.contains("as_ptr")
             }
             Language::C | Language::Cpp => {
                 // C/C++ memory functions
-                function_name.contains("malloc") ||
-                function_name.contains("free") ||
-                function_name.contains("realloc") ||
-                function_name.contains("memcpy") ||
-                function_name.contains("strcpy")
+                function_name.contains("malloc")
+                    || function_name.contains("free")
+                    || function_name.contains("realloc")
+                    || function_name.contains("memcpy")
+                    || function_name.contains("strcpy")
             }
             Language::Zig => {
                 // Zig unsafe operations
-                function_name.contains("unsafe") ||
-                function_name.contains("ptrCast")
+                function_name.contains("unsafe") || function_name.contains("ptrCast")
             }
             _ => false,
         }
@@ -178,10 +177,10 @@ mod tests {
     #[test]
     fn test_classify_safe_functions() {
         let classifier = ZoneClassifier::new();
-        
+
         let zone = classifier.classify("strlen", Language::C);
         assert_eq!(zone, ZoneKind::Safe);
-        
+
         let zone = classifier.classify("abs", Language::C);
         assert_eq!(zone, ZoneKind::Safe);
     }
@@ -189,13 +188,13 @@ mod tests {
     #[test]
     fn test_classify_risky_functions() {
         let classifier = ZoneClassifier::new();
-        
+
         let zone = classifier.classify("malloc", Language::C);
         assert_eq!(zone, ZoneKind::Risky);
-        
+
         let zone = classifier.classify("free", Language::C);
         assert_eq!(zone, ZoneKind::Risky);
-        
+
         let zone = classifier.classify("strcpy", Language::C);
         assert_eq!(zone, ZoneKind::Risky);
     }
@@ -203,10 +202,10 @@ mod tests {
     #[test]
     fn test_classify_rust_unsafe() {
         let classifier = ZoneClassifier::new();
-        
+
         let zone = classifier.classify("std::mem::transmute", Language::Rust);
         assert_eq!(zone, ZoneKind::Risky);
-        
+
         let zone = classifier.classify("from_raw_parts", Language::Rust);
         assert_eq!(zone, ZoneKind::Risky);
     }
@@ -214,7 +213,7 @@ mod tests {
     #[test]
     fn test_classify_unknown() {
         let classifier = ZoneClassifier::new();
-        
+
         let zone = classifier.classify("custom_function", Language::C);
         assert_eq!(zone, ZoneKind::Unknown);
     }

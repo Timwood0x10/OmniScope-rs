@@ -4,7 +4,7 @@
 //! common errors and provide a more idiomatic Rust interface.
 
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{FunctionValue, InstructionValue, AnyValue};
+use inkwell::values::{AnyValue, FunctionValue, InstructionValue};
 use std::fmt;
 
 /// Safe wrapper for LLVM function
@@ -21,10 +21,7 @@ impl<'ctx> SafeFunction<'ctx> {
 
     /// Returns the function name
     pub fn name(&self) -> &str {
-        self.inner
-            .get_name()
-            .to_str()
-            .unwrap_or("<unknown>")
+        self.inner.get_name().to_str().unwrap_or("<unknown>")
     }
 
     /// Returns the number of parameters
@@ -39,14 +36,15 @@ impl<'ctx> SafeFunction<'ctx> {
 
     /// Returns an iterator over basic blocks
     pub fn basic_blocks(&self) -> impl Iterator<Item = SafeBasicBlock<'ctx>> {
-        self.inner.get_basic_blocks().into_iter().map(SafeBasicBlock::new)
+        self.inner
+            .get_basic_blocks()
+            .into_iter()
+            .map(SafeBasicBlock::new)
     }
 
     /// Returns true if the function is a declaration (no body)
     pub fn is_declaration(&self) -> bool {
-        self.inner
-            .get_first_basic_block()
-            .is_none()
+        self.inner.get_first_basic_block().is_none()
     }
 
     /// Returns the inner function value
@@ -79,23 +77,20 @@ impl<'ctx> SafeBasicBlock<'ctx> {
 
     /// Returns the block name
     pub fn name(&self) -> &str {
-        self.inner
-            .get_name()
-            .to_str()
-            .unwrap_or("<unknown>")
+        self.inner.get_name().to_str().unwrap_or("<unknown>")
     }
 
     /// Returns the number of instructions
     pub fn instruction_count(&self) -> usize {
-        self.inner
-            .get_instructions()
-            .into_iter()
-            .count()
+        self.inner.get_instructions().into_iter().count()
     }
 
     /// Returns an iterator over instructions
     pub fn instructions(&self) -> impl Iterator<Item = SafeInstruction<'ctx>> {
-        self.inner.get_instructions().into_iter().map(SafeInstruction::new)
+        self.inner
+            .get_instructions()
+            .into_iter()
+            .map(SafeInstruction::new)
     }
 
     /// Returns the inner basic block

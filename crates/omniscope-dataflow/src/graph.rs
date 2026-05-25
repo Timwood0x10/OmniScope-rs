@@ -41,10 +41,10 @@ impl DataFlowGraph {
     pub fn add_node(&mut self, node: DataNode) -> NodeId {
         let id = self.next_node_id;
         self.next_node_id += 1;
-        
+
         let mut node = node;
         node.id = id;
-        
+
         self.nodes.insert(id, node);
         id
     }
@@ -53,10 +53,10 @@ impl DataFlowGraph {
     pub fn add_edge(&mut self, edge: DataEdge) -> EdgeId {
         let id = self.next_edge_id;
         self.next_edge_id += 1;
-        
+
         let mut edge = edge;
         edge.id = id;
-        
+
         // Update node connectivity
         if let Some(mut from_node) = self.nodes.get_mut(&edge.from) {
             from_node.outgoing_edges.push(id);
@@ -64,7 +64,7 @@ impl DataFlowGraph {
         if let Some(mut to_node) = self.nodes.get_mut(&edge.to) {
             to_node.incoming_edges.push(id);
         }
-        
+
         self.edges.insert(id, edge);
         id
     }
@@ -302,13 +302,13 @@ mod tests {
     #[test]
     fn test_add_nodes() {
         let mut graph = DataFlowGraph::new();
-        
+
         let node1 = DataNode::new(ValueType::Variable("x".to_string()));
         let node2 = DataNode::new(ValueType::Variable("y".to_string()));
-        
+
         let id1 = graph.add_node(node1);
         let id2 = graph.add_node(node2);
-        
+
         assert_ne!(id1, id2);
         assert_eq!(graph.node_count(), 2);
     }
@@ -316,18 +316,18 @@ mod tests {
     #[test]
     fn test_add_edges() {
         let mut graph = DataFlowGraph::new();
-        
+
         let node1 = DataNode::new(ValueType::Variable("x".to_string()));
         let node2 = DataNode::new(ValueType::Variable("y".to_string()));
-        
+
         let id1 = graph.add_node(node1);
         let id2 = graph.add_node(node2);
-        
+
         let edge = DataEdge::new(id1, id2, EdgeType::Assignment);
         let edge_id = graph.add_edge(edge);
-        
+
         assert_eq!(graph.edge_count(), 1);
-        
+
         let successors = graph.successors(id1);
         assert_eq!(successors.len(), 1);
         assert_eq!(successors[0], id2);
@@ -335,10 +335,8 @@ mod tests {
 
     #[test]
     fn test_memory_location() {
-        let loc = MemoryLocation::new("arr")
-            .with_offset(8)
-            .with_size(4);
-        
+        let loc = MemoryLocation::new("arr").with_offset(8).with_size(4);
+
         assert_eq!(loc.base, "arr");
         assert_eq!(loc.offset, Some(8));
         assert_eq!(loc.size, Some(4));

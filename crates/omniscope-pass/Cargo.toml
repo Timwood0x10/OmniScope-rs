@@ -16,6 +16,8 @@ omniscope-registry = { path = "../omniscope-registry" }
 
 rayon = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
