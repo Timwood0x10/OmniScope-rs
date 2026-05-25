@@ -1,0 +1,15 @@
+[package]
+name = "omniscope-pipeline"
+version = "0.1.0"
+edition = "2021"
+authors = ["OmniScope Team"]
+description = "Pipeline orchestration for OmniScope"
+license = "Apache-2.0"
+
+[dependencies]
+omniscope-core = { path = "../omniscope-core" }
+omniscope-types = { path = "../omniscope-types" }
+omniscope-pass = { path = "../omniscope-pass" }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

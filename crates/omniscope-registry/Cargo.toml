@@ -1,0 +1,16 @@
+[package]
+name = "omniscope-registry"
+version = "0.1.0"
+edition = "2021"
+authors = ["OmniScope Team"]
+description = "Function registries for OmniScope"
+license = "Apache-2.0"
+
+[dependencies]
+omniscope-core = { path = "../omniscope-core" }
+omniscope-types = { path = "../omniscope-types" }
+
+dashmap = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

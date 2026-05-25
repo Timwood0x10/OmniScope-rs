@@ -1,0 +1,15 @@
+[package]
+name = "omniscope-semantics"
+version = "0.1.0"
+edition = "2021"
+authors = ["OmniScope Team"]
+description = "Semantic analysis for OmniScope"
+license = "Apache-2.0"
+
+[dependencies]
+omniscope-core = { path = "../omniscope-core" }
+omniscope-types = { path = "../omniscope-types" }
+omniscope-ir = { path = "../omniscope-ir" }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

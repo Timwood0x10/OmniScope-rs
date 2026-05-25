@@ -1,0 +1,21 @@
+[package]
+name = "omniscope-pass"
+version = "0.1.0"
+edition = "2021"
+authors = ["OmniScope Team"]
+description = "Analysis passes for OmniScope"
+license = "Apache-2.0"
+
+[dependencies]
+omniscope-core = { path = "../omniscope-core" }
+omniscope-types = { path = "../omniscope-types" }
+omniscope-ir = { path = "../omniscope-ir" }
+omniscope-dataflow = { path = "../omniscope-dataflow" }
+omniscope-semantics = { path = "../omniscope-semantics" }
+omniscope-registry = { path = "../omniscope-registry" }
+
+rayon = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

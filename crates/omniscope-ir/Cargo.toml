@@ -1,0 +1,19 @@
+[package]
+name = "omniscope-ir"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["OmniScope Team"]
+description = "IR abstraction layer for OmniScope"
+license = "Apache-2.0"
+
+[dependencies]
+omniscope-core = { path = "../omniscope-core" }
+omniscope-types = { path = "../omniscope-types" }
+
+inkwell = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

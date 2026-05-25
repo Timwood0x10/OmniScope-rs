@@ -1,0 +1,23 @@
+[package]
+name = "omniscope-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["OmniScope Team"]
+description = "CLI for OmniScope"
+license = "Apache-2.0"
+
+[[bin]]
+name = "omniscope"
+path = "src/main.rs"
+
+[dependencies]
+omniscope-core = { path = "../omniscope-core" }
+omniscope-types = { path = "../omniscope-types" }
+omniscope-pipeline = { path = "../omniscope-pipeline" }
+
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

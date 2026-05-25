@@ -1,0 +1,38 @@
+[package]
+name = "omniscope-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["OmniScope Team"]
+description = "Core infrastructure for OmniScope static analyzer"
+license = "Apache-2.0"
+
+[dependencies]
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+miette = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Collections
+dashmap = { workspace = true }
+indexmap = { workspace = true }
+
+# Memory management
+bumpalo = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }

@@ -1,0 +1,22 @@
+[package]
+name = "omniscope-types"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["OmniScope Team"]
+description = "Type definitions for OmniScope static analyzer"
+license = "Apache-2.0"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+
+# Collections
+indexmap = { workspace = true }
+smallvec = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
