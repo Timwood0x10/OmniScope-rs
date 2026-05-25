@@ -11,5 +11,7 @@ omniscope-core = { path = "../omniscope-core" }
 omniscope-types = { path = "../omniscope-types" }
 omniscope-ir = { path = "../omniscope-ir" }
 
+serde = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }

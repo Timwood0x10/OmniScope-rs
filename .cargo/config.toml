@@ -3,10 +3,10 @@
 # Note: Install zld with `brew install zld` on macOS, or comment out these lines
 
 # [target.x86_64-apple-darwin]
-# rustflags = ["-C", "link-arg=-fuse-ld=zld"]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 # [target.aarch64-apple-darwin]
-# rustflags = ["-C", "link-arg=-fuse-ld=zld"]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 # [target.x86_64-unknown-linux-gnu]
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
