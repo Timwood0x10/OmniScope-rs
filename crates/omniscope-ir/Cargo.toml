@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["OmniScope Team"]
-description = "IR abstraction layer for OmniScope"
+description = "LLVM IR abstraction layer and parser for OmniScope static analyzer"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "ir", "parser", "ffi"]
+categories = ["development-tools", "development-tools::debugging", "parser-implementations"]
 
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }

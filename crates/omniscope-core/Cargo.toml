@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["OmniScope Team"]
-description = "Core infrastructure for OmniScope static analyzer"
+description = "Core infrastructure and base types for OmniScope static analyzer"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "ffi", "core", "infrastructure"]
+categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
 # Error handling

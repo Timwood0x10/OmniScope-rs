@@ -3,8 +3,11 @@ name = "omniscope-dataflow"
 version = "0.1.0"
 edition = "2021"
 authors = ["OmniScope Team"]
-description = "Dataflow engine for OmniScope"
+description = "Dataflow analysis engine for tracking value flow and dependencies in OmniScope"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "dataflow", "analysis", "ffi"]
+categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }

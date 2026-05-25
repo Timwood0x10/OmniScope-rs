@@ -249,7 +249,7 @@ impl<'a> ScopedTimer<'a> {
     }
 }
 
-impl<'a> Drop for ScopedTimer<'a> {
+impl Drop for ScopedTimer<'_> {
     fn drop(&mut self) {
         self.profiler.end_span(self.span_id);
     }

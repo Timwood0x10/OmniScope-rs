@@ -111,32 +111,72 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
         println!("{} {}", "Parallel:".green(), cmd.parallel);
     }
 
-    // Create pipeline
-    let mut pipeline = Pipeline::new();
-    pipeline.register_default_passes();
-    pipeline.set_parallel(cmd.parallel);
+    // Parse the IR file
+    println!("\n{}", "Parsing LLVM IR...".yellow());
 
-    if cmd.verbose {
-        println!("{} {}", "Registered passes:".green(), pipeline.pass_count());
+    let module = omniscope_ir::IRModule::load_from_file(&cmd.input)?;
+
+    println!("{} {} functions, {} declarations, {} calls",
+        "✓".green(),
+        module.functions.len(),
+        module.declarations.len(),
+        module.calls.len()
+    );
+
+    // Analyze FFI boundaries
+    println!("\n{}", "Analyzing FFI boundaries...".yellow());
+
+    let ffi_calls = module.ffi_boundaries();
+
+    println!("{} {} FFI boundaries detected", "✓".green(), ffi_calls.len());
+
+    // Report FFI calls
+    if !ffi_calls.is_empty() {
+        println!("\n{}", "FFI Calls:".cyan().bold());
+        for call in &ffi_calls {
+            let status = if is_dangerous_ffi(&call.callee) {
+                "⚠ DANGEROUS".red()
+            } else {
+                "✓ safe".green()
+            };
+            println!("  → {} ({})", call.callee.yellow(), status);
+        }
     }
 
-    // Run analysis
-    let result = pipeline.run()?;
-    let duration = start.elapsed();
+    // Check for issues
+    let dangerous_count = ffi_calls.iter().filter(|c| is_dangerous_ffi(&c.callee)).count();
 
-    // Output results
-    println!("{}", "═".repeat(50).dimmed());
-    println!("{}", result.summary());
+    println!("\n{}", "═".repeat(50).dimmed());
 
-    if result.has_issues() {
-        println!("{} {} issues found", "⚠".yellow(), result.issue_count());
+    if dangerous_count > 0 {
+        println!("{} {} potential safety issues found!", "⚠".red(), dangerous_count);
+        println!("\n{}", "Issues:".red().bold());
+
+        for call in &ffi_calls {
+            if is_dangerous_ffi(&call.callee) {
+                println!("  • Dangerous FFI: {} - may cause memory safety issues", call.callee);
+            }
+        }
     } else {
-        println!("{} No issues found", "✓".green());
+        println!("{} No safety issues detected", "✓".green());
     }
 
-    println!("{} {:?}", "Completed in".blue(), duration);
+    let duration = start.elapsed();
+    println!("\n{} {:?}", "Completed in".blue(), duration);
 
     Ok(())
+}
+
+/// Check if an FFI function is potentially dangerous
+fn is_dangerous_ffi(func_name: &str) -> bool {
+    let dangerous_patterns = vec![
+        "malloc", "free", "realloc", "calloc",
+        "strcpy", "strcat", "sprintf", "vsprintf",
+        "gets", "scanf", "fscanf",
+        "memcpy", "memmove",
+    ];
+
+    dangerous_patterns.iter().any(|p| func_name.contains(p))
 }
 
 /// Runs the audit command

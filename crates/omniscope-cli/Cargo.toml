@@ -3,8 +3,11 @@ name = "omniscope-cli"
 version = "0.1.0"
 edition = "2021"
 authors = ["OmniScope Team"]
-description = "CLI for OmniScope"
+description = "Command-line interface for OmniScope static analyzer"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "cli", "ffi", "security"]
+categories = ["command-line-utilities", "development-tools", "development-tools::debugging"]
 
 [[bin]]
 name = "omniscope"
@@ -13,12 +16,13 @@ path = "src/main.rs"
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }
 omniscope-types = { path = "../omniscope-types" }
+omniscope-ir = { path = "../omniscope-ir" }
 omniscope-pipeline = { path = "../omniscope-pipeline" }
 
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
-colored = "2.1"
+colored = "3.1.1"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -3,8 +3,11 @@ name = "omniscope-semantics"
 version = "0.1.0"
 edition = "2021"
 authors = ["OmniScope Team"]
-description = "Semantic analysis for OmniScope"
+description = "Semantic analysis module for understanding program behavior in OmniScope"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "semantics", "analysis", "ffi"]
+categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }

@@ -3,8 +3,11 @@ name = "omniscope-pipeline"
 version = "0.1.0"
 edition = "2021"
 authors = ["OmniScope Team"]
-description = "Pipeline orchestration for OmniScope"
+description = "Pipeline orchestration for coordinating analysis passes in OmniScope"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "pipeline", "orchestration", "ffi"]
+categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }

@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["OmniScope Team"]
-description = "Type definitions for OmniScope static analyzer"
+description = "Type definitions and data structures for OmniScope static analyzer"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "ffi", "types", "data-structures"]
+categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
 # Serialization

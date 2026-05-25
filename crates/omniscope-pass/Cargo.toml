@@ -3,8 +3,11 @@ name = "omniscope-pass"
 version = "0.1.0"
 edition = "2021"
 authors = ["OmniScope Team"]
-description = "Analysis passes for OmniScope"
+description = "Analysis passes for FFI safety, memory safety, and concurrency in OmniScope"
 license = "Apache-2.0"
+repository = "https://github.com/Timwood0x10/OmniScope-rs"
+keywords = ["static-analysis", "llvm", "passes", "analysis", "ffi", "memory-safety"]
+categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }
