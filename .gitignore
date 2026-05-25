@@ -133,5 +133,8 @@ credentials/
 *.orig
 *.rej
 
+*.ll
+*.bc
+
 
 aim/

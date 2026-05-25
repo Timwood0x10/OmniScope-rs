@@ -11,6 +11,12 @@ readme = "README.md"
 keywords = ["static-analysis", "llvm", "ffi", "security", "analyzer"]
 categories = ["development-tools", "development-tools::debugging"]
 
+[dependencies]
+
+[dev-dependencies]
+omniscope-ir = { path = "crates/omniscope-ir" }
+omniscope-pipeline = { path = "crates/omniscope-pipeline" }
+
 [workspace]
 members = [
     "crates/omniscope-core",

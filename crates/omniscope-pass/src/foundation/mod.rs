@@ -26,12 +26,25 @@ impl Pass for CFGPass {
     }
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
-        // TODO: Implement CFG construction from IR
-        let result = PassResult::new(self.name()).with_nodes(0).with_duration(0);
+        let cfg = CFG::new();
+        let mut nodes_analyzed = 0;
+
+        // Build CFG from IR if available
+        // Note: Full implementation requires:
+        // 1. Getting IR module from context
+        // 2. Iterating over functions
+        // 3. Building basic blocks
+        // 4. Adding control flow edges
+
+        // For now, create empty CFG
+        nodes_analyzed = cfg.block_count();
 
         // Store CFG for other passes
-        let cfg = CFG::new();
-        ctx.store("cfg", cfg);
+        ctx.store("cfg", cfg.clone());
+
+        let result = PassResult::new(self.name())
+            .with_nodes(nodes_analyzed)
+            .with_duration(0);
 
         Ok(result)
     }
