@@ -40,9 +40,17 @@ impl<'ctx> FunctionView<'ctx> {
 
     /// Returns an iterator over basic blocks
     pub fn basic_blocks(&self) -> impl Iterator<Item = BasicBlockView<'ctx>> {
-        self.func
-            .basic_blocks()
-            .map(|block| BasicBlockView::new(block))
+        self.func.basic_blocks().map(BasicBlockView::new)
+    }
+
+    /// Returns the debug info extractor
+    pub fn debug_info(&self) -> &DebugInfoExtractor {
+        &self.debug_info
+    }
+
+    /// Returns cached source locations
+    pub fn locations(&self) -> &HashMap<usize, SourceLocation> {
+        &self.locations
     }
 
     /// Returns true if this is a declaration
@@ -106,9 +114,7 @@ impl<'ctx> BasicBlockView<'ctx> {
 
     /// Returns an iterator over instructions
     pub fn instructions(&self) -> impl Iterator<Item = InstructionView<'ctx>> {
-        self.block
-            .instructions()
-            .map(|inst| InstructionView::new(inst))
+        self.block.instructions().map(InstructionView::new)
     }
 
     /// Returns the inner block
@@ -193,16 +199,20 @@ impl<'ctx> ModuleView<'ctx> {
         self.module.get_name().to_str().unwrap_or("<unknown>")
     }
 
+    /// Returns the debug info extractor
+    pub fn debug_info(&self) -> &DebugInfoExtractor {
+        &self.debug_info
+    }
+
     /// Returns the number of functions
     pub fn function_count(&self) -> usize {
-        self.module.get_functions().into_iter().count()
+        self.module.get_functions().count()
     }
 
     /// Returns an iterator over functions
     pub fn functions(&self) -> impl Iterator<Item = FunctionView<'ctx>> {
         self.module
             .get_functions()
-            .into_iter()
             .map(|func| FunctionView::new(SafeFunction::new(func)))
     }
 
@@ -219,28 +229,6 @@ impl<'ctx> ModuleView<'ctx> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_function_view() {
-        // Placeholder test - requires actual LLVM context
-        assert!(true);
-    }
-
-    #[test]
-    fn test_basic_block_view() {
-        assert!(true);
-    }
-
-    #[test]
-    fn test_instruction_view() {
-        assert!(true);
-    }
-
-    #[test]
-    fn test_module_view() {
-        assert!(true);
-    }
-}
+// Note: Tests for IR views require LLVM context setup
+// which is complex. Integration tests in tests/ directory
+// will provide proper coverage with real LLVM IR files.

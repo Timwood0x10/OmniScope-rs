@@ -1,6 +1,6 @@
 //! Pass manager for orchestrating analysis passes
 
-use crate::pass::{Pass, PassContext, PassKind, PassResult};
+use crate::pass::{Pass, PassContext, PassResult};
 use omniscope_core::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -129,7 +129,7 @@ impl PassManager {
 
                         let mut result = pass
                             .run(&mut local_ctx)
-                            .unwrap_or_else(|e| PassResult::new(pass.name()).with_issues(1));
+                            .unwrap_or_else(|_e| PassResult::new(pass.name()).with_issues(1));
 
                         result.duration_ms = start.elapsed().as_millis() as u64;
                         result

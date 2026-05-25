@@ -67,7 +67,8 @@ test-release:
 .PHONY: check
 check:
 	@echo "$(BLUE)Running clippy checks...$(NC)"
-	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all -W clippy::perf -W clippy::style -W clippy::complexity -W clippy::suspicious -W clippy::correctness -A clippy::too_many_arguments -A clippy::type_complexity
+
 
 ## check-strict: Run clippy with all pedantic lints
 .PHONY: check-strict

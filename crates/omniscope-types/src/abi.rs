@@ -96,9 +96,10 @@ impl AbiType {
 }
 
 /// Calling convention for functions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum CallingConvention {
     /// C calling convention
+    #[default]
     C,
     /// Stdcall (Windows)
     Stdcall,
@@ -110,12 +111,6 @@ pub enum CallingConvention {
     Rust,
     /// Platform-specific
     Platform,
-}
-
-impl Default for CallingConvention {
-    fn default() -> Self {
-        CallingConvention::C
-    }
 }
 
 /// ABI mismatch information

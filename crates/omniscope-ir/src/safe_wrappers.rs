@@ -4,7 +4,7 @@
 //! common errors and provide a more idiomatic Rust interface.
 
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{AnyValue, FunctionValue, InstructionValue};
+use inkwell::values::{FunctionValue, InstructionValue};
 use std::fmt;
 
 /// Safe wrapper for LLVM function
@@ -82,15 +82,12 @@ impl<'ctx> SafeBasicBlock<'ctx> {
 
     /// Returns the number of instructions
     pub fn instruction_count(&self) -> usize {
-        self.inner.get_instructions().into_iter().count()
+        self.inner.get_instructions().count()
     }
 
     /// Returns an iterator over instructions
     pub fn instructions(&self) -> impl Iterator<Item = SafeInstruction<'ctx>> {
-        self.inner
-            .get_instructions()
-            .into_iter()
-            .map(SafeInstruction::new)
+        self.inner.get_instructions().map(SafeInstruction::new)
     }
 
     /// Returns the inner basic block
@@ -122,39 +119,8 @@ impl<'ctx> SafeInstruction<'ctx> {
 
     /// Returns the instruction opcode name
     pub fn opcode_name(&self) -> &'static str {
-        use inkwell::values::InstructionOpcode::*;
-        match self.inner.get_opcode() {
-            Add => "Add",
-            Sub => "Sub",
-            Mul => "Mul",
-            Div => "Div",
-            Rem => "Rem",
-            And => "And",
-            Or => "Or",
-            Xor => "Xor",
-            Shl => "Shl",
-            LShr => "LShr",
-            AShr => "AShr",
-            FAdd => "FAdd",
-            FSub => "FSub",
-            FMul => "FMul",
-            FDiv => "FDiv",
-            FRem => "FRem",
-            Load => "Load",
-            Store => "Store",
-            Alloca => "Alloca",
-            GetElementPtr => "GetElementPtr",
-            AtomicRMW => "AtomicRMW",
-            AtomicCmpXchg => "AtomicCmpXchg",
-            Call => "Call",
-            Invoke => "Invoke",
-            Ret => "Ret",
-            Br => "Br",
-            Switch => "Switch",
-            IndirectBr => "IndirectBr",
-            Unreachable => "Unreachable",
-            _ => "Unknown",
-        }
+        // Use format! for opcode name to avoid pattern matching issues
+        format!("{:?}", self.inner.get_opcode()).leak()
     }
 
     /// Returns true if this is a terminator instruction
@@ -192,24 +158,6 @@ impl<'ctx> fmt::Debug for SafeInstruction<'ctx> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_safe_function_debug() {
-        // This test verifies the Debug implementation compiles
-        // Actual testing requires a real LLVM context
-        assert!(true);
-    }
-
-    #[test]
-    fn test_safe_basic_block_debug() {
-        assert!(true);
-    }
-
-    #[test]
-    fn test_safe_instruction_debug() {
-        assert!(true);
-    }
-}
+// Note: Tests for safe wrappers require LLVM context setup
+// which is complex. Integration tests in tests/ directory
+// will provide proper coverage with real LLVM IR files.

@@ -5,7 +5,6 @@
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::Result;
 use omniscope_dataflow::DataFlowGraph;
-use std::collections::HashMap;
 
 /// CFG (Control Flow Graph) construction pass
 pub struct CFGPass;

@@ -57,7 +57,7 @@ impl Ownership {
 }
 
 /// Kind of ownership
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum OwnershipKind {
     /// Full ownership (responsible for deallocation)
     Owned,
@@ -68,13 +68,8 @@ pub enum OwnershipKind {
     /// Copy semantics (no ownership)
     Copy,
     /// Unknown ownership
+    #[default]
     Unknown,
-}
-
-impl Default for OwnershipKind {
-    fn default() -> Self {
-        OwnershipKind::Unknown
-    }
 }
 
 /// Lifetime identifier
@@ -125,31 +120,82 @@ mod tests {
     #[test]
     fn test_ownership_creation() {
         let owned = Ownership::owned();
-        assert!(owned.is_owned());
-        assert!(!owned.is_borrowed());
-        assert!(owned.mutable);
+        assert!(owned.is_owned(), "Owned ownership should report as owned");
+        assert!(
+            !owned.is_borrowed(),
+            "Owned ownership should not report as borrowed"
+        );
+        assert!(
+            owned.mutable,
+            "Owned ownership should be mutable by default"
+        );
 
         let borrowed = Ownership::borrowed(true);
-        assert!(borrowed.is_borrowed());
-        assert!(borrowed.mutable);
+        assert!(
+            borrowed.is_borrowed(),
+            "Borrowed ownership should report as borrowed"
+        );
+        assert!(
+            borrowed.mutable,
+            "Mutable borrow should be marked as mutable"
+        );
 
         let shared = Ownership::shared();
-        assert!(!shared.mutable);
+        assert!(!shared.mutable, "Shared ownership should be immutable");
     }
 
     #[test]
     fn test_lifetime() {
         let static_lt = Lifetime::static_lifetime();
-        assert!(static_lt.is_static);
-        assert_eq!(static_lt.id, 0);
+        assert!(
+            static_lt.is_static,
+            "Static lifetime should be marked as static"
+        );
+        assert_eq!(static_lt.id, 0, "Static lifetime should have ID 0");
 
         let lt = Lifetime::new(1).with_parent(0);
-        assert!(!lt.is_static);
-        assert_eq!(lt.parent, Some(0));
+        assert!(!lt.is_static, "Lifetime with parent should not be static");
+        assert_eq!(lt.parent, Some(0), "Parent should be correctly set");
     }
 
     #[test]
-    fn test_ownership_kind_default() {
-        assert_eq!(OwnershipKind::default(), OwnershipKind::Unknown);
+    fn test_ownership_transfer() {
+        // Test ownership transfer semantics
+        let owned = Ownership::owned();
+        assert_eq!(
+            owned.kind,
+            OwnershipKind::Owned,
+            "Owned ownership should have Owned kind"
+        );
+        assert!(!owned.is_borrowed(), "Owned value should not be borrowed");
+
+        let borrowed = Ownership::borrowed(true);
+        assert_eq!(
+            borrowed.kind,
+            OwnershipKind::Borrowed,
+            "Borrowed ownership should have Borrowed kind"
+        );
+        assert!(
+            borrowed.is_borrowed(),
+            "Borrowed value should report as borrowed"
+        );
+
+        // Test that owned and borrowed are distinct
+        assert_ne!(
+            owned.kind, borrowed.kind,
+            "Owned and Borrowed should be different kinds"
+        );
+
+        // Test shared ownership
+        let shared = Ownership::shared();
+        assert_eq!(
+            shared.kind,
+            OwnershipKind::Shared,
+            "Shared ownership should have Shared kind"
+        );
+        assert!(
+            !shared.mutable,
+            "Shared ownership should be immutable by default"
+        );
     }
 }

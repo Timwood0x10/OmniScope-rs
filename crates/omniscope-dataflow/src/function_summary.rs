@@ -3,7 +3,7 @@
 //! This module provides function summaries for efficient inter-procedural
 //! dataflow analysis.
 
-use crate::graph::{MemoryLocation, ValueType};
+use crate::graph::MemoryLocation;
 use omniscope_types::FunctionId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

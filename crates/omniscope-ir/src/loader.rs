@@ -6,13 +6,13 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use omniscope_core::{IRLoadError, Result};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::rc::Rc;
 use tracing::instrument;
 
 /// IR loader for loading LLVM IR files
 pub struct IRLoader {
     /// LLVM context
-    context: Arc<Context>,
+    context: Rc<Context>,
     /// Loaded module (placeholder)
     module: Option<Module<'static>>,
     /// Path to the loaded file
@@ -23,7 +23,7 @@ impl IRLoader {
     /// Creates a new IR loader
     pub fn new() -> Self {
         Self {
-            context: Arc::new(Context::create()),
+            context: Rc::new(Context::create()),
             module: None,
             path: None,
         }
@@ -54,14 +54,12 @@ impl IRLoader {
                 self.path = Some(path.to_path_buf());
                 Ok(())
             }
-            _ => {
-                return Err(IRLoadError::InvalidFormat {
-                    path: path.to_path_buf(),
-                    expected: "LLVM IR (.ll or .bc)".to_string(),
-                    found: format!(".{}", extension),
-                }
-                .into());
+            _ => Err(IRLoadError::InvalidFormat {
+                path: path.to_path_buf(),
+                expected: "LLVM IR (.ll or .bc)".to_string(),
+                found: format!(".{}", extension),
             }
+            .into()),
         }
     }
 
@@ -76,8 +74,8 @@ impl IRLoader {
     }
 
     /// Returns the LLVM context
-    pub fn context(&self) -> Arc<Context> {
-        Arc::clone(&self.context)
+    pub fn context(&self) -> Rc<Context> {
+        Rc::clone(&self.context)
     }
 
     /// Clears the loaded module

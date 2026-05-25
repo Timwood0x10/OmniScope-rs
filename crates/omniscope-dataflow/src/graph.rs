@@ -6,7 +6,7 @@
 use dashmap::DashMap;
 use omniscope_types::{EdgeId, NodeId, ValueId};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Data flow graph for analysis
 pub struct DataFlowGraph {
@@ -324,7 +324,7 @@ mod tests {
         let id2 = graph.add_node(node2);
 
         let edge = DataEdge::new(id1, id2, EdgeType::Assignment);
-        let edge_id = graph.add_edge(edge);
+        let _edge_id = graph.add_edge(edge);
 
         assert_eq!(graph.edge_count(), 1);
 

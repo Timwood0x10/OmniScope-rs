@@ -3,6 +3,7 @@
 use dashmap::DashMap;
 
 pub struct SemanticRegistry {
+    /// Function semantic information
     functions: DashMap<String, String>,
 }
 
@@ -11,6 +12,16 @@ impl SemanticRegistry {
         Self {
             functions: DashMap::new(),
         }
+    }
+
+    /// Registers a function with its semantic information
+    pub fn register(&self, name: String, semantic: String) {
+        self.functions.insert(name, semantic);
+    }
+
+    /// Looks up semantic information for a function
+    pub fn lookup(&self, name: &str) -> Option<String> {
+        self.functions.get(name).map(|v| v.clone())
     }
 }
 

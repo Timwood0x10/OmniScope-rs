@@ -169,15 +169,12 @@ impl FactStore {
         fact.id = id;
 
         // Index by kind
-        self.by_kind
-            .entry(fact.kind)
-            .or_insert_with(Vec::new)
-            .push(id);
+        self.by_kind.entry(fact.kind).or_default().push(id);
 
         // Index by file
         self.by_file
             .entry(fact.location.file.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(id);
 
         // Store fact
@@ -256,8 +253,6 @@ impl Default for FactStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
     #[test]
     fn test_fact_creation() {
         let fact = Fact::new(

@@ -7,9 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::info_span;
 
 /// Unique identifier for profiling spans
 pub type SpanId = u64;
@@ -85,7 +83,7 @@ pub struct Profiler {
     /// Next span ID
     next_id: AtomicU64,
     /// Active spans (for nested profiling)
-    active_spans: DashMap<SpanId, Instant>,
+    active_spans: DashMap<SpanId, (Instant, String)>,
 }
 
 use dashmap::DashMap;
@@ -105,7 +103,8 @@ impl Profiler {
     /// Starts a new profiling span
     pub fn start_span(&self, name: impl Into<String>) -> SpanId {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.active_spans.insert(id, Instant::now());
+        let name = name.into();
+        self.active_spans.insert(id, (Instant::now(), name));
         id
     }
 
@@ -119,18 +118,15 @@ impl Profiler {
     }
 
     /// Ends a profiling span
-    pub fn end_span(&self, id: SpanId, name: impl Into<String>) {
-        if let Some((_, start)) = self.active_spans.remove(&id) {
+    pub fn end_span(&self, id: SpanId) {
+        if let Some((_, (start, name))) = self.active_spans.remove(&id) {
             let duration = start.elapsed();
 
             let mut span = Span::new(id, name);
             span.duration = duration;
 
             // Index by name
-            self.by_name
-                .entry(span.name.clone())
-                .or_insert_with(Vec::new)
-                .push(id);
+            self.by_name.entry(span.name.clone()).or_default().push(id);
 
             // Store span
             self.spans.insert(id, span);
@@ -169,7 +165,7 @@ impl Profiler {
     /// Gets all memory samples
     pub fn memory_history(&self) -> Vec<MemorySample> {
         let mut samples: Vec<_> = self.memory_samples.iter().map(|r| r.clone()).collect();
-        samples.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        samples.sort_by_key(|a| a.timestamp);
         samples
     }
 
@@ -243,25 +239,19 @@ pub struct ScopedTimer<'a> {
     profiler: &'a Profiler,
     /// Span ID
     span_id: SpanId,
-    /// Span name
-    name: &'static str,
 }
 
 impl<'a> ScopedTimer<'a> {
     /// Creates a new scoped timer
     pub fn new(profiler: &'a Profiler, name: &'static str) -> Self {
         let span_id = profiler.start_span(name);
-        Self {
-            profiler,
-            span_id,
-            name,
-        }
+        Self { profiler, span_id }
     }
 }
 
 impl<'a> Drop for ScopedTimer<'a> {
     fn drop(&mut self) {
-        self.profiler.end_span(self.span_id, self.name);
+        self.profiler.end_span(self.span_id);
     }
 }
 
@@ -277,7 +267,7 @@ mod tests {
 
         let id = profiler.start_span("test");
         thread::sleep(Duration::from_millis(10));
-        profiler.end_span(id, "test");
+        profiler.end_span(id);
 
         let spans = profiler.spans_by_name("test");
         assert_eq!(spans.len(), 1);
@@ -304,7 +294,7 @@ mod tests {
         for _ in 0..3 {
             let id = profiler.start_span("test");
             thread::sleep(Duration::from_millis(5));
-            profiler.end_span(id, "test");
+            profiler.end_span(id);
         }
 
         let stats = profiler.stats("test").unwrap();

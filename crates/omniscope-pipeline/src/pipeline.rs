@@ -3,10 +3,10 @@
 //! This module provides the main pipeline for orchestrating analysis passes.
 
 use crate::result::PipelineResult;
-use omniscope_core::{Diagnostic, Fact, Result};
+use omniscope_core::Result;
 use omniscope_pass::{
-    BufferOverflowPass, CFGPass, DFGPass, FFIBoundaryPass, MemorySafetyPass,
-    PassManager, PassResult, PointerOwnershipPass,
+    BufferOverflowPass, CFGPass, DFGPass, FFIBoundaryPass, MemorySafetyPass, PassManager,
+    PointerOwnershipPass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -36,6 +36,11 @@ impl Pipeline {
         }
     }
 
+    /// Returns the configuration
+    pub fn config(&self) -> &AnalysisConfig {
+        &self.config
+    }
+
     /// Registers default passes
     pub fn register_default_passes(&mut self) {
         // Foundation passes
@@ -52,10 +57,10 @@ impl Pipeline {
     /// Runs the full analysis pipeline
     pub fn run(&mut self) -> Result<PipelineResult> {
         let start = Instant::now();
-        
+
         // Run all passes
         let pass_results = self.pass_manager.run_all()?;
-        
+
         // Aggregate results
         let duration = start.elapsed();
         let result = PipelineResult::from_pass_results(pass_results, duration);
@@ -99,7 +104,7 @@ mod tests {
     fn test_pipeline_with_default_passes() {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
-        
+
         assert_eq!(pipeline.pass_count(), 6);
     }
 
@@ -107,8 +112,12 @@ mod tests {
     fn test_pipeline_run() {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
-        
+
         let result = pipeline.run().unwrap();
-        assert!(result.duration.as_millis() >= 0);
+        // Verify result is valid
+        assert!(
+            result.pass_count() > 0,
+            "Pipeline should have executed passes"
+        );
     }
 }

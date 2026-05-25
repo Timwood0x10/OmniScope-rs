@@ -73,7 +73,7 @@ fn default_parallel() -> bool {
 }
 
 /// Supported source languages
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     /// C language
@@ -91,6 +91,7 @@ pub enum Language {
     /// Java (via JNI)
     Java,
     /// Unknown language
+    #[default]
     Unknown,
 }
 
@@ -109,17 +110,12 @@ impl Language {
     }
 }
 
-impl Default for Language {
-    fn default() -> Self {
-        Language::Unknown
-    }
-}
-
 /// Output format for analysis results
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     /// JSON format
+    #[default]
     Json,
     /// SARIF format (for GitHub)
     Sarif,
@@ -131,12 +127,6 @@ pub enum OutputFormat {
     Markdown,
 }
 
-impl Default for OutputFormat {
-    fn default() -> Self {
-        OutputFormat::Json
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,25 +134,48 @@ mod tests {
     #[test]
     fn test_analysis_config_default() {
         let config = AnalysisConfig::default();
-        assert_eq!(config.language, Language::Unknown);
-        assert_eq!(config.output_format, OutputFormat::Json);
-        assert!(config.parallel);
-        assert_eq!(config.timeout, 300);
+        assert_eq!(
+            config.language,
+            Language::Unknown,
+            "Default language should be Unknown"
+        );
+        assert_eq!(
+            config.output_format,
+            OutputFormat::Json,
+            "Default output format should be JSON"
+        );
+        assert!(
+            config.parallel,
+            "Parallel execution should be enabled by default"
+        );
+        assert_eq!(config.timeout, 300, "Default timeout should be 300 seconds");
     }
 
     #[test]
     fn test_language_checks() {
-        assert!(Language::C.is_c_family());
-        assert!(Language::Cpp.is_c_family());
-        assert!(!Language::Rust.is_c_family());
+        // Test C-family language detection
+        assert!(Language::C.is_c_family(), "C should be in C family");
+        assert!(Language::Cpp.is_c_family(), "C++ should be in C family");
+        assert!(
+            !Language::Rust.is_c_family(),
+            "Rust should not be in C family"
+        );
 
-        assert!(Language::Rust.has_ffi());
-        assert!(Language::Go.has_ffi());
-        assert!(!Language::C.has_ffi());
+        // Test FFI capability detection
+        assert!(Language::Rust.has_ffi(), "Rust should have FFI capability");
+        assert!(Language::Go.has_ffi(), "Go should have FFI capability");
+        assert!(
+            !Language::C.has_ffi(),
+            "C should not have FFI (it IS the FFI target)"
+        );
     }
 
     #[test]
     fn test_output_format_default() {
-        assert_eq!(OutputFormat::default(), OutputFormat::Json);
+        assert_eq!(
+            OutputFormat::default(),
+            OutputFormat::Json,
+            "Default output format should be JSON for machine readability"
+        );
     }
 }

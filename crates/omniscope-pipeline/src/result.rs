@@ -2,10 +2,8 @@
 //!
 //! This module provides result aggregation for the analysis pipeline.
 
-use omniscope_core::{Diagnostic, Fact};
 use omniscope_pass::PassResult;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::Duration;
 
 /// Pipeline result aggregating all pass results
@@ -28,7 +26,7 @@ impl PipelineResult {
     pub fn from_pass_results(pass_results: Vec<PassResult>, duration: Duration) -> Self {
         let total_issues = pass_results.iter().map(|r| r.issues_found).sum();
         let total_nodes = pass_results.iter().map(|r| r.nodes_analyzed).sum();
-        
+
         let stats = PipelineStats::from_pass_results(&pass_results);
 
         Self {
@@ -103,18 +101,18 @@ impl PipelineStats {
             .iter()
             .filter(|r| r.name == "CFG" || r.name == "DFG")
             .count();
-        
+
         let analysis_passes = pass_results.len() - foundation_passes;
-        
+
         let durations: Vec<u64> = pass_results.iter().map(|r| r.duration_ms).collect();
-        
+
         let total_duration_ms: u64 = durations.iter().sum();
         let avg_duration_ms = if durations.is_empty() {
             0.0
         } else {
             total_duration_ms as f64 / durations.len() as f64
         };
-        
+
         let max_duration_ms = durations.iter().copied().max().unwrap_or(0);
         let min_duration_ms = durations.iter().copied().min().unwrap_or(0);
 
@@ -154,9 +152,9 @@ mod tests {
             PassResult::new("CFG").with_issues(0).with_nodes(100),
             PassResult::new("DFG").with_issues(2).with_nodes(150),
         ];
-        
+
         let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(50));
-        
+
         assert_eq!(result.pass_count(), 2);
         assert_eq!(result.issue_count(), 2);
         assert_eq!(result.total_nodes, 250);
@@ -165,12 +163,10 @@ mod tests {
 
     #[test]
     fn test_pipeline_result_summary() {
-        let pass_results = vec![
-            PassResult::new("CFG").with_issues(0).with_nodes(100),
-        ];
-        
+        let pass_results = vec![PassResult::new("CFG").with_issues(0).with_nodes(100)];
+
         let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
-        
+
         let summary = result.summary();
         assert!(summary.contains("1 passes"));
         assert!(summary.contains("0 issues"));
@@ -183,9 +179,9 @@ mod tests {
             PassResult::new("DFG").with_duration(20),
             PassResult::new("FFIBoundary").with_duration(15),
         ];
-        
+
         let stats = PipelineStats::from_pass_results(&pass_results);
-        
+
         assert_eq!(stats.foundation_passes, 2);
         assert_eq!(stats.analysis_passes, 1);
         assert_eq!(stats.total_duration_ms, 45);

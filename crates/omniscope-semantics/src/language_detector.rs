@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_language_detector_creation() {
         let detector = LanguageDetector::new();
-        assert!(true);
+        assert!(!detector.patterns.is_empty());
     }
 
     #[test]

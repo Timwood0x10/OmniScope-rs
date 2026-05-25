@@ -7,20 +7,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Zone classification for optimization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ZoneKind {
     /// Safe zone - can skip analysis
     Safe,
     /// Risky zone - needs analysis
     Risky,
     /// Unknown zone - conservative analysis
+    #[default]
     Unknown,
-}
-
-impl Default for ZoneKind {
-    fn default() -> Self {
-        ZoneKind::Unknown
-    }
 }
 
 /// Zone classifier for optimizing analysis
@@ -169,20 +164,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_zone_classifier_creation() {
-        let classifier = ZoneClassifier::new();
-        assert!(true);
-    }
-
-    #[test]
     fn test_classify_safe_functions() {
         let classifier = ZoneClassifier::new();
 
+        // Test C standard library safe functions
         let zone = classifier.classify("strlen", Language::C);
-        assert_eq!(zone, ZoneKind::Safe);
+        assert_eq!(
+            zone,
+            ZoneKind::Safe,
+            "strlen should be classified as safe for C"
+        );
 
         let zone = classifier.classify("abs", Language::C);
-        assert_eq!(zone, ZoneKind::Safe);
+        assert_eq!(
+            zone,
+            ZoneKind::Safe,
+            "abs should be classified as safe for C"
+        );
+
+        // Test that safe functions don't get misclassified as risky
+        let zone = classifier.classify("printf", Language::C);
+        assert_ne!(
+            zone,
+            ZoneKind::Risky,
+            "printf should not be classified as risky"
+        );
     }
 
     #[test]

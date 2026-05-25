@@ -3,7 +3,7 @@
 //! This module provides the framework for performing forward and backward
 //! dataflow analysis.
 
-use crate::graph::{DataFlowGraph, DataNode, EdgeType};
+use crate::graph::{DataFlowGraph, DataNode};
 use omniscope_types::NodeId;
 use std::collections::HashMap;
 
@@ -248,7 +248,7 @@ mod tests {
         }
 
         fn transfer(&self, _node: &DataNode, input: &Self::Value) -> Self::Value {
-            input.clone()
+            *input
         }
     }
 
@@ -258,10 +258,8 @@ mod tests {
         let domain = ConstantProp;
         let mut analysis = ForwardAnalysis::new(domain);
 
+        // Empty graph should complete without panic
         analysis.run(&graph);
-
-        // Empty graph should complete without error
-        assert!(true);
     }
 
     #[test]
@@ -270,9 +268,7 @@ mod tests {
         let domain = ConstantProp;
         let mut analysis = BackwardAnalysis::new(domain);
 
+        // Empty graph should complete without panic
         analysis.run(&graph);
-
-        // Empty graph should complete without error
-        assert!(true);
     }
 }

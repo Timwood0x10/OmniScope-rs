@@ -32,7 +32,7 @@ impl MemoryPool {
     /// # Safety
     /// The returned reference is valid for the lifetime of the MemoryPool.
     /// The caller must ensure the MemoryPool is not dropped while references are in use.
-    pub fn alloc<T>(&self, value: T) -> &mut T {
+    pub fn alloc<T>(&mut self, value: T) -> &mut T {
         // SAFETY: We use UnsafeCell to allow mutable access to the arena.
         // The caller is responsible for ensuring proper lifetime management.
         unsafe { (*self.arena.get()).alloc(value) }
@@ -42,7 +42,7 @@ impl MemoryPool {
     ///
     /// # Safety
     /// The returned reference is valid for the lifetime of the MemoryPool.
-    pub fn alloc_slice<T>(&self, slice: &[T]) -> &mut [T]
+    pub fn alloc_slice<T>(&mut self, slice: &[T]) -> &mut [T]
     where
         T: Copy,
     {
@@ -53,7 +53,7 @@ impl MemoryPool {
     ///
     /// # Safety
     /// The returned reference is valid for the lifetime of the MemoryPool.
-    pub fn alloc_str(&self, s: &str) -> &mut str {
+    pub fn alloc_str(&mut self, s: &str) -> &mut str {
         unsafe { (*self.arena.get()).alloc_str(s) }
     }
 
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_memory_pool_basic() {
-        let pool = MemoryPool::new();
+        let mut pool = MemoryPool::new();
 
         let value = pool.alloc(42);
         assert_eq!(*value, 42);
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn test_memory_pool_slice() {
-        let pool = MemoryPool::new();
+        let mut pool = MemoryPool::new();
 
         let data = [1, 2, 3, 4, 5];
         let slice = pool.alloc_slice(&data);
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_memory_pool_string() {
-        let pool = MemoryPool::new();
+        let mut pool = MemoryPool::new();
 
         let s = pool.alloc_str("hello world");
         assert_eq!(s, "hello world");
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_memory_pool_with_capacity() {
-        let pool = MemoryPool::with_capacity(1024);
+        let mut pool = MemoryPool::with_capacity(1024);
         let _ = pool.alloc(42);
         assert!(pool.allocated_bytes() > 0);
     }

@@ -7,7 +7,6 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use tracing::instrument;
 
 /// Unique identifier for diagnostics
@@ -194,14 +193,14 @@ impl DiagnosticAggregator {
         if let Some(ref location) = diagnostic.location {
             self.by_file
                 .entry(location.file.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(id);
         }
 
         // Index by severity
         self.by_severity
             .entry(diagnostic.severity)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(id);
 
         // Store diagnostic
@@ -273,7 +272,6 @@ impl Default for DiagnosticAggregator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn test_diagnostic_creation() {

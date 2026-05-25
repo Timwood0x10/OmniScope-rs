@@ -3,7 +3,6 @@
 //! This module defines the core pass infrastructure for OmniScope analysis.
 
 use omniscope_core::{Diagnostic, Fact, Result};
-use omniscope_types::NodeId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
