@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/Timwood0x10/OmniScope-rs/blob/main/README.md
+    about: Please check the documentation before opening an issue
+  - name: Discussions
+    url: https://github.com/Timwood0x10/OmniScope-rs/discussions
+    about: For questions and general discussions, please use GitHub Discussions
+  - name: Security Issues
+    url: https://github.com/Timwood0x10/OmniScope-rs/security/policy
+    about: Please report security vulnerabilities through the security policy

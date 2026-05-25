@@ -1,0 +1,134 @@
+# OmniScope-rs .gitignore
+# Apache 2.0 License
+
+# Build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+**/Cargo.lock
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.codeartsdoer/
+.fleet/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Documentation (keep aim/ in repo for now)
+# aim/
+
+# Test and Coverage
+/coverage/
+*.profraw
+*.profdata
+/tarpaulin-report.html
+/cobertura.xml
+*.lcov
+
+# Benchmark
+/benches/target/
+/benches/*.svg
+
+# Profiling
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Backup files
+*.bak
+*.backup
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tar.bz2
+*.7z
+
+# Dependency directories
+node_modules/
+
+# Python (if used for scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+
+# LLVM
+*.ll
+*.bc
+*.s
+*.o
+*.a
+*.lib
+*.obj
+
+# Output files
+/output/
+/results/
+*.json.bak
+*.toml.bak
+
+# Cache
+.cache/
+*.cache
+
+# Secrets (never commit)
+.env
+.env.*
+*.pem
+*.key
+secrets/
+credentials/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Docker
+.docker/
+
+# Kubernetes
+*.kubeconfig
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Other
+*.orig
+*.rej
