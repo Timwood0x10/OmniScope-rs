@@ -132,3 +132,6 @@ credentials/
 # Other
 *.orig
 *.rej
+
+
+aim/

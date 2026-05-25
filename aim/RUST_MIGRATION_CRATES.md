@@ -1,1 +1,0 @@
-/Users/scc/code/zigcode/OmniScope/RUST_MIGRATION_CRATES.md
