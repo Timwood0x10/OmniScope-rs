@@ -5,11 +5,11 @@
 # [target.x86_64-apple-darwin]
 # rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
-# [target.aarch64-apple-darwin]
-# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-
 # [target.x86_64-unknown-linux-gnu]
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+
+
 
 # Use sccache for caching if available
 [build]
@@ -22,6 +22,8 @@ CARGO_BUILD_JOBS = "8"
 # Library search paths for macOS (homebrew)
 [target.aarch64-apple-darwin]
 rustflags = ["-L", "/opt/homebrew/lib"]
+rustdocflags = ["-L", "/opt/homebrew/lib"]
+
 
 [target.x86_64-apple-darwin]
 rustflags = ["-L", "/opt/homebrew/lib"]

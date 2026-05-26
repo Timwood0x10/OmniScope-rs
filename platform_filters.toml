@@ -1,0 +1,39 @@
+# Platform-Specific Filter Configuration
+#
+# This file allows customizing platform-specific safe API lists.
+# OmniScope will use these filters in addition to built-in filters.
+
+[platforms.macos]
+# Additional safe APIs for macOS
+safe_apis = [
+    # Add custom macOS-safe APIs here
+    # Example: "my_custom_allocator",
+]
+
+[platforms.linux]
+# Additional safe APIs for Linux
+safe_apis = [
+    # Add custom Linux-safe APIs here
+]
+
+[platforms.windows]
+# Additional safe APIs for Windows
+safe_apis = [
+    # Add custom Windows-safe APIs here
+]
+
+# Cross-platform safe patterns
+[common]
+safe_apis = [
+    # Add patterns safe on all platforms
+]
+
+# Project-specific customizations
+[custom]
+# Enable/disable specific checks
+check_memory_leaks = true
+check_buffer_overflow = true
+check_use_after_free = true
+
+# Severity levels: error, warning, info
+default_severity = "warning"

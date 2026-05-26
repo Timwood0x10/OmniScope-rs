@@ -19,12 +19,12 @@ fn test_detect_rust_ffi_boundaries() {
     let module = IRModule::load_from_file(&test_file).expect("Failed to load IR file");
 
     println!("Functions defined: {}", module.functions.len());
-    for (name, func) in &module.functions {
+    for name in module.functions.keys() {
         println!("  - {} (defined)", name);
     }
 
     println!("\nExternal declarations: {}", module.declarations.len());
-    for (name, func) in &module.declarations {
+    for name in module.declarations.keys() {
         println!("  - {} (extern)", name);
     }
 

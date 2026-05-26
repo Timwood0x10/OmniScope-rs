@@ -307,6 +307,7 @@ mod tests {
         let profiler = Profiler::new();
 
         profiler.record_memory(1024, 512);
+        std::thread::sleep(std::time::Duration::from_millis(10));
         profiler.record_memory(2048, 1024);
 
         let history = profiler.memory_history();

@@ -54,7 +54,7 @@ impl PlatformInfo {
     /// # Examples
     ///
     /// ```
-    /// use omniscope_ir::platform::PlatformInfo;
+    /// use omniscope_ir::platform::{PlatformInfo, Platform};
     ///
     /// let info = PlatformInfo::from_target_triple("x86_64-apple-darwin");
     /// assert_eq!(info.platform, Platform::MacOS);
@@ -365,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_detection_windows() {
+    fn test_platform_detection_windows_one() {
         let info = PlatformInfo::from_target_triple("x86_64-pc-windows-msvc");
         assert_eq!(info.platform, Platform::Windows);
         assert_eq!(info.arch, Architecture::X86_64);

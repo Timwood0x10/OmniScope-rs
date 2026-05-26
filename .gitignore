@@ -3,6 +3,7 @@
 
 # Build artifacts
 /target/
+/build/
 **/*.rs.bk
 *.pdb
 
@@ -132,9 +133,5 @@ credentials/
 # Other
 *.orig
 *.rej
-
-*.ll
-*.bc
-
 
 aim/

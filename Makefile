@@ -33,11 +33,17 @@ help:
 	@echo "$(GREEN)Targets:$(NC)"
 	@sed -n 's/^## //p' $(MAKEFILE_LIST) | column -t -s ':'
 
-## build: Build the project in debug mode
+## build: Build the project and copy to ./build directory
 .PHONY: build
 build:
-	@echo "$(BLUE)Building $(PROJECT_NAME) in debug mode...$(NC)"
-	$(CARGO) build --workspace
+	@echo "$(BLUE)Building $(PROJECT_NAME) in release mode...$(NC)"
+	$(CARGO) build --workspace --release
+	@echo "$(BLUE)Copying binaries to ./build directory...$(NC)"
+	@mkdir -p build
+	@cp -f target/release/omniscope build/
+	@chmod +x build/omniscope
+	@echo "$(GREEN)✓ Binary copied to build/omniscope$(NC)"
+	@echo "$(GREEN)✓ Run with: ./build/omniscope [command]$(NC)"
 
 ## release: Build the project in release mode with optimizations
 .PHONY: release
