@@ -246,4 +246,107 @@ mod tests {
         assert_eq!(stats.max_duration_ms, 20);
         assert_eq!(stats.min_duration_ms, 10);
     }
+
+    /// Objective: Verify Issue collection from PassResult into PipelineResult.
+    /// Invariants: Issues from multiple passes must be correctly aggregated.
+    #[test]
+    fn test_pipeline_result_issue_collection() {
+        use omniscope_core::{Issue, IssueKind, Severity};
+
+        let mut pr1 = PassResult::new("FFIBoundary").with_nodes(5);
+        pr1.add_issue(Issue::new(
+            1,
+            IssueKind::CrossLanguageFree,
+            Severity::Warning,
+            "cross-lang free",
+        ));
+        pr1.add_issue(Issue::new(
+            2,
+            IssueKind::FfiUnsafeCall,
+            Severity::Note,
+            "ffi unsafe",
+        ));
+
+        let mut pr2 = PassResult::new("DangerSurface").with_nodes(3);
+        pr2.add_issue(Issue::new(
+            3,
+            IssueKind::NullDereference,
+            Severity::Error,
+            "null deref",
+        ));
+
+        let result = PipelineResult::from_pass_results(vec![pr1, pr2], Duration::from_millis(20));
+
+        assert_eq!(
+            result.total_issues, 3,
+            "Must aggregate issues from all passes"
+        );
+        assert_eq!(result.issues.len(), 3, "issues vec must contain 3 entries");
+        assert_eq!(result.issues[0].kind, IssueKind::CrossLanguageFree);
+        assert_eq!(result.issues[2].kind, IssueKind::NullDereference);
+    }
+
+    /// Objective: Verify high/low/actionable issue filtering.
+    /// Invariants: high_issues returns Warning+Error, low_issues returns Note+Help.
+    #[test]
+    fn test_pipeline_result_severity_filtering() {
+        use omniscope_core::{Confidence, Issue, IssueKind, Severity};
+
+        let mut pr = PassResult::new("test");
+        pr.add_issue(
+            Issue::new(1, IssueKind::CrossLanguageFree, Severity::Warning, "high")
+                .with_confidence(Confidence::High),
+        );
+        pr.add_issue(
+            Issue::new(2, IssueKind::MemoryLeak, Severity::Error, "critical")
+                .with_confidence(Confidence::Medium),
+        );
+        pr.add_issue(
+            Issue::new(3, IssueKind::FfiUnsafeCall, Severity::Note, "low")
+                .with_confidence(Confidence::Low),
+        );
+        pr.add_issue(
+            Issue::new(4, IssueKind::Unknown, Severity::Help, "help")
+                .with_confidence(Confidence::Medium),
+        );
+
+        let result = PipelineResult::from_pass_results(vec![pr], Duration::from_millis(5));
+
+        assert_eq!(
+            result.high_issues().len(),
+            2,
+            "Must have 2 high-severity issues (Warning + Error)"
+        );
+        assert_eq!(
+            result.low_issues().len(),
+            2,
+            "Must have 2 low-severity issues (Note + Help)"
+        );
+        assert_eq!(
+            result.actionable_issues().len(),
+            3,
+            "Must have 3 actionable issues (not Low confidence)"
+        );
+    }
+
+    /// Objective: Verify with_issues constructor from explicit issue list.
+    /// Invariants: with_issues must override issues_found count with actual issue count.
+    #[test]
+    fn test_pipeline_result_with_issues() {
+        use omniscope_core::{Issue, IssueKind, Severity};
+
+        let issues = vec![
+            Issue::new(1, IssueKind::InvalidFree, Severity::Warning, "invalid free"),
+            Issue::new(2, IssueKind::MemoryLeak, Severity::Note, "leak"),
+        ];
+        let pr = PassResult::new("test").with_nodes(10);
+        let result = PipelineResult::with_issues(vec![pr], Duration::from_millis(10), issues);
+
+        assert_eq!(
+            result.total_issues, 2,
+            "total_issues must be len of issues vec"
+        );
+        assert_eq!(result.issues.len(), 2, "issues must be preserved");
+        assert!(result.has_issues());
+    }
 }

@@ -45,6 +45,8 @@ pub enum RiskKind {
     ResourceLeak,
     /// Null pointer risk.
     NullPointer,
+    /// Reference count mismatch (Python Py_INCREF/Py_DECREF).
+    RefCountMismatch,
     /// No special risk.
     None,
 }
@@ -564,39 +566,170 @@ impl SemanticRegistry {
     }
 
     /// Python C API function registry.
+    ///
+    /// Covers the full Python C API ownership model:
+    /// - **Allocators**: PyObject_New, PyObject_NewVar, PyLong_FromLong, etc.
+    /// - **Deallocators**: PyObject_Del, Py_DECREF, Py_CLEAR
+    /// - **Ref count ops**: Py_INCREF, Py_XINCREF
+    /// - **Borrowed refs**: PyList_GetItem, PyTuple_GetItem (no DECREF needed)
+    /// - **New refs**: PyList_GetItem + Py_INCREF pattern
+    ///
+    /// Key insight: PyObject_New/Del are alloc/dealloc pairs.
+    /// PyLong_From* returns a new reference (must DECREF).
+    /// PyList_GetItem returns a borrowed reference (must NOT DECREF).
     fn populate_python_c_api(entries: &mut Vec<FunctionSemantics>) {
         let py = [
+            // === Allocators (return new reference, must DECREF) ===
             (
-                "Py_BuildValue",
+                "PyObject_New",
                 MatchType::Exact,
-                RiskKind::TypeConfusion,
-                RiskSeverity::Medium,
-                Language::Python,
-                7,
-                "Python C API builds value — format string must match types",
-            ),
-            (
-                "PyArg_ParseTuple",
-                MatchType::Exact,
-                RiskKind::TypeConfusion,
+                RiskKind::MemoryAlloc,
                 RiskSeverity::High,
                 Language::Python,
                 7,
-                "Python C API parses args — format mismatch causes crash",
+                "Python C API allocates object — must pair with PyObject_Del or Py_DECREF",
             ),
             (
-                "PyObject_GetAttr",
+                "PyObject_NewVar",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API allocates var-size object — must pair with PyObject_Del or Py_DECREF",
+            ),
+            (
+                "PyLong_FromLong",
                 MatchType::Prefix,
-                RiskKind::NullPointer,
+                RiskKind::MemoryAlloc,
                 RiskSeverity::Medium,
                 Language::Python,
                 7,
-                "Python C API gets attr — returns NULL on failure",
+                "Python C API creates int object — returns new ref, must Py_DECREF",
             ),
+            (
+                "PyLong_FromUnsignedLong",
+                MatchType::Prefix,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates int from unsigned — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyLong_FromLongLong",
+                MatchType::Prefix,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates int from long long — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyLong_FromString",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates int from string — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyFloat_FromDouble",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates float — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyBytes_FromString",
+                MatchType::Prefix,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates bytes — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyUnicode_FromString",
+                MatchType::Prefix,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates str — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyList_New",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates list — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyDict_New",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates dict — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PyTuple_New",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates tuple — returns new ref, must Py_DECREF",
+            ),
+            (
+                "PySet_New",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API creates set — returns new ref, must Py_DECREF",
+            ),
+            (
+                "Py_BuildValue",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API builds value — returns new ref, format must match types",
+            ),
+            // === Deallocators ===
+            (
+                "PyObject_Del",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API deallocates object — must pair with PyObject_New",
+            ),
+            (
+                "PyObject_GC_Del",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API GC dealloc — must pair with PyObject_GC_New",
+            ),
+            // === Reference count operations ===
             (
                 "Py_INCREF",
                 MatchType::Exact,
-                RiskKind::OwnershipTransfer,
+                RiskKind::RefCountMismatch,
                 RiskSeverity::Medium,
                 Language::Python,
                 7,
@@ -605,11 +738,168 @@ impl SemanticRegistry {
             (
                 "Py_DECREF",
                 MatchType::Exact,
-                RiskKind::OwnershipTransfer,
+                RiskKind::RefCountMismatch,
                 RiskSeverity::High,
                 Language::Python,
                 7,
                 "Python C API decrements ref — double DECREF causes use-after-free",
+            ),
+            (
+                "Py_XINCREF",
+                MatchType::Exact,
+                RiskKind::RefCountMismatch,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API safe increment — NULL-safe, must pair with Py_XDECREF",
+            ),
+            (
+                "Py_XDECREF",
+                MatchType::Exact,
+                RiskKind::RefCountMismatch,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API safe decrement — NULL-safe, double DECREF still dangerous",
+            ),
+            (
+                "Py_CLEAR",
+                MatchType::Exact,
+                RiskKind::RefCountMismatch,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API safe clear — DECREF + set NULL, prevents double DECREF",
+            ),
+            (
+                "Py_SETREF",
+                MatchType::Exact,
+                RiskKind::RefCountMismatch,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API set reference — DECREF old + set new, ref count safe",
+            ),
+            // === Borrowed reference getters (NO DECREF needed) ===
+            (
+                "PyList_GetItem",
+                MatchType::Exact,
+                RiskKind::OwnershipTransfer,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API borrowed ref — do NOT Py_DECREF, use PyList_GET_ITEM+Py_INCREF for new ref",
+            ),
+            (
+                "PyTuple_GetItem",
+                MatchType::Exact,
+                RiskKind::OwnershipTransfer,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API borrowed ref — do NOT Py_DECREF, use PyTuple_GET_ITEM+Py_INCREF for new ref",
+            ),
+            (
+                "PyDict_GetItem",
+                MatchType::Exact,
+                RiskKind::OwnershipTransfer,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API borrowed ref — do NOT Py_DECREF on result",
+            ),
+            (
+                "PyDict_GetItemString",
+                MatchType::Exact,
+                RiskKind::OwnershipTransfer,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API borrowed ref — do NOT Py_DECREF on result",
+            ),
+            // === New reference getters (DECREF needed) ===
+            (
+                "PyList_GetItemRef",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API new ref getter — returns new ref, must Py_DECREF (3.12+)",
+            ),
+            (
+                "PyObject_GetAttr",
+                MatchType::Prefix,
+                RiskKind::NullPointer,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API gets attr — returns new ref or NULL, must Py_DECREF on success",
+            ),
+            (
+                "PyObject_GetItem",
+                MatchType::Exact,
+                RiskKind::NullPointer,
+                RiskSeverity::Medium,
+                Language::Python,
+                7,
+                "Python C API gets item — returns new ref or NULL, must Py_DECREF on success",
+            ),
+            // === Argument parsing (steals refs on error) ===
+            (
+                "PyArg_ParseTuple",
+                MatchType::Exact,
+                RiskKind::TypeConfusion,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API parses args — format mismatch causes crash, may steal refs on error",
+            ),
+            (
+                "PyArg_ParseTupleAndKeywords",
+                MatchType::Exact,
+                RiskKind::TypeConfusion,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API parses args+kwargs — format mismatch causes crash",
+            ),
+            // === GC tracking ===
+            (
+                "PyObject_GC_New",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API GC-tracked alloc — must pair with PyObject_GC_Del",
+            ),
+            (
+                "PyObject_GC_NewVar",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::High,
+                Language::Python,
+                7,
+                "Python C API GC-tracked var alloc — must pair with PyObject_GC_Del",
+            ),
+            (
+                "PyObject_GC_Track",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Low,
+                Language::Python,
+                7,
+                "Python C API GC track — must pair with PyObject_GC_UnTrack",
+            ),
+            (
+                "PyObject_GC_UnTrack",
+                MatchType::Exact,
+                RiskKind::MemoryAlloc,
+                RiskSeverity::Low,
+                Language::Python,
+                7,
+                "Python C API GC untrack — must pair with PyObject_GC_Track",
             ),
         ];
 
@@ -758,5 +1048,196 @@ mod tests {
             "GetByteArrayElements must be in JNI registry"
         );
         assert_eq!(sem.unwrap().risk_kind, RiskKind::OwnershipTransfer);
+    }
+
+    /// Objective: Verify Python C API allocator/deallocator lookup.
+    /// Invariants: PyObject_New/Del must be found and classified correctly.
+    #[test]
+    fn test_python_alloc_dealloc_pairs() {
+        let registry = SemanticRegistry::new();
+
+        // Allocators
+        let sem = registry.lookup("PyObject_New");
+        assert!(sem.is_some(), "PyObject_New must be registered");
+        let sem = sem.unwrap();
+        assert_eq!(
+            sem.risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyObject_New must be MemoryAlloc"
+        );
+        assert_eq!(
+            sem.severity,
+            RiskSeverity::High,
+            "PyObject_New must be High severity"
+        );
+
+        // Deallocator
+        let sem = registry.lookup("PyObject_Del");
+        assert!(sem.is_some(), "PyObject_Del must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyObject_Del must be MemoryAlloc"
+        );
+
+        // GC variant
+        let sem = registry.lookup("PyObject_GC_New");
+        assert!(sem.is_some(), "PyObject_GC_New must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyObject_GC_New must be MemoryAlloc"
+        );
+
+        let sem = registry.lookup("PyObject_GC_Del");
+        assert!(sem.is_some(), "PyObject_GC_Del must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyObject_GC_Del must be MemoryAlloc"
+        );
+    }
+
+    /// Objective: Verify Python C API refcount operations.
+    /// Invariants: Py_INCREF/DECREF must be RefCountMismatch, not OwnershipTransfer.
+    #[test]
+    fn test_python_refcount_ops() {
+        let registry = SemanticRegistry::new();
+
+        let sem = registry.lookup("Py_INCREF");
+        assert!(sem.is_some(), "Py_INCREF must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::RefCountMismatch,
+            "Py_INCREF must be RefCountMismatch"
+        );
+
+        let sem = registry.lookup("Py_DECREF");
+        assert!(sem.is_some(), "Py_DECREF must be registered");
+        let sem = sem.unwrap();
+        assert_eq!(
+            sem.risk_kind,
+            RiskKind::RefCountMismatch,
+            "Py_DECREF must be RefCountMismatch"
+        );
+        assert_eq!(
+            sem.severity,
+            RiskSeverity::High,
+            "Py_DECREF must be High severity"
+        );
+
+        let sem = registry.lookup("Py_CLEAR");
+        assert!(sem.is_some(), "Py_CLEAR must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::RefCountMismatch,
+            "Py_CLEAR must be RefCountMismatch"
+        );
+    }
+
+    /// Objective: Verify Python C API borrowed vs new reference distinction.
+    /// Invariants: PyList_GetItem (borrowed) != PyList_GetItemRef (new ref).
+    #[test]
+    fn test_python_borrowed_vs_new_ref() {
+        let registry = SemanticRegistry::new();
+
+        // Borrowed reference — should NOT be DECREFed
+        let sem = registry.lookup("PyList_GetItem");
+        assert!(sem.is_some(), "PyList_GetItem must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::OwnershipTransfer,
+            "PyList_GetItem must be OwnershipTransfer (borrowed ref)"
+        );
+
+        // New reference (Python 3.12+) — must be DECREFed
+        let sem = registry.lookup("PyList_GetItemRef");
+        assert!(sem.is_some(), "PyList_GetItemRef must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyList_GetItemRef must be MemoryAlloc (new ref)"
+        );
+
+        // PyDict_GetItem — borrowed reference
+        let sem = registry.lookup("PyDict_GetItem");
+        assert!(sem.is_some(), "PyDict_GetItem must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::OwnershipTransfer,
+            "PyDict_GetItem must be OwnershipTransfer (borrowed ref)"
+        );
+    }
+
+    /// Objective: Verify Python C API type constructors (PyLong_From*, etc).
+    /// Invariants: All Py*_From* constructors return new references.
+    #[test]
+    fn test_python_type_constructors() {
+        let registry = SemanticRegistry::new();
+
+        // PyLong_FromLong (prefix match)
+        let sem = registry.lookup("PyLong_FromLong");
+        assert!(sem.is_some(), "PyLong_FromLong must be registered");
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyLong_FromLong must be MemoryAlloc"
+        );
+
+        // PyLong_FromUnsignedLongLong (prefix match)
+        let sem = registry.lookup("PyLong_FromUnsignedLongLong");
+        assert!(
+            sem.is_some(),
+            "PyLong_FromUnsignedLongLong must match via prefix"
+        );
+        assert_eq!(
+            sem.unwrap().risk_kind,
+            RiskKind::MemoryAlloc,
+            "PyLong_FromUnsignedLongLong must be MemoryAlloc"
+        );
+
+        // PyBytes_FromString (prefix match)
+        let sem = registry.lookup("PyBytes_FromString");
+        assert!(sem.is_some(), "PyBytes_FromString must be registered");
+
+        // PyUnicode_FromString (prefix match)
+        let sem = registry.lookup("PyUnicode_FromString");
+        assert!(sem.is_some(), "PyUnicode_FromString must be registered");
+
+        // PyList_New (exact match)
+        let sem = registry.lookup("PyList_New");
+        assert!(sem.is_some(), "PyList_New must be registered");
+        assert_eq!(sem.unwrap().risk_kind, RiskKind::MemoryAlloc);
+
+        // PyDict_New (exact match)
+        let sem = registry.lookup("PyDict_New");
+        assert!(sem.is_some(), "PyDict_New must be registered");
+    }
+
+    /// Objective: Verify that Python C API functions are correctly flagged as high-risk.
+    #[test]
+    fn test_python_high_risk() {
+        let registry = SemanticRegistry::new();
+
+        assert!(
+            registry.is_high_risk("PyObject_New"),
+            "PyObject_New is High → high risk"
+        );
+        assert!(
+            registry.is_high_risk("PyObject_Del"),
+            "PyObject_Del is High → high risk"
+        );
+        assert!(
+            registry.is_high_risk("Py_DECREF"),
+            "Py_DECREF is High → high risk"
+        );
+        assert!(
+            !registry.is_high_risk("Py_INCREF"),
+            "Py_INCREF is Medium → not high risk"
+        );
+        assert!(
+            !registry.is_high_risk("Py_CLEAR"),
+            "Py_CLEAR is Medium → not high risk"
+        );
     }
 }

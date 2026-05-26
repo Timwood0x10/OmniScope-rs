@@ -7,14 +7,25 @@
 //! - Ownership types for memory safety
 //! - Call graph types
 //! - Configuration types
+//! - Resource family types (replacing language-based allocator matching)
+//! - Pointer contract types (describing ownership semantics)
+//! - Effect types (function effects for resource contract analysis)
+//! - Escape kinds (how pointers leave scope)
+//! - Evidence types (supporting issue verification)
+//! - Verifier verdicts (gating issue output)
 
 pub mod abi;
 pub mod call_graph_types;
 pub mod config;
+pub mod effect;
+pub mod escape;
+pub mod evidence;
 pub mod ownership;
+pub mod pointer_contract;
+pub mod resource_family;
 pub mod zone_types;
 
-// Re-exports
+// Re-exports — Legacy types (will be gradually replaced)
 pub use abi::{AbiType, CallingConvention};
 pub use call_graph_types::{
     is_dangerous, is_libc, is_sink, is_source, CallGraphEdge, CallGraphNode, CrossLangEdge,
@@ -22,6 +33,18 @@ pub use call_graph_types::{
 };
 pub use config::{AnalysisConfig, Language, OutputFormat};
 pub use ownership::{Ownership, OwnershipKind};
+
+// Re-exports — Resource contract types (new architecture)
+pub use effect::{ArgIndex, Effect, FunctionOrigin, LanguageHint, VerifierVerdict};
+pub use escape::EscapeKind;
+pub use evidence::{Evidence, EvidenceKind, IssueCandidateKind};
+pub use pointer_contract::PointerContract;
+pub use resource_family::{
+    FamilyId, FamilyKind, LifetimeDomain, ResourceFamily, BUILTIN_FAMILIES, FAMILY_CPP_NEW_ARRAY,
+    FAMILY_CPP_NEW_SCALAR, FAMILY_CSHARP_COTASK, FAMILY_CSHARP_HGLOBAL, FAMILY_C_HEAP,
+    FAMILY_GO_GC, FAMILY_JAVA_GLOBAL_REF, FAMILY_JAVA_LOCAL_REF, FAMILY_PYTHON_MEM,
+    FAMILY_PYTHON_MEM_RAW, FAMILY_PYTHON_OBJECT, FAMILY_RUST_GLOBAL, FAMILY_ZIG_ALLOCATOR,
+};
 pub use zone_types::{classify_by_patterns, EscapeTrigger, ZoneClass, ZoneKind, ZoneStats};
 
 /// Unique identifier for nodes in analysis graphs
@@ -35,6 +58,9 @@ pub type ValueId = u64;
 
 /// Unique identifier for functions
 pub type FunctionId = u64;
+
+/// Unique identifier for symbols (canonical names)
+pub type SymbolId = u64;
 
 #[cfg(test)]
 mod tests {

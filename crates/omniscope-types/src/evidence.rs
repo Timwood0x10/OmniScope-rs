@@ -1,0 +1,194 @@
+//! Evidence types for issue verification and diagnostic context.
+//!
+//! Every inferred summary and verified issue must carry evidence.
+//! Evidence explains *why* a conclusion was reached, enabling
+//! auditable output and human review of false positives.
+
+use serde::{Deserialize, Serialize};
+
+use crate::effect::Effect;
+use crate::escape::EscapeKind;
+use crate::pointer_contract::PointerContract;
+use crate::resource_family::FamilyId;
+
+/// Kind of evidence supporting a conclusion.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EvidenceKind {
+    /// Same-family release evidence (alloc and free from same family).
+    SameFamilyRelease,
+    /// Cross-family mismatch evidence.
+    CrossFamilyMismatch,
+    /// Destructor/drop-mediated release.
+    DestructorRelease,
+    /// Slice-to-pointer bridge (borrowed return helper).
+    BridgeHelper,
+    /// Reference count conditional release.
+    RefcountConditional,
+    /// Static lifetime sink.
+    StaticLifetimeSink,
+    /// Return-to-caller ownership transfer.
+    ReturnToCaller,
+    /// Out-param initialization.
+    OutParamInit,
+    /// Field-store into owner.
+    FieldStoreToOwner,
+    /// Global/static store.
+    GlobalStore,
+    /// Callback escape.
+    CallbackEscape,
+    /// Symbol name pattern match.
+    SymbolPattern,
+    /// Debug info / source language hint.
+    DebugInfo,
+    /// Call graph structural evidence.
+    CallGraphStructure,
+    /// IR pattern (e.g. getelementptr-only body).
+    IrPattern,
+    /// Manual model annotation.
+    ModelAnnotation,
+    /// Unknown or insufficient evidence.
+    Insufficient,
+}
+
+/// An evidence item supporting a conclusion about a resource or issue.
+///
+/// Evidence objects are produced by inference passes and consumed
+/// by the verifier. They should be attached to summaries and
+/// issue candidates, and included in diagnostic/debug output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Evidence {
+    /// What kind of evidence this is.
+    pub kind: EvidenceKind,
+    /// Human-readable description of the evidence.
+    pub description: String,
+    /// Resource family involved (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<FamilyId>,
+    /// Pointer contract involved (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<PointerContract>,
+    /// Escape kind involved (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escape: Option<EscapeKind>,
+    /// Effect that produced this evidence (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect: Option<Effect>,
+    /// Confidence level for this evidence (0.0 - 1.0).
+    pub confidence: f32,
+}
+
+impl Evidence {
+    /// Creates evidence with a kind and description.
+    pub fn new(kind: EvidenceKind, description: impl Into<String>) -> Self {
+        Self {
+            kind,
+            description: description.into(),
+            family: None,
+            contract: None,
+            escape: None,
+            effect: None,
+            confidence: 0.5,
+        }
+    }
+
+    /// Sets the confidence level.
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    /// Attaches a resource family.
+    pub fn with_family(mut self, family: FamilyId) -> Self {
+        self.family = Some(family);
+        self
+    }
+
+    /// Attaches a pointer contract.
+    pub fn with_contract(mut self, contract: PointerContract) -> Self {
+        self.contract = Some(contract);
+        self
+    }
+
+    /// Attaches an escape kind.
+    pub fn with_escape(mut self, escape: EscapeKind) -> Self {
+        self.escape = Some(escape);
+        self
+    }
+
+    /// Returns true if this evidence is high-confidence (>= 0.8).
+    pub fn is_high_confidence(&self) -> bool {
+        self.confidence >= 0.8
+    }
+}
+
+/// Issue candidate kinds, produced by the candidate builder
+/// before verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IssueCandidateKind {
+    /// Alloc and free from different resource families.
+    CrossFamilyFree,
+    /// Pointer used after it was released.
+    UseAfterRelease,
+    /// Same resource released twice.
+    DoubleRelease,
+    /// Resource not freed on some execution paths.
+    ConditionalLeak,
+    /// Borrowed pointer escaped to a context requiring ownership.
+    BorrowEscape,
+    /// Pointer escaped to a callback that may assume ownership.
+    CallbackEscape,
+    /// Needs a model annotation — unknown family or cleanup.
+    NeedsModel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_evidence_builder_pattern() {
+        let evidence = Evidence::new(
+            EvidenceKind::SameFamilyRelease,
+            "malloc/free from c_heap family",
+        )
+        .with_confidence(0.95)
+        .with_family(FamilyId::C_HEAP);
+
+        assert_eq!(evidence.kind, EvidenceKind::SameFamilyRelease);
+        assert_eq!(evidence.family, Some(FamilyId::C_HEAP));
+        assert!(
+            evidence.is_high_confidence(),
+            "0.95 >= 0.8 should be high confidence"
+        );
+    }
+
+    #[test]
+    fn test_low_confidence_evidence() {
+        let evidence = Evidence::new(EvidenceKind::SymbolPattern, "name matches prefix pattern")
+            .with_confidence(0.3);
+
+        assert!(
+            !evidence.is_high_confidence(),
+            "0.3 < 0.8 should NOT be high confidence"
+        );
+    }
+
+    #[test]
+    fn test_issue_candidate_kinds() {
+        // Verify all candidate kinds from the architecture doc are present.
+        let kinds = [
+            IssueCandidateKind::CrossFamilyFree,
+            IssueCandidateKind::UseAfterRelease,
+            IssueCandidateKind::DoubleRelease,
+            IssueCandidateKind::ConditionalLeak,
+            IssueCandidateKind::BorrowEscape,
+            IssueCandidateKind::CallbackEscape,
+            IssueCandidateKind::NeedsModel,
+        ];
+        assert_eq!(
+            kinds.len(),
+            7,
+            "Must have 7 candidate kinds as specified in architecture doc"
+        );
+    }
+}

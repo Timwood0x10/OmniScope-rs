@@ -24,3 +24,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+criterion = { workspace = true }
+omniscope-ir = { path = "../omniscope-ir" }
+
+[[bench]]
+name = "analysis_passes"
+harness = false

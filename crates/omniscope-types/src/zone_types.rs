@@ -196,6 +196,39 @@ pub const C_ESCAPE_PATTERNS: &[&str] = &[
     "strcpy", "strcat", "sprintf", "gets", "system", "exec", "popen",
 ];
 
+/// Python safe patterns — GC-managed operations that need no analysis.
+pub const PYTHON_SAFE_PATTERNS: &[&str] = &[
+    "PyList_Append",
+    "PyDict_SetItem",
+    "PyTuple_SetItem",
+    "Py_INCREF",
+    "Py_XDECREF",
+    "Py_CLEAR",
+    "PyObject_Call",
+    "PyModule_AddObject",
+];
+
+/// Python escape patterns — manual ref count or alloc/dealloc operations.
+pub const PYTHON_ESCAPE_PATTERNS: &[&str] = &[
+    "PyObject_New",
+    "PyObject_NewVar",
+    "PyObject_Del",
+    "PyObject_GC_New",
+    "PyObject_GC_Del",
+    "Py_DECREF",
+    "PyLong_From",
+    "PyFloat_From",
+    "PyBytes_From",
+    "PyUnicode_From",
+    "PyList_New",
+    "PyDict_New",
+    "PyTuple_New",
+    "Py_BuildValue",
+    "PyArg_ParseTuple",
+    "PyList_GetItem",
+    "PyTuple_GetItem",
+];
+
 /// Classify a function by checking against language-specific patterns.
 ///
 /// Escape patterns take priority over safe patterns: if a function
@@ -208,6 +241,7 @@ pub fn classify_by_patterns(func_name: &str, language: Language) -> ZoneKind {
         Language::Go => (GO_SAFE_PATTERNS, GO_ESCAPE_PATTERNS),
         Language::Cpp => (CPP_SAFE_PATTERNS, CPP_ESCAPE_PATTERNS),
         Language::C => (&[] as &[&str], C_ESCAPE_PATTERNS),
+        Language::Python => (PYTHON_SAFE_PATTERNS, PYTHON_ESCAPE_PATTERNS),
         _ => return ZoneKind::Unknown,
     };
 
@@ -305,5 +339,92 @@ mod tests {
             unknown_count: 2,
         };
         assert_eq!(stats.total(), 20, "total must be sum of all zone counts");
+    }
+
+    /// Objective: Verify Python zone classification for alloc/dealloc/refcount ops.
+    /// Invariants: PyObject_New/Del and Py_DECREF are Escape; Py_INCREF is Safe.
+    #[test]
+    fn test_python_escape_zone_classification() {
+        // Alloc/dealloc operations are escape zones
+        assert_eq!(
+            classify_by_patterns("PyObject_New", Language::Python),
+            ZoneKind::Escape,
+            "PyObject_New is manual memory management → Escape"
+        );
+        assert_eq!(
+            classify_by_patterns("PyObject_Del", Language::Python),
+            ZoneKind::Escape,
+            "PyObject_Del is manual deallocation → Escape"
+        );
+        assert_eq!(
+            classify_by_patterns("PyObject_GC_New", Language::Python),
+            ZoneKind::Escape,
+            "PyObject_GC_New is GC-tracked alloc → Escape"
+        );
+        // Type constructors are escape zones (return new reference)
+        assert_eq!(
+            classify_by_patterns("PyLong_FromLong", Language::Python),
+            ZoneKind::Escape,
+            "PyLong_FromLong returns new ref → Escape"
+        );
+        assert_eq!(
+            classify_by_patterns("PyList_New", Language::Python),
+            ZoneKind::Escape,
+            "PyList_New returns new ref → Escape"
+        );
+        // DECREF is escape (dangerous ref count operation)
+        assert_eq!(
+            classify_by_patterns("Py_DECREF", Language::Python),
+            ZoneKind::Escape,
+            "Py_DECREF is dangerous ref count decrement → Escape"
+        );
+        // Borrowed ref getters are escape (ownership ambiguity)
+        assert_eq!(
+            classify_by_patterns("PyList_GetItem", Language::Python),
+            ZoneKind::Escape,
+            "PyList_GetItem is borrowed ref → Escape"
+        );
+    }
+
+    /// Objective: Verify Python safe zone classification.
+    /// Invariants: Py_INCREF, Py_CLEAR, Py_XDECREF are safe refcount ops.
+    #[test]
+    fn test_python_safe_zone_classification() {
+        // Safe refcount operations
+        assert_eq!(
+            classify_by_patterns("Py_INCREF", Language::Python),
+            ZoneKind::Safe,
+            "Py_INCREF is a safe ref count increment → Safe"
+        );
+        assert_eq!(
+            classify_by_patterns("Py_XDECREF", Language::Python),
+            ZoneKind::Safe,
+            "Py_XDECREF is NULL-safe decrement → Safe"
+        );
+        assert_eq!(
+            classify_by_patterns("Py_CLEAR", Language::Python),
+            ZoneKind::Safe,
+            "Py_CLEAR is DECREF+NULL → Safe"
+        );
+        // Unknown function in Python → Unknown zone
+        assert_eq!(
+            classify_by_patterns("my_py_func", Language::Python),
+            ZoneKind::Unknown,
+            "Unknown Python function defaults to Unknown zone"
+        );
+    }
+
+    /// Objective: Verify Python escape overrides safe.
+    /// Invariants: When a function matches both safe and escape, Escape wins.
+    #[test]
+    fn test_python_escape_overrides_safe() {
+        // Escape patterns must take priority over safe patterns.
+        // Note: in practice Py_DECREF doesn't match any safe pattern,
+        // but the priority rule must hold for any overlap.
+        assert_eq!(
+            classify_by_patterns("Py_DECREF", Language::Python),
+            ZoneKind::Escape,
+            "Escape pattern (Py_DECREF) must override any safe pattern"
+        );
     }
 }

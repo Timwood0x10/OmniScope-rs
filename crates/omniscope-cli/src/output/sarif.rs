@@ -13,6 +13,16 @@ use serde_json::{json, Value};
 /// SARIF v2.1.0 formatter for GitHub Code Scanning integration.
 pub struct SarifFormatter;
 
+/// Returns current UTC time as ISO 8601 string for SARIF invocation.
+fn chrono_now() -> String {
+    // Use std::time for simplicity — no chrono dependency needed
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{}Z", secs)
+}
+
 impl SarifFormatter {
     /// Creates a new SARIF formatter.
     pub fn new() -> Self {
@@ -219,12 +229,101 @@ impl Default for SarifFormatter {
     }
 }
 
-/// Returns current UTC time as ISO 8601 string for SARIF invocation.
-fn chrono_now() -> String {
-    // Use std::time for simplicity — no chrono dependency needed
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    format!("{}Z", secs)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omniscope_core::{Confidence, Issue, IssueKind, Severity};
+    use omniscope_pass::PassResult;
+    use std::time::Duration;
+
+    /// Objective: Verify SarifFormatter produces valid SARIF v2.1.0 JSON.
+    /// Invariants: Must contain $schema, version, runs with tool driver.
+    #[test]
+    fn test_sarif_structure() {
+        let formatter = SarifFormatter::new();
+        let pass_results = vec![PassResult::new("test")];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(5));
+
+        let output = formatter.format(&result);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("SARIF output must be valid JSON");
+
+        assert_eq!(parsed["version"], "2.1.0", "Must be SARIF v2.1.0");
+        assert!(parsed["$schema"].is_string(), "Must contain $schema");
+        assert!(parsed["runs"].is_array(), "Must contain runs array");
+        assert_eq!(
+            parsed["runs"][0]["tool"]["driver"]["name"], "OmniScope",
+            "Tool name must be OmniScope"
+        );
+        assert!(
+            parsed["runs"][0]["tool"]["driver"]["rules"].is_array(),
+            "Must contain rule definitions"
+        );
+    }
+
+    /// Objective: Verify SARIF result entries from issues.
+    /// Invariants: Issues must produce results with ruleId, level, message, locations.
+    #[test]
+    fn test_sarif_with_issues() {
+        let formatter = SarifFormatter::new();
+        let issue = Issue::new(
+            1,
+            IssueKind::InvalidFree,
+            Severity::Warning,
+            "invalid free detected",
+        )
+        .with_confidence(Confidence::High)
+        .with_location(omniscope_core::IssueLocation::new(
+            std::path::PathBuf::from("test.c"),
+            42,
+        ));
+
+        let mut pass_result = PassResult::new("FFIBoundary");
+        pass_result.add_issue(issue);
+
+        let result =
+            PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(10));
+        let output = formatter.format(&result);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("SARIF with issues must be valid JSON");
+
+        let results = &parsed["runs"][0]["results"];
+        assert!(results.is_array(), "Must contain results array");
+        assert_eq!(
+            results.as_array().unwrap().len(),
+            1,
+            "Must have exactly 1 result"
+        );
+        assert_eq!(results[0]["level"], "warning", "Must have warning level");
+        assert!(results[0]["ruleId"].is_string(), "Must have ruleId");
+    }
+
+    /// Objective: Verify SARIF code flows from trace entries.
+    /// Invariants: Trace entries must produce codeFlows with threadFlows.
+    #[test]
+    fn test_sarif_code_flows() {
+        let formatter = SarifFormatter::new();
+        let mut issue = Issue::new(
+            1,
+            IssueKind::CrossLanguageFree,
+            Severity::Error,
+            "cross-lang free",
+        );
+        issue.add_trace(omniscope_core::TraceEntry::new("malloc called"));
+        issue.add_trace(omniscope_core::TraceEntry::new("passed to operator_delete"));
+
+        let mut pass_result = PassResult::new("FFIBoundary");
+        pass_result.add_issue(issue);
+
+        let result = PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(5));
+        let output = formatter.format(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        let code_flows = &parsed["runs"][0]["results"][0]["codeFlows"];
+        assert!(code_flows.is_array(), "Must contain codeFlows array");
+        assert!(
+            !code_flows.as_array().unwrap().is_empty(),
+            "codeFlows must not be empty"
+        );
+    }
 }

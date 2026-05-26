@@ -108,6 +108,9 @@ impl Pass for FFIBoundaryPass {
                         omniscope_registry::RiskKind::NullPointer => IssueKind::NullDereference,
                         omniscope_registry::RiskKind::ResourceLeak => IssueKind::MemoryLeak,
                         omniscope_registry::RiskKind::ThreadSafety => IssueKind::ThreadCrossing,
+                        omniscope_registry::RiskKind::RefCountMismatch => {
+                            IssueKind::CrossLanguageFree
+                        }
                         _ => IssueKind::FfiUnsafeCall,
                     };
                     let conf = match sem.severity {

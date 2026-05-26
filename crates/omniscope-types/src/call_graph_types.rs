@@ -111,12 +111,40 @@ pub const DANGEROUS_FUNCTIONS: &[&str] = &[
 
 /// Taint source functions — where untrusted data enters the program.
 pub const SOURCE_FUNCTIONS: &[&str] = &[
-    "read", "recv", "gets", "fgets", "fread", "getenv", "getchar", "scanf", "fscanf", "sscanf",
+    "read",
+    "recv",
+    "gets",
+    "fgets",
+    "fread",
+    "getenv",
+    "getchar",
+    "scanf",
+    "fscanf",
+    "sscanf",
+    // Python C API sources — functions that return borrowed/new refs or parse external data
+    "PyArg_ParseTuple",
+    "PyArg_ParseTupleAndKeywords",
+    "PyObject_GetAttr",
+    "PyList_GetItem",
+    "PyTuple_GetItem",
+    "Py_BuildValue",
 ];
 
 /// Taint sink functions — where tainted data reaching them is a vulnerability.
 pub const SINK_PATTERNS: &[&str] = &[
-    "system", "exec", "popen", "strcpy", "strcat", "sprintf", "memcpy", "write", "printf",
+    "system",
+    "exec",
+    "popen",
+    "strcpy",
+    "strcat",
+    "sprintf",
+    "memcpy",
+    "write",
+    "printf",
+    // Python C API sinks — DECREF on wrong ref, alloc/dealloc mismatch
+    "Py_DECREF",
+    "PyObject_Del",
+    "PyObject_GC_Del",
 ];
 
 /// Check if a function name matches a known libc function (exact match).
@@ -173,5 +201,39 @@ mod tests {
         assert!(is_sink("sprintf"), "sprintf format string → taint sink");
         assert!(!is_source("malloc"), "malloc is not a data source");
         assert!(!is_sink("strlen"), "strlen is libc, not a sink");
+    }
+
+    /// Objective: Verify Python C API taint source/sink classification.
+    /// Invariants: PyArg_ParseTuple is source, Py_DECREF is sink.
+    #[test]
+    fn test_python_source_sink_classification() {
+        // Python C API taint sources
+        assert!(
+            is_source("PyArg_ParseTuple"),
+            "PyArg_ParseTuple parses external args → taint source"
+        );
+        assert!(
+            is_source("PyObject_GetAttr"),
+            "PyObject_GetAttr reads object attr → taint source"
+        );
+        assert!(
+            is_source("PyList_GetItem"),
+            "PyList_GetItem reads list element → taint source"
+        );
+        // Python C API taint sinks
+        assert!(
+            is_sink("Py_DECREF"),
+            "Py_DECREF can be a sink for ref count mismatches"
+        );
+        assert!(
+            is_sink("PyObject_Del"),
+            "PyObject_Del is dealloc → taint sink"
+        );
+        // Non-sources/sinks
+        assert!(!is_source("Py_DECREF"), "Py_DECREF is not a data source");
+        assert!(
+            !is_sink("PyList_New"),
+            "PyList_New is allocator, not a sink"
+        );
     }
 }

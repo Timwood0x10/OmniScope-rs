@@ -222,3 +222,97 @@ impl Default for RichFormatter {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omniscope_core::{Confidence, Issue, IssueKind, Severity};
+    use omniscope_pass::PassResult;
+    use std::time::Duration;
+
+    /// Objective: Verify RichFormatter produces output with all sections.
+    /// Invariants: Output must contain "OmniScope", "Coverage", "Findings", "Summary".
+    #[test]
+    fn test_rich_formatter_sections() {
+        let formatter = RichFormatter::new();
+        let pass_results = vec![PassResult::new("test")];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+
+        let output = formatter.format(&result);
+        assert!(output.contains("OmniScope"), "Must contain header");
+        assert!(output.contains("Coverage"), "Must contain coverage section");
+        assert!(output.contains("Findings"), "Must contain findings section");
+        assert!(output.contains("Summary"), "Must contain summary section");
+    }
+
+    /// Objective: Verify RichFormatter renders issues with detection paths.
+    /// Invariants: Issues must show [HIGH]/[LOW], Type, Confidence, Function, Detail.
+    #[test]
+    fn test_rich_formatter_with_issues() {
+        let formatter = RichFormatter::new();
+        let issue = Issue::new(1, IssueKind::InvalidFree, Severity::Warning, "test detail")
+            .with_confidence(Confidence::Medium)
+            .with_location(
+                omniscope_core::IssueLocation::new(std::path::PathBuf::from("test.c"), 10)
+                    .with_function("test_func".to_string()),
+            );
+
+        let mut pass_result = PassResult::new("FFIBoundary").with_nodes(5);
+        pass_result.add_issue(issue);
+
+        let result =
+            PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(16));
+        let output = formatter.format(&result);
+
+        assert!(output.contains("[HIGH]"), "Must show HIGH severity label");
+        assert!(output.contains("OMI-001"), "Must show issue ID");
+        assert!(output.contains("invalid_free"), "Must show issue kind");
+        assert!(output.contains("MEDIUM"), "Must show confidence");
+        assert!(output.contains("test_func"), "Must show function name");
+        assert!(output.contains("test detail"), "Must show description");
+    }
+
+    /// Objective: Verify RichFormatter renders trace entries as detection paths.
+    /// Invariants: Detection path must use tree-drawing characters.
+    #[test]
+    fn test_rich_formatter_detection_path() {
+        let formatter = RichFormatter::new();
+        let mut issue = Issue::new(
+            1,
+            IssueKind::CrossLanguageFree,
+            Severity::Warning,
+            "cross-lang free",
+        );
+        issue.add_trace(omniscope_core::TraceEntry::new("Step 1: malloc called"));
+        issue.add_trace(omniscope_core::TraceEntry::new(
+            "Step 2: passed to operator_delete",
+        ));
+
+        let mut pass_result = PassResult::new("FFIBoundary");
+        pass_result.add_issue(issue);
+
+        let result = PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(5));
+        let output = formatter.format(&result);
+
+        assert!(
+            output.contains("Detection Path"),
+            "Must show detection path header"
+        );
+        assert!(output.contains("├──"), "Must show tree branch character");
+        assert!(output.contains("└──"), "Must show tree leaf character");
+        assert!(output.contains("Step 1"), "Must show first trace step");
+        assert!(output.contains("Step 2"), "Must show second trace step");
+    }
+
+    /// Objective: Verify empty result produces "No issues detected" message.
+    #[test]
+    fn test_rich_formatter_no_issues() {
+        let formatter = RichFormatter::new();
+        let result = PipelineResult::from_pass_results(vec![], Duration::from_millis(1));
+        let output = formatter.format(&result);
+        assert!(
+            output.contains("No issues detected"),
+            "Must show no-issues message"
+        );
+    }
+}

@@ -48,3 +48,48 @@ impl Default for JsonFormatter {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omniscope_pass::PassResult;
+    use std::time::Duration;
+
+    /// Objective: Verify JsonFormatter produces valid JSON output.
+    /// Invariants: Output must parse as valid JSON with expected fields.
+    #[test]
+    fn test_json_formatter_valid_json() {
+        let formatter = JsonFormatter::new();
+        let pass_results = vec![PassResult::new("test").with_nodes(10)];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(5));
+
+        let output = formatter.format(&result);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("JsonFormatter output must be valid JSON");
+        assert!(
+            parsed["total_issues"].is_number(),
+            "Must contain total_issues"
+        );
+        assert!(
+            parsed["pass_results"].is_array(),
+            "Must contain pass_results array"
+        );
+    }
+
+    /// Objective: Verify compact formatter produces non-pretty JSON.
+    /// Invariants: Compact output must not contain newlines between fields.
+    #[test]
+    fn test_json_formatter_compact() {
+        let formatter = JsonFormatter::compact();
+        let pass_results = vec![PassResult::new("test")];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(1));
+
+        let output = formatter.format(&result);
+        // Compact JSON should have fewer newlines than pretty
+        let pretty_output = JsonFormatter::new().format(&result);
+        assert!(
+            output.lines().count() < pretty_output.lines().count(),
+            "Compact JSON must have fewer lines than pretty JSON"
+        );
+    }
+}
