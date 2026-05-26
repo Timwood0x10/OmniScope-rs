@@ -8,9 +8,6 @@
 # [target.x86_64-unknown-linux-gnu]
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
-
-
-
 # Use sccache for caching if available
 [build]
 rustc-wrapper = "sccache"
@@ -27,6 +24,7 @@ rustdocflags = ["-L", "/opt/homebrew/lib"]
 
 [target.x86_64-apple-darwin]
 rustflags = ["-L", "/opt/homebrew/lib"]
+rustdocflags = ["-L", "/opt/homebrew/lib"]
 
 # Library search paths for Linux
 [target.x86_64-unknown-linux-gnu]

@@ -9,13 +9,20 @@
 //! - Configuration types
 
 pub mod abi;
+pub mod call_graph_types;
 pub mod config;
 pub mod ownership;
+pub mod zone_types;
 
 // Re-exports
 pub use abi::{AbiType, CallingConvention};
+pub use call_graph_types::{
+    is_dangerous, is_libc, is_sink, is_source, CallGraphEdge, CallGraphNode, CrossLangEdge,
+    FunctionKind,
+};
 pub use config::{AnalysisConfig, Language, OutputFormat};
 pub use ownership::{Ownership, OwnershipKind};
+pub use zone_types::{classify_by_patterns, EscapeTrigger, ZoneClass, ZoneKind, ZoneStats};
 
 /// Unique identifier for nodes in analysis graphs
 pub type NodeId = u64;

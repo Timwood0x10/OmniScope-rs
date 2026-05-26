@@ -27,6 +27,7 @@
 pub mod diagnostics;
 pub mod error;
 pub mod fact;
+pub mod issue;
 pub mod memory_pool;
 pub mod profiler;
 
@@ -34,6 +35,9 @@ pub mod profiler;
 pub use diagnostics::{Diagnostic, DiagnosticAggregator, DiagnosticId, Severity, SourceLocation};
 pub use error::{AnalysisError, ConfigError, DiagnosticError, IRLoadError, OmniScopeError, Result};
 pub use fact::{Fact, FactId, FactKind, FactLocation, FactStore};
+pub use issue::{
+    BoundaryKind, Confidence, FFIBoundary, Issue, IssueId, IssueKind, IssueLocation, TraceEntry,
+};
 pub use memory_pool::MemoryPool;
 pub use profiler::{MemorySample, Profiler, ScopedTimer, Span, SpanId, SpanStats};
 

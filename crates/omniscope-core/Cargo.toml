@@ -27,6 +27,9 @@ indexmap = { workspace = true }
 # Memory management
 bumpalo = { workspace = true }
 
+# Internal dependencies
+omniscope-types = { path = "../omniscope-types" }
+
 # Logging
 tracing = { workspace = true }
 
