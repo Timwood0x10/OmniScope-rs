@@ -27,6 +27,38 @@ pub struct CallInstruction {
     pub caller: String,
     /// Is this an external call?
     pub is_external: bool,
+    /// Source location (if available)
+    pub location: Option<SourceLocation>,
+}
+
+/// Source code location
+#[derive(Debug, Clone)]
+pub struct SourceLocation {
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Data layout information extracted from IR
+#[derive(Debug, Clone)]
+pub struct DataLayout {
+    /// Target triple (e.g., "x86_64-apple-darwin")
+    pub target_triple: Option<String>,
+    /// Data layout string (e.g., "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128")
+    pub data_layout: Option<String>,
+    /// Pointer size in bits
+    pub pointer_size: Option<u32>,
+    /// Endianness (true = little, false = big)
+    pub little_endian: Option<bool>,
+}
+
+/// Calling convention information
+#[derive(Debug, Clone)]
+pub struct CallingConvention {
+    /// Convention name (e.g., "ccc", "fastcc", "webkit_jscc")
+    pub name: String,
+    /// Platform-specific convention
+    pub platform_specific: bool,
 }
 
 /// Parsed LLVM IR module
@@ -38,6 +70,10 @@ pub struct IRModule {
     pub declarations: HashMap<String, Function>,
     /// Call instructions
     pub calls: Vec<CallInstruction>,
+    /// Data layout information
+    pub data_layout: DataLayout,
+    /// Calling conventions used in this module
+    pub calling_conventions: Vec<CallingConvention>,
 }
 
 impl IRModule {
@@ -47,15 +83,31 @@ impl IRModule {
             functions: HashMap::new(),
             declarations: HashMap::new(),
             calls: Vec::new(),
+            data_layout: DataLayout {
+                target_triple: None,
+                data_layout: None,
+                pointer_size: None,
+                little_endian: None,
+            },
+            calling_conventions: Vec::new(),
         }
     }
 
     /// Parse LLVM IR from text
     pub fn parse_from_text(content: &str) -> Self {
         let mut module = Self::new();
+        let mut current_function = String::new();
 
         for line in content.lines() {
             let line = line.trim();
+
+            // Parse module-level metadata
+            if line.starts_with("target triple") {
+                module.data_layout.target_triple = extract_target_triple(line);
+            } else if line.starts_with("target datalayout") {
+                module.data_layout.data_layout = extract_datalayout(line);
+                module.parse_datalayout_info();
+            }
 
             // Parse function declarations: declare ... @name(...)
             if line.starts_with("declare") {
@@ -63,17 +115,28 @@ impl IRModule {
                     module.declarations.insert(func.name.clone(), func);
                 }
             }
-
             // Parse function definitions: define ... @name(...) {
             else if line.starts_with("define") {
                 if let Some(func) = parse_definition(line) {
+                    current_function = func.name.clone();
                     module.functions.insert(func.name.clone(), func);
+
+                    // Extract calling convention
+                    if let Some(conv_name) = extract_calling_convention(line) {
+                        module.calling_conventions.push(CallingConvention {
+                            name: conv_name,
+                            platform_specific: true,
+                        });
+                    }
                 }
             }
-
+            // End of function
+            else if line == "}" {
+                current_function.clear();
+            }
             // Parse call instructions: call ... @name(...)
             else if line.contains("call") {
-                if let Some(call) = parse_call(line, &module.functions) {
+                if let Some(call) = parse_call(line, &current_function) {
                     module.calls.push(call);
                 }
             }
@@ -87,18 +150,76 @@ impl IRModule {
         module
     }
 
-    /// Load and parse from file
+    /// Load and parse from file (.ll or .bc)
     pub fn load_from_file(path: &Path) -> std::io::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
+        let content = if path.extension().is_some_and(|ext| ext == "bc") {
+            // Convert .bc to .ll using llvm-dis
+            Self::convert_bc_to_ll(path)?
+        } else {
+            std::fs::read_to_string(path)?
+        };
         Ok(Self::parse_from_text(&content))
+    }
+
+    /// Parse datalayout information to extract pointer size and endianness
+    fn parse_datalayout_info(&mut self) {
+        if let Some(ref layout) = self.data_layout.data_layout {
+            // Parse endianness (first character: 'e' = little, 'E' = big)
+            if let Some(first_char) = layout.chars().next() {
+                self.data_layout.little_endian = Some(first_char == 'e');
+            }
+
+            // Parse pointer size (format: p:64:64 or p0:64:64)
+            for part in layout.split('-') {
+                if part.starts_with('p') {
+                    // Extract pointer size from format like "p:64:64" or "p0:64:64"
+                    let parts: Vec<&str> = part.split(':').collect();
+                    if parts.len() >= 2 {
+                        if let Ok(size) = parts[1].parse::<u32>() {
+                            self.data_layout.pointer_size = Some(size);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Convert .bc file to .ll text using llvm-dis
+    fn convert_bc_to_ll(path: &Path) -> std::io::Result<String> {
+        use std::process::Command;
+
+        let output = Command::new("llvm-dis")
+            .arg(path)
+            .arg("-o")
+            .arg("-") // Output to stdout
+            .output();
+
+        match output {
+            Ok(output) if output.status.success() => {
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            }
+            _ => {
+                // Fallback: try to read .ll file if it exists
+                let ll_path = path.with_extension("ll");
+                if ll_path.exists() {
+                    std::fs::read_to_string(&ll_path)
+                } else {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "Cannot convert {:?} to text IR. llvm-dis not found or failed.",
+                            path
+                        ),
+                    ))
+                }
+            }
+        }
     }
 
     /// Returns FFI boundaries (calls to external functions)
     pub fn ffi_boundaries(&self) -> Vec<&CallInstruction> {
-        self.calls
-            .iter()
-            .filter(|call| call.is_external)
-            .collect()
+        self.calls.iter().filter(|call| call.is_external).collect()
     }
 }
 
@@ -157,7 +278,7 @@ fn parse_definition(line: &str) -> Option<Function> {
 }
 
 /// Parse a call instruction
-fn parse_call(line: &str, _functions: &HashMap<String, Function>) -> Option<CallInstruction> {
+fn parse_call(line: &str, current_function: &str) -> Option<CallInstruction> {
     // Format: ... call ... @name(...)
     if !line.contains("call") {
         return None;
@@ -173,12 +294,85 @@ fn parse_call(line: &str, _functions: &HashMap<String, Function>) -> Option<Call
         if let Some(end) = rest.find('(') {
             let callee = rest[..end].to_string();
 
-            // Note: We don't know the caller here, would need context
+            // Extract source location if present (!dbg !123)
+            let location = extract_location(line);
+
             return Some(CallInstruction {
                 callee,
-                caller: "unknown".to_string(),
+                caller: current_function.to_string(),
                 is_external: false,
+                location,
             });
+        }
+    }
+
+    None
+}
+
+/// Extract source location from metadata
+fn extract_location(line: &str) -> Option<SourceLocation> {
+    // Look for !dbg !N pattern
+    if let Some(dbg_pos) = line.rfind("!dbg") {
+        // In real implementation, we'd look up the metadata
+        // For now, return None
+        let _ = dbg_pos;
+    }
+    None
+}
+
+/// Extract target triple from IR line.
+///
+/// Format: target triple = "x86_64-apple-darwin"
+fn extract_target_triple(line: &str) -> Option<String> {
+    // Find the opening quote
+    if let Some(start) = line.find('"') {
+        // Find the closing quote
+        if let Some(end) = line[start + 1..].find('"') {
+            return Some(line[start + 1..start + 1 + end].to_string());
+        }
+    }
+    None
+}
+
+/// Extract datalayout from IR line.
+///
+/// Format: target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+fn extract_datalayout(line: &str) -> Option<String> {
+    // Find the opening quote
+    if let Some(start) = line.find('"') {
+        // Find the closing quote
+        if let Some(end) = line[start + 1..].find('"') {
+            return Some(line[start + 1..start + 1 + end].to_string());
+        }
+    }
+    None
+}
+
+/// Extract calling convention from function definition.
+///
+/// Examples:
+/// - "define void @foo()" -> None (default ccc)
+/// - "define fastcc void @foo()" -> Some("fastcc")
+/// - "define webkit_jscc void @foo()" -> Some("webkit_jscc")
+fn extract_calling_convention(line: &str) -> Option<String> {
+    // Common calling conventions
+    let conventions = [
+        "fastcc",
+        "coldcc",
+        "webkit_jscc",
+        "anyregcc",
+        "preserve_mostcc",
+        "preserve_allcc",
+        "swiftcc",
+        "aarch64_sve_vector_pcs",
+        "aarch64_vector_pcs",
+        "amdgpu_kernel",
+        "spir_kernel",
+    ];
+
+    for conv in &conventions {
+        if line.contains(conv) {
+            return Some(conv.to_string());
         }
     }
 

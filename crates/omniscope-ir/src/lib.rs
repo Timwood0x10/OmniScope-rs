@@ -9,6 +9,7 @@
 //! - Source location tracking
 //! - IR view abstractions
 //! - IR text format parsing
+//! - Platform-specific filtering
 //!
 //! # Example
 //!
@@ -24,6 +25,7 @@ pub mod debug_info;
 pub mod loader;
 pub mod location;
 pub mod parser;
+pub mod platform;
 pub mod safe_wrappers;
 pub mod view;
 
@@ -32,6 +34,7 @@ pub use debug_info::{DebugInfoExtractor, TypeInfo};
 pub use loader::IRLoader;
 pub use location::{LocationManager, SourceLocation};
 pub use parser::{CallInstruction, Function, IRModule};
+pub use platform::{Architecture, Platform, PlatformFilterRegistry, PlatformInfo};
 pub use safe_wrappers::{SafeBasicBlock, SafeFunction, SafeInstruction};
 pub use view::{BasicBlockView, FunctionView, InstructionView, ModuleView};
 

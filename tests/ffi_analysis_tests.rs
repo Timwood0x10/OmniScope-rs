@@ -123,10 +123,8 @@ fn test_analyze_all_ffi_issues() {
 /// Check if an FFI function is potentially dangerous
 fn is_dangerous_ffi(func_name: &str) -> bool {
     let dangerous_patterns = vec![
-        "malloc", "free", "realloc", "calloc",
-        "strcpy", "strcat", "sprintf", "vsprintf",
-        "gets", "scanf", "fscanf",
-        "memcpy", "memmove",
+        "malloc", "free", "realloc", "calloc", "strcpy", "strcat", "sprintf", "vsprintf", "gets",
+        "scanf", "fscanf", "memcpy", "memmove",
     ];
 
     dangerous_patterns.iter().any(|p| func_name.contains(p))

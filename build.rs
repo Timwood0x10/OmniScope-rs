@@ -30,7 +30,10 @@ pub const TARGET: &str = "{}";
 
     // Print build info
     println!("cargo:warning=Building OmniScope...");
-    println!("cargo:warning=Target: {}", env::var("TARGET").unwrap_or_else(|_| "unknown".to_string()));
+    println!(
+        "cargo:warning=Target: {}",
+        env::var("TARGET").unwrap_or_else(|_| "unknown".to_string())
+    );
 }
 
 fn rustc_version_runtime() -> String {

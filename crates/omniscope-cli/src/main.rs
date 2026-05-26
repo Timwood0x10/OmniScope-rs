@@ -116,7 +116,8 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
 
     let module = omniscope_ir::IRModule::load_from_file(&cmd.input)?;
 
-    println!("{} {} functions, {} declarations, {} calls",
+    println!(
+        "{} {} functions, {} declarations, {} calls",
         "✓".green(),
         module.functions.len(),
         module.declarations.len(),
@@ -128,7 +129,11 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
 
     let ffi_calls = module.ffi_boundaries();
 
-    println!("{} {} FFI boundaries detected", "✓".green(), ffi_calls.len());
+    println!(
+        "{} {} FFI boundaries detected",
+        "✓".green(),
+        ffi_calls.len()
+    );
 
     // Report FFI calls
     if !ffi_calls.is_empty() {
@@ -144,17 +149,27 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     }
 
     // Check for issues
-    let dangerous_count = ffi_calls.iter().filter(|c| is_dangerous_ffi(&c.callee)).count();
+    let dangerous_count = ffi_calls
+        .iter()
+        .filter(|c| is_dangerous_ffi(&c.callee))
+        .count();
 
     println!("\n{}", "═".repeat(50).dimmed());
 
     if dangerous_count > 0 {
-        println!("{} {} potential safety issues found!", "⚠".red(), dangerous_count);
+        println!(
+            "{} {} potential safety issues found!",
+            "⚠".red(),
+            dangerous_count
+        );
         println!("\n{}", "Issues:".red().bold());
 
         for call in &ffi_calls {
             if is_dangerous_ffi(&call.callee) {
-                println!("  • Dangerous FFI: {} - may cause memory safety issues", call.callee);
+                println!(
+                    "  • Dangerous FFI: {} - may cause memory safety issues",
+                    call.callee
+                );
             }
         }
     } else {
@@ -170,10 +185,8 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
 /// Check if an FFI function is potentially dangerous
 fn is_dangerous_ffi(func_name: &str) -> bool {
     let dangerous_patterns = vec![
-        "malloc", "free", "realloc", "calloc",
-        "strcpy", "strcat", "sprintf", "vsprintf",
-        "gets", "scanf", "fscanf",
-        "memcpy", "memmove",
+        "malloc", "free", "realloc", "calloc", "strcpy", "strcat", "sprintf", "vsprintf", "gets",
+        "scanf", "fscanf", "memcpy", "memmove",
     ];
 
     dangerous_patterns.iter().any(|p| func_name.contains(p))

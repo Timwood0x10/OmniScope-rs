@@ -64,8 +64,11 @@ fn test_analyze_c_bridge() {
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!("✓ Analysis completed: {} passes, {} issues",
-                result.pass_count(), result.issue_count());
+            println!(
+                "✓ Analysis completed: {} passes, {} issues",
+                result.pass_count(),
+                result.issue_count()
+            );
         }
         Err(e) => {
             println!("✗ Could not load IR file: {:?}", e);
@@ -95,8 +98,11 @@ fn test_analyze_zig_ffi() {
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!("✓ Analysis completed: {} passes, {} issues",
-                result.pass_count(), result.issue_count());
+            println!(
+                "✓ Analysis completed: {} passes, {} issues",
+                result.pass_count(),
+                result.issue_count()
+            );
         }
         Err(e) => {
             println!("✗ Could not load IR file: {:?}", e);
@@ -126,8 +132,11 @@ fn test_analyze_cpp() {
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!("✓ Analysis completed: {} passes, {} issues",
-                result.pass_count(), result.issue_count());
+            println!(
+                "✓ Analysis completed: {} passes, {} issues",
+                result.pass_count(),
+                result.issue_count()
+            );
         }
         Err(e) => {
             println!("✗ Could not load IR file: {:?}", e);
