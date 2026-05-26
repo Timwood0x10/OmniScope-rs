@@ -2,6 +2,7 @@
 //!
 //! This module provides result aggregation for the analysis pipeline.
 
+use omniscope_core::Issue;
 use omniscope_pass::PassResult;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -19,6 +20,9 @@ pub struct PipelineResult {
     pub duration: Duration,
     /// Pass statistics
     pub stats: PipelineStats,
+    /// All concrete issues collected across passes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<Issue>,
 }
 
 impl PipelineResult {
@@ -29,12 +33,37 @@ impl PipelineResult {
 
         let stats = PipelineStats::from_pass_results(&pass_results);
 
+        // Flatten all concrete issues from individual pass results
+        let issues: Vec<Issue> = pass_results.iter().flat_map(|r| r.issues.clone()).collect();
+
         Self {
             pass_results,
             total_issues,
             total_nodes,
             duration,
             stats,
+            issues,
+        }
+    }
+
+    /// Creates a pipeline result with explicit issues (from context collection).
+    pub fn with_issues(
+        pass_results: Vec<PassResult>,
+        duration: Duration,
+        issues: Vec<Issue>,
+    ) -> Self {
+        let total_issues = issues.len();
+        let total_nodes = pass_results.iter().map(|r| r.nodes_analyzed).sum();
+
+        let stats = PipelineStats::from_pass_results(&pass_results);
+
+        Self {
+            pass_results,
+            total_issues,
+            total_nodes,
+            duration,
+            stats,
+            issues,
         }
     }
 
@@ -51,6 +80,35 @@ impl PipelineResult {
     /// Returns true if any issues were found
     pub fn has_issues(&self) -> bool {
         self.total_issues > 0
+    }
+
+    /// Returns all collected issues.
+    pub fn issues(&self) -> &[Issue] {
+        &self.issues
+    }
+
+    /// Returns high-severity issues (Warning or Error).
+    pub fn high_issues(&self) -> Vec<&Issue> {
+        self.issues
+            .iter()
+            .filter(|i| i.severity.is_error() || i.severity.is_warning())
+            .collect()
+    }
+
+    /// Returns low-severity issues (Note or Help).
+    pub fn low_issues(&self) -> Vec<&Issue> {
+        self.issues
+            .iter()
+            .filter(|i| !i.severity.is_error() && !i.severity.is_warning())
+            .collect()
+    }
+
+    /// Returns actionable issues (non-FP, confidence >= Medium).
+    pub fn actionable_issues(&self) -> Vec<&Issue> {
+        self.issues
+            .iter()
+            .filter(|i| i.confidence != omniscope_core::Confidence::Low)
+            .collect()
     }
 
     /// Gets a pass result by name

@@ -176,8 +176,8 @@ impl SemanticRegistry {
     /// Checks if a function name matches any high-risk pattern.
     pub fn is_high_risk(&self, func_name: &str) -> bool {
         self.entries.iter().any(|e| {
-            e.matches(func_name) && e.severity == RiskSeverity::High
-                || e.severity == RiskSeverity::Critical
+            e.matches(func_name)
+                && (e.severity == RiskSeverity::High || e.severity == RiskSeverity::Critical)
         })
     }
 

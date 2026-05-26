@@ -2,7 +2,7 @@
 //!
 //! This module defines the core pass infrastructure for OmniScope analysis.
 
-use omniscope_core::{Diagnostic, Fact, Result};
+use omniscope_core::{Diagnostic, Fact, Issue, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,6 +49,9 @@ pub struct PassResult {
     /// Additional statistics
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub stats: HashMap<String, usize>,
+    /// Concrete issues detected by this pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<Issue>,
 }
 
 impl PassResult {
@@ -60,6 +63,7 @@ impl PassResult {
             nodes_analyzed: 0,
             duration_ms: 0,
             stats: HashMap::new(),
+            issues: Vec::new(),
         }
     }
 
@@ -67,6 +71,17 @@ impl PassResult {
     pub fn with_issues(mut self, count: usize) -> Self {
         self.issues_found = count;
         self
+    }
+
+    /// Adds a concrete issue to this result.
+    pub fn add_issue(&mut self, issue: Issue) {
+        self.issues.push(issue);
+        self.issues_found = self.issues.len();
+    }
+
+    /// Returns the concrete issues collected by this pass.
+    pub fn get_issues(&self) -> &[Issue] {
+        &self.issues
     }
 
     /// Sets the number of nodes analyzed
@@ -95,6 +110,10 @@ pub struct PassContext {
     diagnostics: Vec<Diagnostic>,
     /// Facts produced by passes
     facts: Vec<Fact>,
+    /// Issues collected across all passes
+    issues: Vec<Issue>,
+    /// Monotonic issue ID counter
+    next_issue_id: u64,
 }
 
 impl PassContext {
@@ -104,6 +123,8 @@ impl PassContext {
             shared: HashMap::new(),
             diagnostics: Vec::new(),
             facts: Vec::new(),
+            issues: Vec::new(),
+            next_issue_id: 1,
         }
     }
 
@@ -147,6 +168,30 @@ impl PassContext {
     /// Returns the number of facts
     pub fn fact_count(&self) -> usize {
         self.facts.len()
+    }
+
+    /// Allocates the next unique issue ID.
+    pub fn next_issue_id(&mut self) -> u64 {
+        let id = self.next_issue_id;
+        self.next_issue_id += 1;
+        id
+    }
+
+    /// Emits an issue into the context and returns its ID.
+    pub fn emit_issue(&mut self, issue: Issue) -> u64 {
+        let id = issue.id;
+        self.issues.push(issue);
+        id
+    }
+
+    /// Returns all collected issues.
+    pub fn issues(&self) -> &[Issue] {
+        &self.issues
+    }
+
+    /// Returns the number of collected issues.
+    pub fn issue_count(&self) -> usize {
+        self.issues.len()
     }
 }
 

@@ -72,6 +72,21 @@ Key modules to port/adapt:
 - [x] **T7: FPPrecisionGuard** — `PrecisionMetrics` with precision/recall/F1/FP rate, gate check with 88% precision threshold and 12% max FP rate
 - [x] `make check` + `make fmt` both pass with 0 errors
 
+### Phase C: Output System & Logging
+- [x] **PassResult/PipelineResult** — added `issues: Vec<Issue>` field for concrete issue collection
+- [x] **PassContext** — added `emit_issue()`, `next_issue_id()`, `issues()` methods for issue collection across passes
+- [x] **FFIBoundaryPass** — now emits Issue objects into PassContext + PassResult (was only counting before)
+- [x] **Pipeline** — `run()` now uses `run_all_with_issues()` to collect issues from context
+- [x] **Output formatter module** — `omniscope-cli/src/output/` with `OutputFormat` trait
+- [x] **RichFormatter** — canonical terminal output with Coverage/Findings/Summary sections, detection paths, FFI boundary info, severity sorting
+- [x] **JsonFormatter** — serde-serialized JSON with pretty/compact modes
+- [x] **SarifFormatter** — SARIF v2.1.0 with code flows, rule descriptors, CWE links, GitHub Code Scanning compatible
+- [x] **CLI rewrite** — `analyze` command now uses formatters, `--format rich|json|sarif`, `--verbose`/`--debug` for log level control
+- [x] **Tracing logs** — added `info!`/`debug!` to all passes (CallGraph, FFIBoundary, DangerSurface, SurfaceClassifier, CFG, DFG, MemorySafety, PointerOwnership, BufferOverflow, NoiseReduction, IR parser)
+- [x] **Bug fix: `is_high_risk()`** — operator precedence bug: `matches && High || Critical` → `matches && (High || Critical)`
+- [x] **Bug fix: `classify_source_path()`** — `.cargo/registry/` now classifies as `Dependency` (not `StandardLibrary`)
+- [x] `make check` + `make fmt` + all tests pass with 0 errors
+
 ---
 
 ## Remaining Tasks (Priority Order)
@@ -108,9 +123,9 @@ Key modules to port/adapt:
 
 ### P3: Output & CLI (nice-to-have)
 
-- [ ] **T12: SARIF output** — structured output for GitHub integration
+- [x] **T12: SARIF output** — structured output for GitHub integration
+- [x] **T14: Enhanced CLI** — integrate output formatters (rich/JSON/SARIF) + tracing logs
 - [ ] **T13: LSP mode** — language server protocol for IDE integration
-- [ ] **T14: Enhanced CLI** — integrate SemanticRegistry for risk-aware reporting
 
 ---
 
@@ -149,3 +164,8 @@ IR Parser → CallGraphPass → SurfaceClassifierPass → FFIBoundaryPass → Da
 | `omniscope-pass/src/analysis/mod.rs` | ~270 | OK |
 | `omniscope-pass/src/analysis/danger_surface.rs` | ~110 | OK |
 | `omniscope-pass/src/analysis/noise_reduction.rs` | ~180 | OK |
+| `omniscope-cli/src/output/mod.rs` | ~85 | OK |
+| `omniscope-cli/src/output/rich.rs` | ~180 | OK |
+| `omniscope-cli/src/output/json.rs` | ~60 | OK |
+| `omniscope-cli/src/output/sarif.rs` | ~150 | OK |
+| `omniscope-cli/src/main.rs` | ~230 | OK |

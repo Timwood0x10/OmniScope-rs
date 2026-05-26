@@ -5,6 +5,7 @@
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::Result;
 use omniscope_dataflow::DataFlowGraph;
+use tracing::info;
 
 /// CFG (Control Flow Graph) construction pass
 pub struct CFGPass;
@@ -40,6 +41,12 @@ impl Pass for CFGPass {
 
         // Store CFG for other passes
         ctx.store("cfg", cfg.clone());
+
+        info!(
+            "CFGPass: {} blocks, {} edges (stub)",
+            cfg.block_count(),
+            cfg.edge_count()
+        );
 
         let result = PassResult::new(self.name())
             .with_nodes(nodes_analyzed)
@@ -194,12 +201,12 @@ impl Pass for DFGPass {
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         // TODO: Implement DFG construction from CFG
-        let result = PassResult::new(self.name()).with_nodes(0).with_duration(0);
-
-        // Store DFG for other passes
         let dfg = DataFlowGraph::new();
         ctx.store("dfg", dfg);
 
+        info!("DFGPass: 0 nodes (stub)");
+
+        let result = PassResult::new(self.name()).with_nodes(0).with_duration(0);
         Ok(result)
     }
 }

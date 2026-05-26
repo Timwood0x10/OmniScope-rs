@@ -152,13 +152,21 @@ impl IRModule {
 
     /// Load and parse from file (.ll or .bc)
     pub fn load_from_file(path: &Path) -> std::io::Result<Self> {
+        tracing::info!("Loading IR from {:?}", path);
         let content = if path.extension().is_some_and(|ext| ext == "bc") {
-            // Convert .bc to .ll using llvm-dis
+            tracing::debug!("Converting .bc to .ll via llvm-dis");
             Self::convert_bc_to_ll(path)?
         } else {
             std::fs::read_to_string(path)?
         };
-        Ok(Self::parse_from_text(&content))
+        let module = Self::parse_from_text(&content);
+        tracing::info!(
+            "IR loaded: {} functions, {} declarations, {} calls",
+            module.functions.len(),
+            module.declarations.len(),
+            module.calls.len()
+        );
+        Ok(module)
     }
 
     /// Parse datalayout information to extract pointer size and endianness

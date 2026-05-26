@@ -11,6 +11,7 @@
 //!    FP filtering effect."
 
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 /// Noise reduction engine.
 ///
@@ -57,7 +58,11 @@ impl NoiseReduction {
     /// Returns true if the issue matches a known safe pattern
     /// and should be suppressed (not reported to the user).
     pub fn should_suppress(&self, func_name: &str) -> bool {
-        self.safe_patterns.iter().any(|p| func_name.contains(p))
+        let suppressed = self.safe_patterns.iter().any(|p| func_name.contains(p));
+        if suppressed {
+            debug!("NoiseReduction: suppressing FP for '{}'", func_name);
+        }
+        suppressed
     }
 
     /// Returns the number of safe patterns registered.

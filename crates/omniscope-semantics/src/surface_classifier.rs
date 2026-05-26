@@ -226,14 +226,13 @@ impl SurfaceClassifier {
 
     /// L2: Classify based on source file path provenance.
     fn classify_source_path(&self, path: &str) -> Option<SurfaceHint> {
-        // Standard library paths
+        // Standard library paths (Rust core/std/alloc, C system headers)
         let stdlib_paths = [
             "/usr/include/",
             "/usr/lib/",
             "/usr/local/include/",
             "rustc/",
             "rustlib/",
-            ".cargo/registry/",
             ".rustup/",
             "std/src/",
             "core/src/",
@@ -246,6 +245,25 @@ impl SurfaceClassifier {
                     surface: FunctionSurface::StandardLibrary,
                     confidence: Confidence::High,
                     reason: format!("source path indicates stdlib: '{}'", stdlib_path),
+                });
+            }
+        }
+
+        // Dependency paths (third-party crates from package registries)
+        let dep_paths = [
+            ".cargo/registry/",
+            ".cargo/git/",
+            "vendor/",
+            "node_modules/",
+            "third_party/",
+        ];
+
+        for dep_path in &dep_paths {
+            if path.contains(dep_path) {
+                return Some(SurfaceHint {
+                    surface: FunctionSurface::Dependency,
+                    confidence: Confidence::High,
+                    reason: format!("source path indicates dependency: '{}'", dep_path),
                 });
             }
         }

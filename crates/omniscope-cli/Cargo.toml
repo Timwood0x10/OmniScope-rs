@@ -21,8 +21,11 @@ omniscope-pipeline = { path = "../omniscope-pipeline" }
 
 clap = { workspace = true }
 anyhow = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 colored = "3.1.1"
+serde_json = { workspace = true }
+omniscope-pass = { path = "../omniscope-pass" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

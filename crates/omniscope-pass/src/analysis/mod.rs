@@ -62,8 +62,7 @@ impl Pass for FFIBoundaryPass {
         let surfaces: HashMap<String, omniscope_semantics::FunctionSurface> =
             ctx.get("function_surfaces").unwrap_or_default();
 
-        let mut issues_found = 0usize;
-        let mut issue_id = 0u64;
+        let mut issues: Vec<Issue> = Vec::new();
 
         for edge in &cross_lang_edges {
             if !edge.is_ffi_boundary {
@@ -135,6 +134,7 @@ impl Pass for FFIBoundaryPass {
 
             let boundary_kind = classify_boundary(&edge.caller_lang, &edge.callee_lang);
 
+            let issue_id = ctx.next_issue_id();
             let issue = Issue::new(issue_id, kind, severity, description)
                 .with_confidence(confidence)
                 .with_ffi_boundary(FFIBoundary {
@@ -151,11 +151,12 @@ impl Pass for FFIBoundaryPass {
                 omniscope_core::fact::FactLocation::new(PathBuf::from("ffi_analysis"), 0),
             ));
 
-            debug!("FFIBoundary issue: {:?}", issue.kind);
-            issues_found += 1;
-            issue_id += 1;
+            debug!("FFIBoundary issue: {:?} id={}", issue.kind, issue_id);
+            ctx.emit_issue(issue.clone());
+            issues.push(issue);
         }
 
+        let issues_found = issues.len();
         info!(
             "FFIBoundaryPass: {} issues found across {} FFI boundaries",
             issues_found,
@@ -165,10 +166,13 @@ impl Pass for FFIBoundaryPass {
                 .count()
         );
 
-        Ok(PassResult::new(self.name())
-            .with_issues(issues_found)
+        let mut result = PassResult::new(self.name())
             .with_nodes(cross_lang_edges.len())
-            .with_duration(start.elapsed().as_millis() as u64))
+            .with_duration(start.elapsed().as_millis() as u64);
+        for issue in issues {
+            result.add_issue(issue);
+        }
+        Ok(result)
     }
 }
 
@@ -223,6 +227,10 @@ impl Pass for MemorySafetyPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         // Analyze memory safety using facts from context
         let nodes_analyzed = ctx.facts().len();
+        tracing::debug!(
+            "MemorySafetyPass: analyzing {} nodes (stub)",
+            nodes_analyzed
+        );
 
         let result = PassResult::new(self.name())
             .with_issues(0)
@@ -266,6 +274,10 @@ impl Pass for PointerOwnershipPass {
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let nodes_analyzed = ctx.facts().len();
+        tracing::debug!(
+            "PointerOwnershipPass: analyzing {} nodes (stub)",
+            nodes_analyzed
+        );
 
         let result = PassResult::new(self.name())
             .with_issues(0)
@@ -306,6 +318,10 @@ impl Pass for BufferOverflowPass {
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let nodes_analyzed = ctx.facts().len();
+        tracing::debug!(
+            "BufferOverflowPass: analyzing {} nodes (stub)",
+            nodes_analyzed
+        );
 
         let result = PassResult::new(self.name())
             .with_issues(0)

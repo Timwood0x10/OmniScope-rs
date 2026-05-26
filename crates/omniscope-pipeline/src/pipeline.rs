@@ -58,12 +58,12 @@ impl Pipeline {
     pub fn run(&mut self) -> Result<PipelineResult> {
         let start = Instant::now();
 
-        // Run all passes
-        let pass_results = self.pass_manager.run_all()?;
+        // Run all passes with shared context
+        let (pass_results, issues) = self.pass_manager.run_all_with_issues()?;
 
         // Aggregate results
         let duration = start.elapsed();
-        let result = PipelineResult::from_pass_results(pass_results, duration);
+        let result = PipelineResult::with_issues(pass_results, duration, issues);
 
         Ok(result)
     }

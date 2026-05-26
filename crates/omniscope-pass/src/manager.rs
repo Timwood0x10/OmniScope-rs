@@ -111,6 +111,19 @@ impl PassManager {
         self.run_with_context(&mut ctx)
     }
 
+    /// Runs all passes and returns (pass_results, collected_issues).
+    ///
+    /// Issues are collected from both PassResult.issues and
+    /// PassContext.issues(), providing a unified view of all
+    /// detected problems.
+    pub fn run_all_with_issues(&mut self) -> Result<(Vec<PassResult>, Vec<omniscope_core::Issue>)> {
+        self.compute_order()?;
+        let mut ctx = PassContext::new();
+        let results = self.run_with_context(&mut ctx)?;
+        let issues = ctx.issues().to_vec();
+        Ok((results, issues))
+    }
+
     /// Runs all passes with a shared context
     pub fn run_with_context(&self, ctx: &mut PassContext) -> Result<Vec<PassResult>> {
         let mut results = Vec::new();

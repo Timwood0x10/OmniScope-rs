@@ -1,11 +1,22 @@
 //! OmniScope CLI entry point
 //!
 //! This is the main entry point for the OmniScope static analyzer.
+//! It provides three subcommands:
+//! - `analyze`: Full pipeline analysis with rich/JSON/SARIF output
+//! - `audit`: Language-specific FFI audit
+//! - `info`: Show configuration and pass information
+
+mod output;
 
 use clap::Parser;
 use omniscope_pipeline::Pipeline;
+use output::json::JsonFormatter;
+use output::rich::RichFormatter;
+use output::sarif::SarifFormatter;
+use output::{OutputFormat, OutputFormatter};
 use std::path::PathBuf;
 use std::time::Instant;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "omniscope")]
@@ -33,21 +44,25 @@ struct AnalyzeCommand {
     #[arg(value_name = "INPUT")]
     input: PathBuf,
 
-    /// Output file path
+    /// Output file path (stdout if omitted)
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Output format (json, text, sarif)
-    #[arg(short = 'f', long, default_value = "json")]
+    /// Output format (rich, json, sarif)
+    #[arg(short = 'f', long, default_value = "rich")]
     format: String,
 
     /// Target language (c, cpp, rust, zig, go, python, java)
     #[arg(short = 'l', long)]
     language: Option<String>,
 
-    /// Enable verbose output
+    /// Enable verbose output (pipeline metrics)
     #[arg(short, long)]
     verbose: bool,
+
+    /// Enable debug-level logging (full trace)
+    #[arg(long)]
+    debug: bool,
 
     /// Run in parallel mode
     #[arg(long, default_value = "true")]
@@ -77,14 +92,20 @@ struct InfoCommand {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
+    // Initialize logging with configurable level
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("omniscope=warn"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
 
     let cli = Cli::parse();
     let start = Instant::now();
 
     match cli.command {
         Commands::Analyze(cmd) => {
+            init_debug_logging(&cmd);
             run_analyze(cmd, start)?;
         }
         Commands::Audit(cmd) => {
@@ -98,103 +119,119 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Runs the analyze command
-fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
-    use colored::Colorize;
-
-    println!("{}", "OmniScope Analyzer".cyan().bold());
-    println!("{}", "═".repeat(50).dimmed());
-
-    if cmd.verbose {
-        println!("{} {:?}", "Input:".green(), cmd.input);
-        println!("{} {}", "Format:".green(), cmd.format);
-        println!("{} {}", "Parallel:".green(), cmd.parallel);
+/// Upgrades log level to debug/trace when --debug or --verbose flags
+/// are passed on the analyze subcommand.
+fn init_debug_logging(cmd: &AnalyzeCommand) {
+    if cmd.debug {
+        // Re-init with trace level — only effective if default level
+        // was not overridden by RUST_LOG env var
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("omniscope=trace")),
+            )
+            .with_target(false)
+            .try_init();
+    } else if cmd.verbose {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("omniscope=debug")),
+            )
+            .with_target(false)
+            .try_init();
     }
+}
+
+/// Runs the analyze command — the primary analysis entry point.
+fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
+    tracing::info!("Starting analysis of {:?}", cmd.input);
+    tracing::debug!("Format: {}, Parallel: {}", cmd.format, cmd.parallel);
 
     // Parse the IR file
-    println!("\n{}", "Parsing LLVM IR...".yellow());
-
+    tracing::info!("Parsing LLVM IR from {:?}", cmd.input);
     let module = omniscope_ir::IRModule::load_from_file(&cmd.input)?;
-
-    println!(
-        "{} {} functions, {} declarations, {} calls",
-        "✓".green(),
-        module.functions.len(),
-        module.declarations.len(),
+    let func_count = module.functions.len();
+    let decl_count = module.declarations.len();
+    tracing::info!(
+        "IR parsed: {} functions, {} declarations, {} calls",
+        func_count,
+        decl_count,
         module.calls.len()
     );
 
-    // Analyze FFI boundaries
-    println!("\n{}", "Analyzing FFI boundaries...".yellow());
+    // Create and configure pipeline
+    let mut pipeline = Pipeline::new();
+    pipeline.register_default_passes();
+    pipeline.set_parallel(cmd.parallel);
+    tracing::debug!("Pipeline configured with {} passes", pipeline.pass_count());
 
-    let ffi_calls = module.ffi_boundaries();
-
-    println!(
-        "{} {} FFI boundaries detected",
-        "✓".green(),
-        ffi_calls.len()
+    // Run the full analysis pipeline
+    tracing::info!("Running analysis pipeline");
+    let result = pipeline.run()?;
+    tracing::info!(
+        "Pipeline completed: {} issues, {} nodes, {}ms",
+        result.total_issues,
+        result.total_nodes,
+        result.duration_ms()
     );
 
-    // Report FFI calls
-    if !ffi_calls.is_empty() {
-        println!("\n{}", "FFI Calls:".cyan().bold());
-        for call in &ffi_calls {
-            let status = if is_dangerous_ffi(&call.callee) {
-                "⚠ DANGEROUS".red()
+    // Format output according to selected format
+    let fmt = OutputFormat::from_str_ignore_case(&cmd.format);
+    let output = match fmt {
+        OutputFormat::Rich => RichFormatter::new().format(&result),
+        OutputFormat::Json => {
+            // Use compact JSON for file output, pretty for terminal
+            let formatter = if cmd.output.is_some() {
+                JsonFormatter::compact()
             } else {
-                "✓ safe".green()
+                JsonFormatter::from_pretty(true)
             };
-            println!("  → {} ({})", call.callee.yellow(), status);
+            formatter.format(&result)
         }
+        OutputFormat::Sarif => SarifFormatter::new().format(&result),
+    };
+
+    // Write output to file or stdout
+    if let Some(ref out_path) = cmd.output {
+        tracing::info!("Writing output to {:?}", out_path);
+        std::fs::write(out_path, &output)?;
+    } else {
+        println!("{}", output);
     }
 
-    // Check for issues
-    let dangerous_count = ffi_calls
-        .iter()
-        .filter(|c| is_dangerous_ffi(&c.callee))
-        .count();
-
-    println!("\n{}", "═".repeat(50).dimmed());
-
-    if dangerous_count > 0 {
-        println!(
-            "{} {} potential safety issues found!",
-            "⚠".red(),
-            dangerous_count
-        );
-        println!("\n{}", "Issues:".red().bold());
-
-        for call in &ffi_calls {
-            if is_dangerous_ffi(&call.callee) {
-                println!(
-                    "  • Dangerous FFI: {} - may cause memory safety issues",
-                    call.callee
-                );
-            }
+    // Verbose: print pipeline metrics
+    if cmd.verbose {
+        eprintln!("\n--- Pipeline Metrics ---");
+        for pr in &result.pass_results {
+            eprintln!(
+                "  {:30} {} issues, {} nodes, {}ms",
+                pr.name, pr.issues_found, pr.nodes_analyzed, pr.duration_ms
+            );
         }
-    } else {
-        println!("{} No safety issues detected", "✓".green());
+        eprintln!(
+            "  {:30} {} total issues, {}ms",
+            "TOTAL",
+            result.total_issues,
+            result.duration_ms()
+        );
     }
 
     let duration = start.elapsed();
-    println!("\n{} {:?}", "Completed in".blue(), duration);
+    tracing::info!("Analysis completed in {:?}", duration);
 
     Ok(())
 }
 
-/// Check if an FFI function is potentially dangerous
-fn is_dangerous_ffi(func_name: &str) -> bool {
-    let dangerous_patterns = vec![
-        "malloc", "free", "realloc", "calloc", "strcpy", "strcat", "sprintf", "vsprintf", "gets",
-        "scanf", "fscanf", "memcpy", "memmove",
-    ];
-
-    dangerous_patterns.iter().any(|p| func_name.contains(p))
-}
-
-/// Runs the audit command
+/// Runs the audit command — language-specific FFI audit.
 fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
     use colored::Colorize;
+
+    tracing::info!(
+        "Starting FFI audit: lang={}, type={}",
+        cmd.language,
+        cmd.audit_type
+    );
 
     println!("{}", "OmniScope FFI Auditor".cyan().bold());
     println!("{}", "═".repeat(50).dimmed());
@@ -218,7 +255,7 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Runs the info command
+/// Runs the info command — display configuration and pass info.
 fn run_info(cmd: InfoCommand) -> anyhow::Result<()> {
     use colored::Colorize;
 
@@ -237,11 +274,21 @@ fn run_info(cmd: InfoCommand) -> anyhow::Result<()> {
         println!("  Foundation:");
         println!("    - CFG (Control Flow Graph)");
         println!("    - DFG (Data Flow Graph)");
+        println!("    - CallGraph (Call graph construction)");
         println!("  Analysis:");
         println!("    - FFIBoundary (FFI boundary detection)");
+        println!("    - SurfaceClassifier (Function surface classification)");
+        println!("    - DangerSurface (Danger surface analysis)");
         println!("    - MemorySafety (Memory safety analysis)");
         println!("    - PointerOwnership (Ownership tracking)");
         println!("    - BufferOverflow (Buffer overflow detection)");
+        println!("  Filtering:");
+        println!("    - NoiseReduction (False positive suppression)");
+        println!("    - PrecisionMetrics (Precision gate with 88% threshold)");
+        println!("\n{}", "Output Formats:".yellow().bold());
+        println!("    - rich   (colored terminal output with detection paths)");
+        println!("    - json   (machine-readable JSON)");
+        println!("    - sarif  (GitHub Code Scanning integration)");
     }
 
     Ok(())
