@@ -28,6 +28,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod fact;
 pub mod issue;
+pub mod issue_candidate;
 pub mod memory_pool;
 pub mod profiler;
 
@@ -38,6 +39,7 @@ pub use fact::{Fact, FactId, FactKind, FactLocation, FactStore};
 pub use issue::{
     BoundaryKind, Confidence, FFIBoundary, Issue, IssueId, IssueKind, IssueLocation, TraceEntry,
 };
+pub use issue_candidate::{CandidateId, IssueCandidate};
 pub use memory_pool::MemoryPool;
 pub use profiler::{MemorySample, Profiler, ScopedTimer, Span, SpanId, SpanStats};
 

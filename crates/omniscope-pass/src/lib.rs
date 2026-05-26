@@ -13,6 +13,7 @@ pub mod analysis;
 pub mod foundation;
 pub mod manager;
 pub mod pass;
+pub mod resource;
 
 // Re-exports — Foundation passes
 pub use foundation::{BasicBlock, CFGEdge, CFGEdgeKind, CFGPass, DFGPass, CFG};
@@ -22,6 +23,14 @@ pub use analysis::{
     BufferOverflowPass, CallGraphPass, DangerSurfacePass, FFIBoundaryPass, MemorySafetyPass,
     NoiseReduction, PointerOwnershipPass, PrecisionMetrics, SurfaceClassifierPass,
 };
+
+// Re-exports — Resource contract passes
+pub use resource::contract_graph_builder::{ContractEdge, ContractGraph, ContractGraphBuilderPass};
+pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
+pub use resource::issue_verifier::IssueVerifierPass;
+pub use resource::ownership_solver::OwnershipSolverPass;
+pub use resource::raw_fact_collector::RawFactCollectorPass;
+pub use resource::summary_builder::SummaryBuilderPass;
 
 // Re-exports — Infrastructure
 pub use manager::PassManager;

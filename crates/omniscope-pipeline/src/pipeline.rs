@@ -5,8 +5,9 @@
 use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_pass::{
-    BufferOverflowPass, CFGPass, DFGPass, FFIBoundaryPass, MemorySafetyPass, PassManager,
-    PointerOwnershipPass,
+    BufferOverflowPass, CFGPass, ContractGraphBuilderPass, DFGPass, FFIBoundaryPass,
+    IssueCandidateBuilderPass, IssueVerifierPass, MemorySafetyPass, OwnershipSolverPass,
+    PassManager, PointerOwnershipPass, RawFactCollectorPass, SummaryBuilderPass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -52,6 +53,14 @@ impl Pipeline {
         self.pass_manager.register(MemorySafetyPass::new());
         self.pass_manager.register(PointerOwnershipPass::new());
         self.pass_manager.register(BufferOverflowPass::new());
+
+        // Resource contract passes (new architecture)
+        self.pass_manager.register(RawFactCollectorPass::new());
+        self.pass_manager.register(SummaryBuilderPass::new());
+        self.pass_manager.register(ContractGraphBuilderPass::new());
+        self.pass_manager.register(OwnershipSolverPass::new());
+        self.pass_manager.register(IssueCandidateBuilderPass::new());
+        self.pass_manager.register(IssueVerifierPass::new());
     }
 
     /// Runs the full analysis pipeline
@@ -105,7 +114,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
 
-        assert_eq!(pipeline.pass_count(), 6);
+        assert_eq!(pipeline.pass_count(), 12);
     }
 
     #[test]

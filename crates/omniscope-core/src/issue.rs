@@ -57,6 +57,18 @@ pub enum IssueKind {
     /// Integer overflow leading to memory corruption.
     IntegerOverflow,
 
+    // === Resource Contract Issues (new architecture) ===
+    /// Alloc and free from different resource families.
+    CrossFamilyFree,
+    /// Resource not freed on some execution paths.
+    ConditionalLeak,
+    /// Borrowed pointer escaped to a context requiring ownership.
+    BorrowEscape,
+    /// Pointer escaped to a callback that may assume ownership.
+    CallbackEscapeIssue,
+    /// Needs a model annotation — unknown family or cleanup.
+    NeedsModel,
+
     // === Concurrency Issues ===
     /// Data race across FFI boundary.
     DataRace,
@@ -96,6 +108,21 @@ impl IssueKind {
                 | IssueKind::BufferOverflow
                 | IssueKind::NullDereference
                 | IssueKind::IntegerOverflow
+        )
+    }
+
+    /// Returns true if this is a resource contract issue (new architecture).
+    ///
+    /// These issues are produced by the resource contract graph and
+    /// verified by the issue verifier before reporting.
+    pub fn is_resource_contract(&self) -> bool {
+        matches!(
+            self,
+            IssueKind::CrossFamilyFree
+                | IssueKind::ConditionalLeak
+                | IssueKind::BorrowEscape
+                | IssueKind::CallbackEscapeIssue
+                | IssueKind::NeedsModel
         )
     }
 
