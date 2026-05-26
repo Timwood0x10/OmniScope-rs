@@ -143,6 +143,7 @@ fn verify_candidate(candidate: &IssueCandidate) -> VerifierVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omniscope_types::FamilyId;
 
     #[test]
     fn test_verifier_creation() {

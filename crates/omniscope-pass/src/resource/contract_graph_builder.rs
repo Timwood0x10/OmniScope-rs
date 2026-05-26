@@ -116,6 +116,7 @@ impl Default for ContractGraphBuilderPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omniscope_types::FamilyId;
 
     #[test]
     fn test_contract_graph_builder_creation() {

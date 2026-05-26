@@ -69,6 +69,7 @@ impl Default for SummaryBuilderPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omniscope_semantics::infer_summary_for_symbol;
 
     #[test]
     fn test_summary_builder_creation() {
