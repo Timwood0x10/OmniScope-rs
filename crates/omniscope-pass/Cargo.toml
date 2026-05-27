@@ -15,7 +15,6 @@ omniscope-types = { path = "../omniscope-types" }
 omniscope-ir = { path = "../omniscope-ir" }
 omniscope-dataflow = { path = "../omniscope-dataflow" }
 omniscope-semantics = { path = "../omniscope-semantics" }
-omniscope-registry = { path = "../omniscope-registry" }
 
 rayon = { workspace = true }
 thiserror = { workspace = true }

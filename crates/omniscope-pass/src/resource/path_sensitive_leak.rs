@@ -6,11 +6,19 @@
 //! some don't) become `ConditionalLeak` candidates.
 //!
 //! Uses a path budget to avoid exponential blowup on large CFGs.
+//!
+//! Integration with ContractGraph:
+//! - Reads resource instances and contract edges from the graph
+//! - Uses summary store to determine release families
+//! - Produces ConditionalLeak candidates for the IssueVerifier
 
 use omniscope_core::{IssueCandidate, Result};
-use omniscope_types::{FamilyId, IssueCandidateKind};
+use omniscope_semantics::SummaryStore;
+use omniscope_types::{Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
+use crate::resource::contract_graph_builder::ContractGraph;
+use crate::resource::raw_fact_collector::RawResourceFact;
 
 /// Default maximum number of paths to explore per allocation site.
 const DEFAULT_PATH_BUDGET: usize = 64;
@@ -70,52 +78,40 @@ impl Pass for PathSensitiveLeakPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
-        // Retrieve the contract graph and ownership states.
+        // Retrieve the contract graph and summary store.
         // If no contract graph is available, this pass is a no-op.
-        let has_graph: Option<bool> = ctx.get("contract_graph_built");
-        if has_graph.is_none() {
+        let graph: Option<ContractGraph> = ctx.get("contract_graph");
+        let summary_store: Option<SummaryStore> = ctx.get("summary_store");
+        let summary_store = summary_store.unwrap_or_default();
+
+        if graph.is_none() {
             let result = PassResult::new(self.name())
                 .with_nodes(0)
                 .with_duration(start.elapsed().as_millis() as u64);
             return Ok(result);
         }
 
-        // In a full implementation, we would:
-        // 1. Iterate over all resource instances in the contract graph
-        // 2. For each Acquire node, trace all CFG paths to exits
-        // 3. Check each path for a same-family Release
-        // 4. Build ConditionalLeak candidates for paths missing release
-        //
-        // For now, we build the infrastructure and test the path
-        // slicing logic with a simplified model.
+        // Retrieve raw facts for allocation sites.
+        let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
+        let raw_facts = raw_facts.unwrap_or_default();
 
         let mut leak_candidates: Vec<IssueCandidate> = Vec::new();
         let mut candidate_id: u64 = 1;
 
-        // Check raw facts for allocations that might leak.
-        let raw_facts: Option<Vec<crate::resource::raw_fact_collector::RawResourceFact>> =
-            ctx.get("raw_resource_facts");
-        let raw_facts = raw_facts.unwrap_or_default();
-
         // Group facts by function to do per-function path analysis.
-        let mut alloc_sites: Vec<&crate::resource::raw_fact_collector::RawResourceFact> =
-            Vec::new();
-        for fact in &raw_facts {
-            if fact.is_acquire {
-                alloc_sites.push(fact);
-            }
-        }
+        let alloc_sites: Vec<&RawResourceFact> =
+            raw_facts.iter().filter(|f| f.is_acquire).collect();
 
         for alloc in &alloc_sites {
-            // For each allocation, check if there's a matching release
-            // in the same function.
-            let has_release = raw_facts
-                .iter()
-                .any(|f| !f.is_acquire && f.function == alloc.function && f.family == alloc.family);
+            let family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
-            if !has_release {
+            // Check if there's a matching same-family release in the
+            // same function or via a summary in the summary store.
+            let has_same_family_release = check_release_in_facts(&raw_facts, alloc)
+                || check_release_in_summaries(&summary_store, alloc);
+
+            if !has_same_family_release {
                 // No same-family release found — potential leak.
-                let family = alloc.family.unwrap_or(FamilyId::C_HEAP);
                 let mut candidate = IssueCandidate::new(
                     candidate_id,
                     IssueCandidateKind::ConditionalLeak,
@@ -127,6 +123,18 @@ impl Pass for PathSensitiveLeakPass {
                     "allocation in '{}' of family {:?} has no same-family release on any analyzed path",
                     alloc.function_name, family
                 ));
+
+                // Attach evidence about the missing release.
+                candidate.add_evidence(
+                    Evidence::new(
+                        EvidenceKind::Insufficient,
+                        format!(
+                            "no {:?}-family release found for allocation in '{}'",
+                            family, alloc.function_name
+                        ),
+                    )
+                    .with_family(family),
+                );
 
                 leak_candidates.push(candidate);
                 candidate_id += 1;
@@ -153,6 +161,41 @@ impl Default for PathSensitiveLeakPass {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Checks if there's a same-family release in the raw facts for
+/// the given allocation site.
+fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) -> bool {
+    let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
+
+    facts
+        .iter()
+        .any(|f| !f.is_acquire && f.function == alloc.function && (f.family == Some(alloc_family)))
+}
+
+/// Checks if the summary store contains a function that releases
+/// the same family as the allocation.
+fn check_release_in_summaries(store: &SummaryStore, alloc: &RawResourceFact) -> bool {
+    let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
+
+    // Check if any summary in the store releases the same family.
+    // This handles cases where the release is in a called function
+    // (e.g., a destructor or cleanup function).
+    for (_, summary) in store.iter() {
+        for effect in &summary.effects {
+            match effect {
+                Effect::Release { family, .. } if *family == alloc_family => {
+                    return true;
+                }
+                Effect::ConditionalRelease { family, .. } if *family == alloc_family => {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    false
 }
 
 /// Represents a path through the CFG from an allocation to an exit.
@@ -323,6 +366,60 @@ mod tests {
         assert!(
             !result.is_definite_leak(),
             "Budget exceeded means we can't be sure it's definite"
+        );
+    }
+
+    #[test]
+    fn test_check_release_in_facts() {
+        let alloc = RawResourceFact {
+            function: 1,
+            function_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            is_acquire: true,
+            contract: omniscope_types::PointerContract::Owned,
+            arg_index: Some(0),
+        };
+
+        let release = RawResourceFact {
+            function: 1,
+            function_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            is_acquire: false,
+            contract: omniscope_types::PointerContract::Released,
+            arg_index: Some(0),
+        };
+
+        let facts = vec![alloc.clone(), release];
+        assert!(
+            check_release_in_facts(&facts, &alloc),
+            "Same-family release in same function should be found"
+        );
+    }
+
+    #[test]
+    fn test_check_release_in_facts_cross_family() {
+        let alloc = RawResourceFact {
+            function: 1,
+            function_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            is_acquire: true,
+            contract: omniscope_types::PointerContract::Owned,
+            arg_index: Some(0),
+        };
+
+        let release = RawResourceFact {
+            function: 1,
+            function_name: "test_func".to_string(),
+            family: Some(FamilyId::CPP_NEW_SCALAR),
+            is_acquire: false,
+            contract: omniscope_types::PointerContract::Released,
+            arg_index: Some(0),
+        };
+
+        let facts = vec![alloc.clone(), release];
+        assert!(
+            !check_release_in_facts(&facts, &alloc),
+            "Cross-family release should NOT count as same-family"
         );
     }
 }

@@ -1,14 +1,14 @@
 //! Analysis passes for FFI and memory safety.
 //!
 //! This module provides analysis passes for detecting FFI issues.
-//! The FFIBoundaryPass uses CallGraphPass and SemanticRegistry to
+//! The FFIBoundaryPass uses CallGraphPass and FamilyRegistry to
 //! produce actionable diagnostics.
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::{
     BoundaryKind, Confidence, FFIBoundary, Fact, FactKind, Issue, IssueKind, Result, Severity,
 };
-use omniscope_registry::SemanticRegistry;
+use omniscope_semantics::{FamilyRegistry, SymbolEffect};
 use omniscope_types::call_graph_types::CrossLangEdge;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,7 +27,7 @@ pub use surface_classifier_pass::SurfaceClassifierPass;
 /// FFI boundary detection pass.
 ///
 /// Uses CrossLangEdge data from CallGraphPass and checks each
-/// boundary against the SemanticRegistry for risk classification.
+/// boundary against the FamilyRegistry for resource family classification.
 /// Produces Issue entries with FFIBoundary metadata.
 pub struct FFIBoundaryPass;
 
@@ -53,7 +53,7 @@ impl Pass for FFIBoundaryPass {
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
-        let registry = SemanticRegistry::new();
+        let registry = FamilyRegistry::new();
 
         // Retrieve cross-lang edges from CallGraphPass
         let cross_lang_edges: Vec<CrossLangEdge> = ctx.get("cross_lang_edges").unwrap_or_default();
@@ -92,34 +92,42 @@ impl Pass for FFIBoundaryPass {
                 }
             }
 
-            // Check callee against SemanticRegistry
-            let semantics = registry.lookup(&edge.callee_name);
+            // Check callee against FamilyRegistry for resource family info
+            let family_entry = registry.lookup(&edge.callee_name);
 
-            let (kind, severity, confidence, description) = match semantics {
-                Some(sem) => {
-                    let kind = match sem.risk_kind {
-                        omniscope_registry::RiskKind::MemoryAlloc => IssueKind::OwnershipViolation,
-                        omniscope_registry::RiskKind::OwnershipTransfer => {
-                            IssueKind::OwnershipViolation
+            let (kind, severity, confidence, description) = match family_entry {
+                Some(entry) => {
+                    // Map SymbolEffect to IssueKind
+                    let (kind, conf) = match entry.effect {
+                        SymbolEffect::Acquire => {
+                            (IssueKind::OwnershipViolation, Confidence::Medium)
                         }
-                        omniscope_registry::RiskKind::BufferOverflow => IssueKind::BufferOverflow,
-                        omniscope_registry::RiskKind::StringUnsafe => IssueKind::FfiUnsafeCall,
-                        omniscope_registry::RiskKind::TypeConfusion => IssueKind::FfiTypeMismatch,
-                        omniscope_registry::RiskKind::NullPointer => IssueKind::NullDereference,
-                        omniscope_registry::RiskKind::ResourceLeak => IssueKind::MemoryLeak,
-                        omniscope_registry::RiskKind::ThreadSafety => IssueKind::ThreadCrossing,
-                        omniscope_registry::RiskKind::RefCountMismatch => {
-                            IssueKind::CrossLanguageFree
+                        SymbolEffect::Release => {
+                            (IssueKind::OwnershipViolation, Confidence::Medium)
                         }
-                        _ => IssueKind::FfiUnsafeCall,
+                        SymbolEffect::ConditionalRelease => {
+                            (IssueKind::CrossLanguageFree, Confidence::Medium)
+                        }
+                        SymbolEffect::Retain => (IssueKind::CrossLanguageFree, Confidence::Low),
                     };
-                    let conf = match sem.severity {
-                        omniscope_registry::RiskSeverity::Critical => Confidence::High,
-                        omniscope_registry::RiskSeverity::High => Confidence::High,
-                        omniscope_registry::RiskSeverity::Medium => Confidence::Medium,
-                        _ => Confidence::Low,
-                    };
-                    (kind, Severity::Warning, conf, sem.description.clone())
+                    let family_name = registry
+                        .family(entry.family_id)
+                        .map(|f| f.name.as_str())
+                        .unwrap_or("unknown");
+                    (
+                        kind,
+                        Severity::Warning,
+                        conf,
+                        format!(
+                            "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, effect={:?}]",
+                            edge.caller_name,
+                            edge.caller_lang,
+                            edge.callee_name,
+                            edge.callee_lang,
+                            family_name,
+                            entry.effect
+                        ),
+                    )
                 }
                 None => {
                     // Unknown callee at FFI boundary — generic FFI warning
@@ -128,7 +136,7 @@ impl Pass for FFIBoundaryPass {
                         Severity::Note,
                         Confidence::Low,
                         format!(
-                            "FFI boundary: {} ({:?}) -> {} ({:?})",
+                            "FFI boundary: {} ({:?}) -> {} ({:?}) [unknown family]",
                             edge.caller_name, edge.caller_lang, edge.callee_name, edge.callee_lang
                         ),
                     )

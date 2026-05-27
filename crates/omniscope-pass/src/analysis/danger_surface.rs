@@ -9,12 +9,12 @@
 //! Algorithm:
 //!   1. Collect all danger surfaces (FFI boundary CrossLangEdge)
 //!   2. If no FFI boundaries → early return (pure C project fast path)
-//!   3. For each surface, check associated pointers with SemanticRegistry
-//!   4. Report danger surfaces with risk classification
+//!   3. For each surface, check associated pointers with FamilyRegistry
+//!   4. Report danger surfaces with resource family classification
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::Result;
-use omniscope_registry::SemanticRegistry;
+use omniscope_semantics::FamilyRegistry;
 use omniscope_types::call_graph_types::CrossLangEdge;
 use tracing::{debug, info};
 
@@ -43,7 +43,7 @@ impl Pass for DangerSurfacePass {
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
-        let registry = SemanticRegistry::new();
+        let registry = FamilyRegistry::new();
 
         // Retrieve cross-lang edges from CallGraphPass
         let cross_lang_edges: Vec<CrossLangEdge> = ctx.get("cross_lang_edges").unwrap_or_default();
@@ -62,7 +62,7 @@ impl Pass for DangerSurfacePass {
 
         // Analyze each FFI boundary as a potential danger surface
         let mut danger_count = 0usize;
-        let mut high_risk_count = 0usize;
+        let mut known_family_count = 0usize;
 
         for edge in &cross_lang_edges {
             if !edge.is_ffi_boundary {
@@ -71,26 +71,26 @@ impl Pass for DangerSurfacePass {
 
             danger_count += 1;
 
-            // Check if the callee is high-risk
-            if registry.is_high_risk(&edge.callee_name) {
-                high_risk_count += 1;
+            // Check if the callee has a known resource family
+            if registry.lookup(&edge.callee_name).is_some() {
+                known_family_count += 1;
                 debug!(
-                    "DangerSurface: HIGH RISK at {} -> {}",
+                    "DangerSurface: known resource family at {} -> {}",
                     edge.caller_name, edge.callee_name
                 );
             }
         }
 
         info!(
-            "DangerSurfacePass: {} danger surfaces, {} high risk",
-            danger_count, high_risk_count
+            "DangerSurfacePass: {} danger surfaces, {} with known resource families",
+            danger_count, known_family_count
         );
 
         let mut result = PassResult::new(self.name())
-            .with_issues(high_risk_count)
+            .with_issues(known_family_count)
             .with_nodes(danger_count)
             .with_duration(start.elapsed().as_millis() as u64);
-        result.add_stat("high_risk", high_risk_count);
+        result.add_stat("known_family", known_family_count);
         Ok(result)
     }
 }

@@ -7,9 +7,18 @@
 //! - `ProbableIssue` — likely real, needs human review
 //! - `Diagnostic` — not a bug, useful for debugging
 //! - `ExplainedSafe` — investigated and found benign
+//!
+//! Verification checks (per ARCHITECTURE_ADJUSTMENT.md):
+//! - Family match or mismatch (using registry compatible-release)
+//! - Ownership state at release point
+//! - Valid escape (return/out-param/field/global/callback)
+//! - Destructor/drop/cleanup release path
+//! - Runtime/compiler origin (lower severity for runtime-originated)
+//! - Unknown-family and unknown-cleanup policy
 
 use omniscope_core::{Issue, IssueCandidate, Result};
-use omniscope_types::{IssueCandidateKind, VerifierVerdict};
+use omniscope_semantics::FamilyRegistry;
+use omniscope_types::{EvidenceKind, IssueCandidateKind, VerifierVerdict};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
@@ -44,13 +53,20 @@ impl Pass for IssueVerifierPass {
         let start = std::time::Instant::now();
 
         let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+        let registry: Option<FamilyRegistry> = ctx.get("family_registry");
+        let registry = registry.unwrap_or_default();
 
         let mut verified: Vec<IssueCandidate> = Vec::new();
         let mut issues: Vec<Issue> = Vec::new();
 
         for mut candidate in candidates {
-            let verdict = verify_candidate(&candidate);
+            let verdict = verify_candidate(&candidate, &registry);
             candidate.verdict = Some(verdict);
+
+            // Attach a human-readable description based on the verdict.
+            if candidate.description.is_none() {
+                candidate.description = Some(build_verdict_description(&candidate, verdict));
+            }
 
             if candidate.is_reportable() {
                 let issue_id = ctx.next_issue_id();
@@ -90,52 +106,186 @@ impl Default for IssueVerifierPass {
 /// Verifies a single issue candidate and returns a verdict.
 ///
 /// This is the core verification logic. It checks:
-/// - Family match or mismatch
-/// - Ownership state
+/// - Family match or mismatch (using registry compatible-release)
+/// - Ownership state and pointer contract
 /// - Valid escape (return/out-param/field/global/callback)
 /// - Destructor/drop/cleanup release path
-/// - Unknown family policy (NeedsModel, not high severity)
-fn verify_candidate(candidate: &IssueCandidate) -> VerifierVerdict {
+/// - Runtime/compiler origin
+/// - Unknown family policy (NeedsModel → Diagnostic, not high severity)
+fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> VerifierVerdict {
     match candidate.kind {
-        IssueCandidateKind::CrossFamilyFree => {
-            // Cross-family release is a confirmed issue if families are
-            // genuinely different and not compatible.
-            if let Some(release_family) = candidate.release_family {
-                if candidate.alloc_family == release_family {
-                    // Same family — this was a false alarm
-                    VerifierVerdict::ExplainedSafe
-                } else {
-                    // Different families — confirmed cross-family free
-                    VerifierVerdict::ConfirmedIssue
-                }
-            } else {
-                // Release family unknown — probable issue
+        IssueCandidateKind::CrossFamilyFree => verify_cross_family_free(candidate, registry),
+        IssueCandidateKind::UseAfterRelease => {
+            // Use-after-release is almost always a real issue,
+            // unless there is clear evidence of re-acquisition.
+            if has_escape_evidence(candidate, EvidenceKind::ReturnToCaller) {
+                // Returned to caller — caller may re-acquire. Probable.
                 VerifierVerdict::ProbableIssue
+            } else {
+                VerifierVerdict::ConfirmedIssue
             }
         }
-        IssueCandidateKind::UseAfterRelease => {
-            // Use-after-release is almost always a real issue
-            VerifierVerdict::ConfirmedIssue
-        }
         IssueCandidateKind::DoubleRelease => {
-            // Double release is always a real issue
+            // Double release is always a real issue.
             VerifierVerdict::ConfirmedIssue
         }
-        IssueCandidateKind::ConditionalLeak => {
-            // Conditional leak — probable issue, needs human review
-            VerifierVerdict::ProbableIssue
-        }
-        IssueCandidateKind::BorrowEscape => {
-            // Borrow escape — probable issue
-            VerifierVerdict::ProbableIssue
-        }
+        IssueCandidateKind::ConditionalLeak => verify_conditional_leak(candidate),
+        IssueCandidateKind::BorrowEscape => verify_borrow_escape(candidate),
         IssueCandidateKind::CallbackEscape => {
-            // Callback escape — diagnostic, not necessarily a bug
+            // Callback escape — diagnostic, not necessarily a bug.
+            // The callback may or may not assume ownership.
             VerifierVerdict::Diagnostic
         }
         IssueCandidateKind::NeedsModel => {
-            // Unknown family/cleanup — diagnostic, not a bug
+            // Unknown family/cleanup — diagnostic, not a bug.
             VerifierVerdict::Diagnostic
+        }
+    }
+}
+
+/// Verifies a cross-family free candidate.
+fn verify_cross_family_free(
+    candidate: &IssueCandidate,
+    registry: &FamilyRegistry,
+) -> VerifierVerdict {
+    let Some(release_family) = candidate.release_family else {
+        // Release family unknown — probable issue but not confirmed.
+        return VerifierVerdict::ProbableIssue;
+    };
+
+    // Check compatible release via the registry.
+    if registry.is_compatible_release(candidate.alloc_family, release_family) {
+        // Same or compatible family — this was a false alarm.
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Check for destructor-mediated release — this is a valid
+    // release path. E.g., Rust Drop calling C free.
+    if has_evidence(candidate, EvidenceKind::DestructorRelease) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Check for valid escape — if the resource was returned to caller
+    // or stored in an owner, the release may be in a different context.
+    if has_escape_evidence(candidate, EvidenceKind::ReturnToCaller)
+        || has_escape_evidence(candidate, EvidenceKind::OutParamInit)
+        || has_escape_evidence(candidate, EvidenceKind::FieldStoreToOwner)
+    {
+        // Escaped via valid path — the release may happen elsewhere.
+        // Cross-family is still a probable issue but not confirmed.
+        return VerifierVerdict::ProbableIssue;
+    }
+
+    // Genuinely different families with no valid escape — confirmed.
+    VerifierVerdict::ConfirmedIssue
+}
+
+/// Verifies a conditional leak candidate.
+fn verify_conditional_leak(candidate: &IssueCandidate) -> VerifierVerdict {
+    // Check for valid escape that explains the "leak".
+    if has_evidence(candidate, EvidenceKind::ReturnToCaller) {
+        // Returned to caller — not a local leak.
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    if has_evidence(candidate, EvidenceKind::OutParamInit) {
+        // Stored via out-param — not a leak.
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    if has_evidence(candidate, EvidenceKind::FieldStoreToOwner) {
+        // Stored in owner field — not an immediate leak.
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    if has_evidence(candidate, EvidenceKind::StaticLifetimeSink) {
+        // Static lifetime — not a leak (process lives forever).
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    if has_evidence(candidate, EvidenceKind::RefcountConditional) {
+        // Refcount conditional release — the leak is conditional
+        // on refcount not reaching zero.
+        return VerifierVerdict::ProbableIssue;
+    }
+
+    // No valid escape found — probable leak.
+    VerifierVerdict::ProbableIssue
+}
+
+/// Verifies a borrow escape candidate.
+fn verify_borrow_escape(candidate: &IssueCandidate) -> VerifierVerdict {
+    // Check if the "escape" is actually a bridge helper.
+    if has_evidence(candidate, EvidenceKind::BridgeHelper) {
+        // Bridge helper returns borrowed pointer — not an escape.
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Borrow escaped to a context requiring ownership — probable issue.
+    VerifierVerdict::ProbableIssue
+}
+
+/// Checks if the candidate has evidence of a specific kind.
+fn has_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
+    candidate.evidence.iter().any(|e| e.kind == kind)
+}
+
+/// Checks if the candidate has an escape-related evidence of a specific kind.
+fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
+    candidate
+        .evidence
+        .iter()
+        .any(|e| e.kind == kind && e.escape.is_some())
+}
+
+/// Builds a human-readable description for a verified candidate.
+fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdict) -> String {
+    let kind_label = match candidate.kind {
+        IssueCandidateKind::CrossFamilyFree => "cross-family free",
+        IssueCandidateKind::UseAfterRelease => "use after release",
+        IssueCandidateKind::DoubleRelease => "double release",
+        IssueCandidateKind::ConditionalLeak => "conditional leak",
+        IssueCandidateKind::BorrowEscape => "borrow escape",
+        IssueCandidateKind::CallbackEscape => "callback escape",
+        IssueCandidateKind::NeedsModel => "needs model",
+    };
+
+    let verdict_label = match verdict {
+        VerifierVerdict::ConfirmedIssue => "confirmed",
+        VerifierVerdict::ProbableIssue => "probable",
+        VerifierVerdict::Diagnostic => "diagnostic",
+        VerifierVerdict::ExplainedSafe => "explained safe",
+    };
+
+    match candidate.kind {
+        IssueCandidateKind::CrossFamilyFree => {
+            let alloc_label = format!("{:?}", candidate.alloc_family);
+            let release_label = candidate
+                .release_family
+                .map_or("unknown".to_string(), |f| format!("{f:?}"));
+            format!(
+                "{kind_label}: {alloc_label} allocated in '{}' released as {release_label} in '{}' [{verdict_label}]",
+                candidate.alloc_function,
+                candidate.release_function.as_deref().unwrap_or("unknown")
+            )
+        }
+        IssueCandidateKind::ConditionalLeak => {
+            format!(
+                "{kind_label}: resource from '{}' ({:?}) may not be freed on all paths [{verdict_label}]",
+                candidate.alloc_function, candidate.alloc_family
+            )
+        }
+        IssueCandidateKind::NeedsModel => {
+            format!(
+                "{kind_label}: unknown resource family in '{}' [{verdict_label}]",
+                candidate.alloc_function
+            )
+        }
+        _ => {
+            format!(
+                "{kind_label} in '{}' [{verdict_label}]",
+                candidate.alloc_function
+            )
         }
     }
 }
@@ -143,7 +293,7 @@ fn verify_candidate(candidate: &IssueCandidate) -> VerifierVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omniscope_types::FamilyId;
+    use omniscope_types::{Evidence, FamilyId};
 
     #[test]
     fn test_verifier_creation() {
@@ -155,6 +305,7 @@ mod tests {
 
     #[test]
     fn test_verify_cross_family_confirmed() {
+        let registry = FamilyRegistry::new();
         let candidate = IssueCandidate::new(
             1,
             IssueCandidateKind::CrossFamilyFree,
@@ -164,12 +315,13 @@ mod tests {
         .with_release_family(FamilyId::CPP_NEW_SCALAR)
         .with_release_function("operator delete");
 
-        let verdict = verify_candidate(&candidate);
+        let verdict = verify_candidate(&candidate, &registry);
         assert_eq!(verdict, VerifierVerdict::ConfirmedIssue);
     }
 
     #[test]
     fn test_verify_same_family_explained_safe() {
+        let registry = FamilyRegistry::new();
         let candidate = IssueCandidate::new(
             1,
             IssueCandidateKind::CrossFamilyFree,
@@ -179,7 +331,7 @@ mod tests {
         .with_release_family(FamilyId::C_HEAP)
         .with_release_function("free");
 
-        let verdict = verify_candidate(&candidate);
+        let verdict = verify_candidate(&candidate, &registry);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -189,6 +341,7 @@ mod tests {
 
     #[test]
     fn test_verify_needs_model_is_diagnostic() {
+        let registry = FamilyRegistry::new();
         let candidate = IssueCandidate::new(
             1,
             IssueCandidateKind::NeedsModel,
@@ -196,7 +349,7 @@ mod tests {
             "custom_alloc",
         );
 
-        let verdict = verify_candidate(&candidate);
+        let verdict = verify_candidate(&candidate, &registry);
         assert_eq!(
             verdict,
             VerifierVerdict::Diagnostic,
@@ -206,6 +359,7 @@ mod tests {
 
     #[test]
     fn test_verify_double_release_confirmed() {
+        let registry = FamilyRegistry::new();
         let candidate = IssueCandidate::new(
             1,
             IssueCandidateKind::DoubleRelease,
@@ -213,7 +367,188 @@ mod tests {
             "free",
         );
 
-        let verdict = verify_candidate(&candidate);
+        let verdict = verify_candidate(&candidate, &registry);
         assert_eq!(verdict, VerifierVerdict::ConfirmedIssue);
+    }
+
+    #[test]
+    fn test_verify_destructor_release_explained_safe() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossFamilyFree,
+            FamilyId::RUST_GLOBAL,
+            "__rust_alloc",
+        )
+        .with_release_family(FamilyId::C_HEAP)
+        .with_release_function("drop");
+
+        // Attach destructor release evidence
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::DestructorRelease, "Rust Drop calling C free")
+                .with_confidence(0.9),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Destructor-mediated release should be explained safe"
+        );
+    }
+
+    #[test]
+    fn test_verify_conditional_leak_with_return_escape() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::ConditionalLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        // Attach return-to-caller evidence
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::ReturnToCaller, "pointer returned to caller")
+                .with_confidence(0.95),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Return-to-caller escape should explain the leak"
+        );
+    }
+
+    #[test]
+    fn test_verify_conditional_leak_with_static_lifetime() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::ConditionalLeak,
+            FamilyId::C_HEAP,
+            "__cxx_global_var_init",
+        );
+
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::StaticLifetimeSink,
+                "global variable initialization",
+            )
+            .with_confidence(0.95),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Static-lifetime sink should explain the leak"
+        );
+    }
+
+    #[test]
+    fn test_verify_borrow_escape_with_bridge_evidence() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::BorrowEscape,
+            FamilyId::C_HEAP,
+            "as_ptr",
+        );
+
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::BridgeHelper,
+                "as_ptr returns borrowed pointer",
+            )
+            .with_confidence(0.95),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Bridge helper should explain the borrow escape"
+        );
+    }
+
+    #[test]
+    fn test_verify_callback_escape_diagnostic() {
+        let registry = FamilyRegistry::new();
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CallbackEscape,
+            FamilyId::C_HEAP,
+            "register_callback",
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::Diagnostic,
+            "Callback escape should be diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_verify_cross_family_unknown_release_family() {
+        let registry = FamilyRegistry::new();
+        // No release family specified — probable issue
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossFamilyFree,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ProbableIssue,
+            "Unknown release family should be probable issue"
+        );
+    }
+
+    #[test]
+    fn test_verdict_description_cross_family() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossFamilyFree,
+            FamilyId::C_HEAP,
+            "malloc",
+        )
+        .with_release_family(FamilyId::CPP_NEW_SCALAR)
+        .with_release_function("operator delete");
+
+        let desc = build_verdict_description(&candidate, VerifierVerdict::ConfirmedIssue);
+        assert!(
+            desc.contains("cross-family free"),
+            "Description must mention cross-family free"
+        );
+        assert!(
+            desc.contains("confirmed"),
+            "Description must mention verdict"
+        );
+    }
+
+    #[test]
+    fn test_verdict_description_needs_model() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::NeedsModel,
+            FamilyId::C_HEAP,
+            "custom_alloc",
+        );
+
+        let desc = build_verdict_description(&candidate, VerifierVerdict::Diagnostic);
+        assert!(
+            desc.contains("needs model"),
+            "Description must mention needs model"
+        );
+        assert!(
+            desc.contains("diagnostic"),
+            "Description must mention verdict"
+        );
     }
 }

@@ -120,6 +120,11 @@ impl SummaryStore {
     pub fn is_empty(&self) -> bool {
         self.summaries.is_empty()
     }
+
+    /// Returns an iterator over all summaries.
+    pub fn iter(&self) -> impl Iterator<Item = (&FunctionId, &ResourceSummary)> {
+        self.summaries.iter()
+    }
 }
 
 #[cfg(test)]

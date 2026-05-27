@@ -10,6 +10,7 @@
 //! - `ownership_solver` — Runs ownership state propagation.
 //! - `issue_candidate_builder` — Builds issue candidates from graph edges.
 //! - `issue_verifier` — Verifies candidates and assigns verdicts.
+//! - `risk_scoring` — Centralized risk scoring for issue candidates.
 //! - `path_sensitive_leak` — Path-sensitive leak detection (Phase 6).
 
 pub mod contract_graph_builder;
@@ -18,5 +19,6 @@ pub mod issue_verifier;
 pub mod ownership_solver;
 pub mod path_sensitive_leak;
 pub mod raw_fact_collector;
+pub mod risk_scoring;
 pub mod structural_inference_pass;
 pub mod summary_builder;

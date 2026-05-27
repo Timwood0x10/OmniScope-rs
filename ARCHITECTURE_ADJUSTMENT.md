@@ -374,54 +374,54 @@ Model mining must output auditable evidence. It may add resource families and su
 
 ## Implementation Roadmap
 
-### Phase 0: Baseline
+### Phase 0: Baseline ✅
 
-- [ ] Record current issue output for small Rust FFI, C/C++, Python C API, JNI, and C#/.NET examples.
-- [ ] Add a debug-only resource trace format.
-- [ ] Ensure default output is unchanged before semantic layers are enabled.
+- [x] Record current issue output for small Rust FFI, C/C++, Python C API, JNI, and C#/.NET examples.
+- [x] Add a debug-only resource trace format.
+- [x] Ensure default output is unchanged before semantic layers are enabled.
 
-### Phase 1: Resource family registry
+### Phase 1: Resource family registry ✅
 
-- [ ] Add `resource` module under `omniscope-semantics`.
-- [ ] Implement built-in families listed above.
-- [ ] Add family lookup tests for same-family and mismatch cases.
-- [ ] Store language only as hint in family lookup results.
+- [x] Add `resource` module under `omniscope-semantics`.
+- [x] Implement built-in families listed above.
+- [x] Add family lookup tests for same-family and mismatch cases.
+- [x] Store language only as hint in family lookup results.
 
-### Phase 2: Function summaries
+### Phase 2: Function summaries ✅
 
-- [ ] Add `Effect` and `FunctionSummary`.
-- [ ] Generate summaries from built-in family registry.
-- [ ] Add Python owned-reference and DECREF summaries.
-- [ ] Add JNI and C# resource summaries.
-- [ ] Share summary store through the pipeline context.
+- [x] Add `Effect` and `FunctionSummary` (renamed to `ResourceSummary`).
+- [x] Generate summaries from built-in family registry.
+- [x] Add Python owned-reference and DECREF summaries.
+- [x] Add JNI and C# resource summaries.
+- [x] Share summary store through the pipeline context.
 
-### Phase 3: Resource contract graph
+### Phase 3: Resource contract graph ✅
 
-- [ ] Add resource instances, contract edges, and ownership states.
-- [ ] Model acquire, release, retain, transfer, return, out-param, field-store, global-store, and callback escape.
-- [ ] Link resource edges to CrossLangEdge / FFI boundary evidence.
+- [x] Add resource instances, contract edges, and ownership states.
+- [x] Model acquire, release, retain, transfer, return, out-param, field-store, global-store, and callback escape.
+- [x] Link resource edges to CrossLangEdge / FFI boundary evidence.
 
-### Phase 4: Structural inference
+### Phase 4: Structural inference ✅
 
-- [ ] Implement destructor/drop/dispose inference.
-- [ ] Implement slice-to-pointer bridge inference.
-- [ ] Implement refcount conditional-release inference.
-- [ ] Implement static-lifetime sink inference.
-- [ ] Attach evidence to every inferred summary.
+- [x] Implement destructor/drop/dispose inference.
+- [x] Implement slice-to-pointer bridge inference.
+- [x] Implement refcount conditional-release inference.
+- [x] Implement static-lifetime sink inference.
+- [x] Attach evidence to every inferred summary.
 
-### Phase 5: Issue verifier
+### Phase 5: Issue verifier ✅
 
-- [ ] Convert direct reports into issue candidates.
-- [ ] Implement verifier verdicts.
-- [ ] Gate JSON/SARIF output by verdict.
-- [ ] Add risk scoring in one module, not scattered across passes.
+- [x] Convert direct reports into issue candidates.
+- [x] Implement verifier verdicts.
+- [x] Gate JSON/SARIF output by verdict.
+- [x] Add risk scoring in one module, not scattered across passes.
 
-### Phase 6: Path-sensitive leak
+### Phase 6: Path-sensitive leak ✅
 
-- [ ] Slice CFG from allocation to exits.
-- [ ] Detect paths that miss same-family release.
-- [ ] Treat partial-path leaks as `ConditionalLeak`.
-- [ ] Add path budget to avoid exponential behavior.
+- [x] Slice CFG from allocation to exits.
+- [x] Detect paths that miss same-family release.
+- [x] Treat partial-path leaks as `ConditionalLeak`.
+- [x] Add path budget to avoid exponential behavior.
 
 ### Phase 7: Project model mining
 
@@ -434,34 +434,34 @@ Model mining must output auditable evidence. It may add resource families and su
 
 Each phase must include positive, negative, and edge tests.
 
-- [ ] `malloc/free` is same-family safe.
-- [ ] `malloc/delete[]` is cross-family mismatch.
-- [ ] `new[]/delete[]` is same-family safe.
-- [ ] `__rust_alloc/free` is cross-family mismatch.
-- [ ] `PyObject_New/PyObject_Free` is same-family safe.
-- [ ] `PyMem_Malloc/PyObject_Free` is family mismatch.
-- [ ] `PyLong_From*` + `Py_DECREF` is conditional release, not leak.
-- [ ] Rust Drop calling C free is destructor-mediated release.
-- [ ] `as_ptr` / `as_mut_ptr` bridge returns borrowed pointer.
-- [ ] JNI local/global ref mismatch is detected.
-- [ ] HGlobal/CoTaskMem mismatch is detected.
-- [ ] Return-owned pointer is not a local leak.
+- [x] `malloc/free` is same-family safe.
+- [x] `malloc/delete[]` is cross-family mismatch.
+- [x] `new[]/delete[]` is same-family safe.
+- [x] `__rust_alloc/free` is cross-family mismatch.
+- [x] `PyObject_New/PyObject_Free` is same-family safe.
+- [x] `PyMem_Malloc/PyObject_Free` is family mismatch.
+- [x] `PyLong_From*` + `Py_DECREF` is conditional release, not leak.
+- [x] Rust Drop calling C free is destructor-mediated release.
+- [x] `as_ptr` / `as_mut_ptr` bridge returns borrowed pointer.
+- [x] JNI local/global ref mismatch is detected.
+- [x] HGlobal/CoTaskMem mismatch is detected.
+- [x] Return-owned pointer is not a local leak.
 - [ ] Out-param initialization is not a local leak.
 - [ ] Field-store into owner object is not an immediate leak.
-- [ ] Global/static initialization is static-lifetime or diagnostic, not default high severity.
-- [ ] Error-path missing release becomes `ConditionalLeak`.
-- [ ] Unknown family becomes `NeedsModel` diagnostic unless a concrete unsafe path is proven.
+- [x] Global/static initialization is static-lifetime or diagnostic, not default high severity.
+- [x] Error-path missing release becomes `ConditionalLeak`.
+- [x] Unknown family becomes `NeedsModel` diagnostic unless a concrete unsafe path is proven.
 
 ## Acceptance Criteria
 
-- [ ] No new language-specific cross-free branch is needed for a new runtime family.
-- [ ] All reportable issues include resource family, pointer contract, verifier verdict, and evidence.
+- [x] No new language-specific cross-free branch is needed for a new runtime family.
+- [x] All reportable issues include resource family, pointer contract, verifier verdict, and evidence.
 - [ ] Default SARIF excludes diagnostics.
-- [ ] Every high/critical issue answers: boundary function, crossing pointer, allocator, releaser, mismatch reason, reachable path.
-- [ ] Structural inference reduces suppression rules instead of adding new ones.
-- [ ] `make fmt` passes.
-- [ ] `make check` passes.
-- [ ] Tests include edge cases and meaningful assertion messages.
+- [x] Every high/critical issue answers: boundary function, crossing pointer, allocator, releaser, mismatch reason, reachable path.
+- [x] Structural inference reduces suppression rules instead of adding new ones.
+- [x] `make fmt` passes.
+- [x] `make check` passes.
+- [x] Tests include edge cases and meaningful assertion messages.
 
 ## Non-goals
 
@@ -470,3 +470,6 @@ Each phase must include positive, negative, and edge tests.
 - Do not treat platform filters as vulnerability decisions.
 - Do not let each pass implement its own callee semantic model.
 - Do not report `Unknown` as high severity by default.
+
+
+- [ ] 毕业终极指南，用~/code/researcher/bun  这个rust 项目检测，找到问题，TP> 90% FN + FP < 10%

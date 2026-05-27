@@ -97,6 +97,9 @@ fn try_release_pattern(symbol: &str, _registry: &FamilyRegistry) -> Option<Infer
 pub fn infer_language_hint(symbol: &str) -> LanguageHint {
     if symbol.starts_with("_Z") {
         LanguageHint::Cpp
+    } else if symbol.starts_with("__cxx") || symbol.starts_with("_GLOBAL__") {
+        // C++ global constructors / guards: __cxx_global_var_init, _GLOBAL__I_*
+        LanguageHint::Cpp
     } else if symbol.starts_with("__rust_") {
         LanguageHint::Rust
     } else if symbol.starts_with("Py") || symbol.starts_with("Py_") {

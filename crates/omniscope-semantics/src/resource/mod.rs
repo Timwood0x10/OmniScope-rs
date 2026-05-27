@@ -18,3 +18,6 @@ pub mod ownership_state;
 pub mod structural_inference;
 pub mod summary;
 pub mod summary_inference;
+
+#[cfg(test)]
+mod test_matrix;

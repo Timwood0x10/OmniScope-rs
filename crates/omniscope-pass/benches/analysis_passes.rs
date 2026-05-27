@@ -1,7 +1,7 @@
 //! Benchmarks for OmniScope analysis passes.
 //!
 //! Measures performance of core analysis infrastructure:
-//! - SemanticRegistry lookup (hot path for FFI boundary analysis)
+//! - FamilyRegistry lookup (hot path for FFI boundary analysis)
 //! - NoiseReduction suppression check
 //! - SurfaceClassifier classification
 //! - PrecisionMetrics computation
@@ -11,16 +11,15 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use omniscope_pass::*;
-use omniscope_registry::SemanticRegistry;
-use omniscope_semantics::SurfaceClassifier;
+use omniscope_semantics::{FamilyRegistry, SurfaceClassifier};
 use omniscope_types::config::Language;
 
 // ========================================================================
-// SemanticRegistry benchmarks
+// FamilyRegistry benchmarks
 // ========================================================================
 
-fn bench_registry_lookup(c: &mut Criterion) {
-    let registry = SemanticRegistry::new();
+fn bench_family_registry_lookup(c: &mut Criterion) {
+    let registry = FamilyRegistry::new();
     let functions = [
         "malloc",
         "free",
@@ -28,16 +27,16 @@ fn bench_registry_lookup(c: &mut Criterion) {
         "Py_DECREF",
         "PyObject_New",
         "PyLong_FromLong",
-        "into_raw",
-        "from_raw",
-        "GetByteArrayElements",
-        "open",
-        "close",
-        "system",
-        "PyArg_ParseTuple",
+        "__rust_alloc",
+        "__rust_dealloc",
+        "_Znwm",
+        "_ZdlPv",
+        "NewLocalRef",
+        "DeleteLocalRef",
+        "CoTaskMemAlloc",
     ];
 
-    let mut group = c.benchmark_group("registry_lookup");
+    let mut group = c.benchmark_group("family_registry_lookup");
     for func in &functions {
         group.bench_with_input(BenchmarkId::new("lookup", func), func, |b, func| {
             b.iter(|| black_box(registry.lookup(black_box(func))));
@@ -46,21 +45,21 @@ fn bench_registry_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_registry_is_high_risk(c: &mut Criterion) {
-    let registry = SemanticRegistry::new();
-    let mut group = c.benchmark_group("registry_high_risk");
-    group.bench_function("is_high_risk_hot_path", |b| {
+fn bench_family_registry_compatibility(c: &mut Criterion) {
+    let registry = FamilyRegistry::new();
+    let mut group = c.benchmark_group("family_registry_compat");
+    group.bench_function("same_family_check", |b| {
         b.iter(|| {
-            for name in [
-                "malloc",
-                "strcpy",
-                "Py_DECREF",
-                "system",
-                "strlen",
-                "my_func",
-                "PyObject_New",
+            for (alloc, release) in [
+                ("malloc", "free"),
+                ("PyObject_New", "PyObject_Free"),
+                ("__rust_alloc", "__rust_dealloc"),
             ] {
-                black_box(registry.is_high_risk(black_box(name)));
+                let a = registry.lookup(black_box(alloc));
+                let r = registry.lookup(black_box(release));
+                if let (Some(a), Some(r)) = (a, r) {
+                    black_box(registry.is_compatible_release(a.family_id, r.family_id));
+                }
             }
         });
     });
@@ -188,8 +187,8 @@ fn bench_pass_context_issue_collection(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_registry_lookup,
-    bench_registry_is_high_risk,
+    bench_family_registry_lookup,
+    bench_family_registry_compatibility,
     bench_noise_reduction,
     bench_surface_classifier,
     bench_precision_metrics,

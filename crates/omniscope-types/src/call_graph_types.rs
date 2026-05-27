@@ -110,6 +110,9 @@ pub const DANGEROUS_FUNCTIONS: &[&str] = &[
 ];
 
 /// Taint source functions — where untrusted data enters the program.
+///
+/// NOTE: Currently only used for documentation/test purposes.
+/// Actual taint analysis will be implemented in future phases.
 pub const SOURCE_FUNCTIONS: &[&str] = &[
     "read",
     "recv",
@@ -121,7 +124,6 @@ pub const SOURCE_FUNCTIONS: &[&str] = &[
     "scanf",
     "fscanf",
     "sscanf",
-    // Python C API sources — functions that return borrowed/new refs or parse external data
     "PyArg_ParseTuple",
     "PyArg_ParseTupleAndKeywords",
     "PyObject_GetAttr",
@@ -131,6 +133,9 @@ pub const SOURCE_FUNCTIONS: &[&str] = &[
 ];
 
 /// Taint sink functions — where tainted data reaching them is a vulnerability.
+///
+/// NOTE: Currently only used for documentation/test purposes.
+/// Actual taint analysis will be implemented in future phases.
 pub const SINK_PATTERNS: &[&str] = &[
     "system",
     "exec",
@@ -141,7 +146,6 @@ pub const SINK_PATTERNS: &[&str] = &[
     "memcpy",
     "write",
     "printf",
-    // Python C API sinks — DECREF on wrong ref, alloc/dealloc mismatch
     "Py_DECREF",
     "PyObject_Del",
     "PyObject_GC_Del",
@@ -158,11 +162,15 @@ pub fn is_dangerous(func_name: &str) -> bool {
 }
 
 /// Check if a function name is a taint source (exact match).
+///
+/// NOTE: Not yet used by analysis passes. Retained for future taint analysis.
 pub fn is_source(func_name: &str) -> bool {
     SOURCE_FUNCTIONS.contains(&func_name)
 }
 
 /// Check if a function name matches a taint sink pattern (substring match).
+///
+/// NOTE: Not yet used by analysis passes. Retained for future taint analysis.
 pub fn is_sink(func_name: &str) -> bool {
     SINK_PATTERNS.iter().any(|p| func_name.contains(p))
 }
