@@ -463,6 +463,41 @@ Each phase must include positive, negative, and edge tests.
 - [x] `make check` passes.
 - [x] Tests include edge cases and meaningful assertion messages.
 
+## Output Requirements
+
+### Terminal colored output
+
+All CLI output must use colored formatting:
+
+- **ConfirmedIssue** → red (`\x1b[31m`)
+- **ProbableIssue** → yellow (`\x1b[33m`)
+- **Diagnostic** → blue (`\x1b[34m`)
+- **ExplainedSafe** → green (`\x1b[32m`)
+- **Resource family** → cyan (`\x1b[36m`)
+
+Each issue line must display the language transition arrow:
+
+```text
+[ERROR] cross-family free: malloc (C ──✕──> C++) released by operator delete
+[WARN]  conditional leak: __rust_alloc (Rust) in foo — no RustGlobal release
+[NOTE]  needs model: custom_alloc (Unknown) — unknown family
+```
+
+The arrow format is: `alloc_language ──✕──> release_language` for mismatches,
+`alloc_language ──✓──> release_language` for same-family safe.
+
+When `--no-color` is passed or stdout is not a TTY, fall back to plain text.
+
+### SARIF output
+
+- Default SARIF excludes `Diagnostic` and `ExplainedSafe` verdicts.
+- Each result must include: `resourceFamily`, `pointerContract`, `verifierVerdict`, `evidence[]`.
+
+## Graduation Criteria
+
+- [ ] 用 `~/code/researcher/bun` 这个 Rust 项目做真实检测，找到问题，TP > 90%，FN + FP < 10%
+- [x] 终端输出彩色 + 语言→语言箭头标注
+
 ## Non-goals
 
 - Do not build a general-purpose source-level static analyzer.
@@ -470,6 +505,3 @@ Each phase must include positive, negative, and edge tests.
 - Do not treat platform filters as vulnerability decisions.
 - Do not let each pass implement its own callee semantic model.
 - Do not report `Unknown` as high severity by default.
-
-
-- [ ] 毕业终极指南，用~/code/researcher/bun  这个rust 项目检测，找到问题，TP> 90% FN + FP < 10%

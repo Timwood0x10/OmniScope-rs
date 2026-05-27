@@ -76,19 +76,23 @@ impl LanguageDetector {
     /// Builds language patterns
     fn build_patterns() -> Vec<LanguagePattern> {
         vec![
-            // Rust patterns
-            LanguagePattern::new(Language::Rust, "_ZN").prefix(), // Rust mangling
+            // Rust patterns — Rust v0 mangling (_R prefix, used by modern Rust)
+            LanguagePattern::new(Language::Rust, "_R").prefix(),
+            // Rust Itanium mangling (older Rust, less common now)
             LanguagePattern::new(Language::Rust, "_ZN4core").prefix(),
             LanguagePattern::new(Language::Rust, "_ZN5alloc").prefix(),
-            LanguagePattern::new(Language::Rust, "std::").contains(),
-            // C++ patterns
-            LanguagePattern::new(Language::Cpp, "_Z").prefix(), // C++ mangling
+            LanguagePattern::new(Language::Rust, "_ZN3std").prefix(),
+            LanguagePattern::new(Language::Rust, "_ZN7cstring").prefix(),
+            LanguagePattern::new(Language::Rust, "_ZN12alloc").prefix(),
+            // C++ patterns (more general _ZN after Rust-specific patterns)
+            LanguagePattern::new(Language::Cpp, "_ZN").prefix(), // C++ Itanium mangling
+            LanguagePattern::new(Language::Cpp, "_ZS").prefix(), // C++ mangling (local)
+            LanguagePattern::new(Language::Cpp, "_Z").prefix(),  // C++ mangling (short)
             LanguagePattern::new(Language::Cpp, "std::").contains(),
             LanguagePattern::new(Language::Cpp, "::").contains(),
             // Go patterns
             LanguagePattern::new(Language::Go, "main.").prefix(),
             LanguagePattern::new(Language::Go, "runtime.").prefix(),
-            LanguagePattern::new(Language::Go, ".").contains(),
             // Zig patterns
             LanguagePattern::new(Language::Zig, "zig.").prefix(),
             // Python patterns

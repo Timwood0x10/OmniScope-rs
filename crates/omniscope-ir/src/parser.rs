@@ -197,31 +197,44 @@ impl IRModule {
     fn convert_bc_to_ll(path: &Path) -> std::io::Result<String> {
         use std::process::Command;
 
-        let output = Command::new("llvm-dis")
-            .arg(path)
-            .arg("-o")
-            .arg("-") // Output to stdout
-            .output();
+        // Try multiple llvm-dis versions (newest first for best bitcode compat)
+        let llvm_dis_candidates = [
+            "/opt/homebrew/opt/llvm@22/bin/llvm-dis",
+            "/opt/homebrew/opt/llvm@21/bin/llvm-dis",
+            "/opt/homebrew/opt/llvm@20/bin/llvm-dis",
+            "/opt/homebrew/opt/llvm@19/bin/llvm-dis",
+            "/opt/homebrew/opt/llvm@18/bin/llvm-dis",
+            "/opt/homebrew/opt/llvm@17/bin/llvm-dis",
+            "llvm-dis", // fallback to PATH
+        ];
 
-        match output {
-            Ok(output) if output.status.success() => {
-                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-            }
-            _ => {
-                // Fallback: try to read .ll file if it exists
-                let ll_path = path.with_extension("ll");
-                if ll_path.exists() {
-                    std::fs::read_to_string(&ll_path)
-                } else {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!(
-                            "Cannot convert {:?} to text IR. llvm-dis not found or failed.",
-                            path
-                        ),
-                    ))
+        for llvm_dis in &llvm_dis_candidates {
+            let output = Command::new(llvm_dis)
+                .arg(path)
+                .arg("-o")
+                .arg("-") // Output to stdout
+                .output();
+
+            match output {
+                Ok(output) if output.status.success() && !output.stdout.is_empty() => {
+                    return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
                 }
+                _ => continue,
             }
+        }
+
+        // Fallback: try to read .ll file if it exists
+        let ll_path = path.with_extension("ll");
+        if ll_path.exists() {
+            std::fs::read_to_string(&ll_path)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "Cannot convert {:?} to text IR. No compatible llvm-dis found.",
+                    path
+                ),
+            ))
         }
     }
 

@@ -65,7 +65,7 @@ struct AnalyzeCommand {
     debug: bool,
 
     /// Run in parallel mode
-    #[arg(long, default_value = "true")]
+    #[arg(long, default_value = "false")]
     parallel: bool,
 }
 
@@ -164,6 +164,7 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();
     pipeline.set_parallel(cmd.parallel);
+    pipeline.set_ir_module(module);
     tracing::debug!("Pipeline configured with {} passes", pipeline.pass_count());
 
     // Run the full analysis pipeline

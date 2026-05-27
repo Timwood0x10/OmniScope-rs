@@ -4,6 +4,7 @@
 
 use crate::result::PipelineResult;
 use omniscope_core::Result;
+use omniscope_ir::IRModule;
 use omniscope_pass::{
     ContractGraphBuilderPass, FFIBoundaryPass, IssueCandidateBuilderPass, IssueVerifierPass,
     OwnershipSolverPass, PassManager, PathSensitiveLeakPass, RawFactCollectorPass,
@@ -18,6 +19,8 @@ pub struct Pipeline {
     pass_manager: PassManager,
     /// Configuration
     config: AnalysisConfig,
+    /// The IR module to analyze
+    ir_module: Option<IRModule>,
 }
 
 impl Pipeline {
@@ -26,6 +29,7 @@ impl Pipeline {
         Self {
             pass_manager: PassManager::new(),
             config: AnalysisConfig::default(),
+            ir_module: None,
         }
     }
 
@@ -34,12 +38,18 @@ impl Pipeline {
         Self {
             pass_manager: PassManager::new(),
             config,
+            ir_module: None,
         }
     }
 
     /// Returns the configuration
     pub fn config(&self) -> &AnalysisConfig {
         &self.config
+    }
+
+    /// Sets the IR module to analyze
+    pub fn set_ir_module(&mut self, module: IRModule) {
+        self.ir_module = Some(module);
     }
 
     /// Registers default passes
@@ -62,8 +72,8 @@ impl Pipeline {
     pub fn run(&mut self) -> Result<PipelineResult> {
         let start = Instant::now();
 
-        // Run all passes with shared context
-        let (pass_results, issues) = self.pass_manager.run_all_with_issues()?;
+        // Run all passes with shared context, injecting IR module if available
+        let (pass_results, issues) = self.pass_manager.run_all_with_ir(self.ir_module.take())?;
 
         // Aggregate results
         let duration = start.elapsed();

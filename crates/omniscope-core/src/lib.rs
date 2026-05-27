@@ -32,6 +32,7 @@ pub mod issue_candidate;
 pub mod memory_pool;
 pub mod profiler;
 pub mod risk_score;
+pub mod terminal_report;
 
 // Re-exports for convenience
 pub use diagnostics::{Diagnostic, DiagnosticAggregator, DiagnosticId, Severity, SourceLocation};
@@ -43,7 +44,9 @@ pub use issue::{
 pub use issue_candidate::{CandidateId, IssueCandidate};
 pub use memory_pool::MemoryPool;
 pub use profiler::{MemorySample, Profiler, ScopedTimer, Span, SpanId, SpanStats};
-pub use risk_score::{compute_risk_score, RiskContext, RiskScore};
+pub use terminal_report::{
+    format_language_arrow, format_verdict_badge, language_label, TerminalReporter,
+};
 
 #[cfg(test)]
 mod tests {

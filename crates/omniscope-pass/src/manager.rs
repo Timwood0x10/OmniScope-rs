@@ -22,7 +22,7 @@ impl PassManager {
         Self {
             passes: Vec::new(),
             execution_order: Vec::new(),
-            parallel: true,
+            parallel: false, // Sequential by default — passes share context data
         }
     }
 
@@ -119,6 +119,25 @@ impl PassManager {
     pub fn run_all_with_issues(&mut self) -> Result<(Vec<PassResult>, Vec<omniscope_core::Issue>)> {
         self.compute_order()?;
         let mut ctx = PassContext::new();
+        let results = self.run_with_context(&mut ctx)?;
+        let issues = ctx.issues().to_vec();
+        Ok((results, issues))
+    }
+
+    /// Runs all passes with an optional IR module injected into the context.
+    ///
+    /// The IR module is stored in the pass context so that passes like
+    /// RawFactCollector can extract allocation/deallocation/FFI facts
+    /// from the actual IR data.
+    pub fn run_all_with_ir(
+        &mut self,
+        ir_module: Option<omniscope_ir::IRModule>,
+    ) -> Result<(Vec<PassResult>, Vec<omniscope_core::Issue>)> {
+        self.compute_order()?;
+        let mut ctx = PassContext::new();
+        if let Some(module) = ir_module {
+            ctx.store("ir_module", module);
+        }
         let results = self.run_with_context(&mut ctx)?;
         let issues = ctx.issues().to_vec();
         Ok((results, issues))

@@ -12,6 +12,7 @@ categories = ["development-tools", "development-tools::debugging"]
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }
 omniscope-types = { path = "../omniscope-types" }
+omniscope-ir = { path = "../omniscope-ir" }
 omniscope-pass = { path = "../omniscope-pass" }
 
 serde = { workspace = true }

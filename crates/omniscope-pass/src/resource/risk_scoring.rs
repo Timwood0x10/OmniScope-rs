@@ -213,8 +213,7 @@ mod tests {
         )
         .with_verdict(VerifierVerdict::ProbableIssue);
         with_low_evidence.add_evidence(
-            Evidence::new(EvidenceKind::SymbolPattern, "name pattern match")
-                .with_confidence(0.3),
+            Evidence::new(EvidenceKind::SymbolPattern, "name pattern match").with_confidence(0.3),
         );
 
         let score_high = compute_risk_score(&with_high_evidence);

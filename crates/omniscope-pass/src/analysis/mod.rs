@@ -10,7 +10,6 @@ use omniscope_core::{
 };
 use omniscope_semantics::{FamilyRegistry, SymbolEffect};
 use omniscope_types::call_graph_types::CrossLangEdge;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -48,142 +47,224 @@ impl Pass for FFIBoundaryPass {
     }
 
     fn dependencies(&self) -> Vec<&'static str> {
-        vec!["CallGraph", "SurfaceClassifier"]
+        vec!["RawFactCollector"]
     }
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
         let registry = FamilyRegistry::new();
 
-        // Retrieve cross-lang edges from CallGraphPass
+        // Try to get cross-lang edges from CallGraphPass (if registered)
         let cross_lang_edges: Vec<CrossLangEdge> = ctx.get("cross_lang_edges").unwrap_or_default();
 
-        // Retrieve function surfaces from SurfaceClassifierPass
-        let surfaces: HashMap<String, omniscope_semantics::FunctionSurface> =
-            ctx.get("function_surfaces").unwrap_or_default();
+        // If no CallGraph edges, infer FFI boundaries from IRModule directly
+        let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
 
         let mut issues: Vec<Issue> = Vec::new();
+        let mut boundary_count: usize = 0;
 
+        // Process CallGraph-derived edges
         for edge in &cross_lang_edges {
             if !edge.is_ffi_boundary {
                 continue;
             }
+            boundary_count += 1;
+            self.emit_ffi_issue(ctx, &registry, edge.caller_name.clone(), edge.callee_name.clone(), edge.caller_lang, edge.callee_lang, &mut issues);
+        }
 
-            // Skip if the caller/callee surface says "don't analyze"
-            let caller_surface = surfaces.get(&edge.caller_name);
-            let callee_surface = surfaces.get(&edge.callee_name);
+        // If no CallGraph edges, scan IRModule for FFI boundaries
+        if cross_lang_edges.is_empty() {
+            if let Some(ref module) = ir_module {
+                // Use language detector to identify function languages
+                let detector = omniscope_semantics::LanguageDetector::new();
 
-            if let Some(surface) = caller_surface {
-                if !surface.should_analyze() {
-                    debug!(
-                        "FFIBoundary: skipping caller {} (surface={:?})",
-                        edge.caller_name, surface
-                    );
-                    continue;
-                }
-            }
-            if let Some(surface) = callee_surface {
-                if !surface.should_analyze() {
-                    debug!(
-                        "FFIBoundary: skipping callee {} (surface={:?})",
-                        edge.callee_name, surface
-                    );
-                    continue;
-                }
-            }
+                // Track seen boundaries to avoid duplicates
+                let mut seen_boundaries: std::collections::HashSet<(String, String)> =
+                    std::collections::HashSet::new();
 
-            // Check callee against FamilyRegistry for resource family info
-            let family_entry = registry.lookup(&edge.callee_name);
+                for call in &module.calls {
+                    let callee_name = call.callee.trim_start_matches('@');
+                    let caller_name = call.caller.trim_start_matches('@');
 
-            let (kind, severity, confidence, description) = match family_entry {
-                Some(entry) => {
-                    // Map SymbolEffect to IssueKind
-                    let (kind, conf) = match entry.effect {
-                        SymbolEffect::Acquire => {
-                            (IssueKind::OwnershipViolation, Confidence::Medium)
+                    // Skip LLVM intrinsics — they are not FFI boundaries
+                    if callee_name.starts_with("llvm.") {
+                        continue;
+                    }
+
+                    // Determine callee language
+                    let callee_lang = detector.detect_from_function(callee_name);
+
+                    // Determine caller language
+                    // If the caller is a defined function, default to C (common case for .c files)
+                    // unless the detector identifies it as something else
+                    let caller_lang = if module.functions.contains_key(call.caller.as_str())
+                        || module.functions.contains_key(&call.caller)
+                    {
+                        let detected = detector.detect_from_function(caller_name);
+                        // If unknown, assume C (most .ll files from C code)
+                        if detected == omniscope_types::config::Language::Unknown {
+                            omniscope_types::config::Language::C
+                        } else {
+                            detected
                         }
-                        SymbolEffect::Release => {
-                            (IssueKind::OwnershipViolation, Confidence::Medium)
-                        }
-                        SymbolEffect::ConditionalRelease => {
-                            (IssueKind::CrossLanguageFree, Confidence::Medium)
-                        }
-                        SymbolEffect::Retain => (IssueKind::CrossLanguageFree, Confidence::Low),
+                    } else {
+                        detector.detect_from_function(caller_name)
                     };
-                    let family_name = registry
-                        .family(entry.family_id)
-                        .map(|f| f.name.as_str())
-                        .unwrap_or("unknown");
-                    (
-                        kind,
-                        Severity::Warning,
-                        conf,
-                        format!(
-                            "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, effect={:?}]",
-                            edge.caller_name,
-                            edge.caller_lang,
-                            edge.callee_name,
-                            edge.callee_lang,
-                            family_name,
-                            entry.effect
-                        ),
-                    )
+
+                    // Check if this is a cross-language call
+                    let is_cross_lang = caller_lang != callee_lang
+                        && callee_lang != omniscope_types::config::Language::Unknown
+                        && caller_lang != omniscope_types::config::Language::Unknown;
+
+                    // Check for C++ mangled name called from C — definite FFI boundary
+                    let is_cpp_ffi = callee_name.starts_with("_Z")
+                        && caller_lang == omniscope_types::config::Language::C;
+
+                    // Check for Rust/Go/Zig/Java calling external C functions
+                    // (callee language is Unknown but it's an external call = likely C)
+                    let is_ffi_to_c = caller_lang != omniscope_types::config::Language::Unknown
+                        && caller_lang != omniscope_types::config::Language::C
+                        && callee_lang == omniscope_types::config::Language::Unknown
+                        && call.is_external;
+
+                    debug!(
+                        "FFI check: {} ({:?}) -> {} ({:?}) ext={} cross={} cpp_ffi={} ffi_to_c={}",
+                        caller_name, caller_lang, callee_name, callee_lang,
+                        call.is_external, is_cross_lang, is_cpp_ffi, is_ffi_to_c
+                    );
+
+                    if is_cross_lang || is_cpp_ffi || is_ffi_to_c {
+                        let boundary_key = (caller_name.to_string(), callee_name.to_string());
+                        if seen_boundaries.insert(boundary_key) {
+                            boundary_count += 1;
+                            let final_caller = caller_lang;
+                            let final_callee = if is_cpp_ffi {
+                                omniscope_types::config::Language::Cpp
+                            } else if is_ffi_to_c {
+                                omniscope_types::config::Language::C
+                            } else {
+                                callee_lang
+                            };
+                            self.emit_ffi_issue(
+                                ctx,
+                                &registry,
+                                caller_name.to_string(),
+                                callee_name.to_string(),
+                                final_caller,
+                                final_callee,
+                                &mut issues,
+                            );
+                        }
+                    }
                 }
-                None => {
-                    // Unknown callee at FFI boundary — generic FFI warning
-                    (
-                        IssueKind::FfiUnsafeCall,
-                        Severity::Note,
-                        Confidence::Low,
-                        format!(
-                            "FFI boundary: {} ({:?}) -> {} ({:?}) [unknown family]",
-                            edge.caller_name, edge.caller_lang, edge.callee_name, edge.callee_lang
-                        ),
-                    )
-                }
-            };
-
-            let boundary_kind = classify_boundary(&edge.caller_lang, &edge.callee_lang);
-
-            let issue_id = ctx.next_issue_id();
-            let issue = Issue::new(issue_id, kind, severity, description)
-                .with_confidence(confidence)
-                .with_ffi_boundary(FFIBoundary {
-                    caller_name: edge.caller_name.clone(),
-                    callee_name: edge.callee_name.clone(),
-                    caller_lang: edge.caller_lang,
-                    callee_lang: edge.callee_lang,
-                    boundary_kind,
-                });
-
-            ctx.add_fact(Fact::new(
-                issue_id,
-                FactKind::FFIBoundary,
-                omniscope_core::fact::FactLocation::new(PathBuf::from("ffi_analysis"), 0),
-            ));
-
-            debug!("FFIBoundary issue: {:?} id={}", issue.kind, issue_id);
-            ctx.emit_issue(issue.clone());
-            issues.push(issue);
+            }
         }
 
         let issues_found = issues.len();
         info!(
             "FFIBoundaryPass: {} issues found across {} FFI boundaries",
-            issues_found,
-            cross_lang_edges
-                .iter()
-                .filter(|e| e.is_ffi_boundary)
-                .count()
+            issues_found, boundary_count
         );
 
+        // Keep the IRModule in context for downstream passes
+        if let Some(module) = ir_module {
+            ctx.store("ir_module", module);
+        }
+
         let mut result = PassResult::new(self.name())
-            .with_nodes(cross_lang_edges.len())
+            .with_nodes(boundary_count)
             .with_duration(start.elapsed().as_millis() as u64);
         for issue in issues {
             result.add_issue(issue);
         }
         Ok(result)
+    }
+}
+
+impl FFIBoundaryPass {
+    /// Emits an FFI boundary issue for a cross-language call.
+    fn emit_ffi_issue(
+        &self,
+        ctx: &mut PassContext,
+        registry: &FamilyRegistry,
+        caller_name: String,
+        callee_name: String,
+        caller_lang: omniscope_types::config::Language,
+        callee_lang: omniscope_types::config::Language,
+        issues: &mut Vec<Issue>,
+    ) {
+        let family_entry = registry.lookup(&callee_name);
+
+        let (kind, severity, confidence, description) = match family_entry {
+            Some(entry) => {
+                let (kind, conf) = match entry.effect {
+                    SymbolEffect::Acquire => (IssueKind::OwnershipViolation, Confidence::Medium),
+                    SymbolEffect::Release => (IssueKind::OwnershipViolation, Confidence::Medium),
+                    SymbolEffect::ConditionalRelease => (IssueKind::CrossLanguageFree, Confidence::Medium),
+                    SymbolEffect::Retain => (IssueKind::CrossLanguageFree, Confidence::Low),
+                };
+                let family_name = registry
+                    .family(entry.family_id)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("unknown");
+                (
+                    kind,
+                    Severity::Warning,
+                    conf,
+                    format!(
+                        "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, effect={:?}]",
+                        caller_name, caller_lang, callee_name, callee_lang, family_name, entry.effect
+                    ),
+                )
+            }
+            None => (
+                IssueKind::FfiUnsafeCall,
+                Severity::Note,
+                Confidence::Low,
+                format!(
+                    "FFI boundary: {} ({:?}) -> {} ({:?}) [unknown family]",
+                    caller_name, caller_lang, callee_name, callee_lang
+                ),
+            ),
+        };
+
+        let boundary_kind = classify_boundary(&caller_lang, &callee_lang);
+
+        let issue_id = ctx.next_issue_id();
+        let issue = Issue::new(issue_id, kind, severity, description)
+            .with_confidence(confidence)
+            .with_ffi_boundary(FFIBoundary {
+                caller_name: caller_name.clone(),
+                callee_name: callee_name.clone(),
+                caller_lang,
+                callee_lang,
+                boundary_kind,
+            });
+
+        ctx.add_fact(Fact::new(
+            issue_id,
+            FactKind::FFIBoundary,
+            omniscope_core::fact::FactLocation::new(PathBuf::from("ffi_analysis"), 0),
+        ));
+
+        debug!("FFIBoundary issue: {:?} id={}", issue.kind, issue_id);
+        ctx.emit_issue(issue.clone());
+        issues.push(issue);
+    }
+}
+
+/// Convert a LanguageHint to a Language for boundary classification.
+fn _lang_hint_to_language(hint: omniscope_types::LanguageHint) -> omniscope_types::config::Language {
+    use omniscope_types::config::Language;
+    match hint {
+        omniscope_types::LanguageHint::C => Language::C,
+        omniscope_types::LanguageHint::Cpp => Language::Cpp,
+        omniscope_types::LanguageHint::Rust => Language::Rust,
+        omniscope_types::LanguageHint::Python => Language::Python,
+        omniscope_types::LanguageHint::Java => Language::Java,
+        omniscope_types::LanguageHint::Go => Language::Go,
+        omniscope_types::LanguageHint::Zig => Language::Zig,
+        _ => Language::Unknown,
     }
 }
 
@@ -206,6 +287,7 @@ fn classify_boundary(
         (Language::Go, Language::C | Language::Cpp) => BoundaryKind::GoToC,
         (Language::Python, Language::C | Language::Cpp) => BoundaryKind::PythonToC,
         (Language::Java, Language::C | Language::Cpp) => BoundaryKind::JavaToC,
+        (Language::C, Language::Cpp) => BoundaryKind::CToRust, // C→C++ bridge
         _ => BoundaryKind::Unknown,
     }
 }
@@ -219,7 +301,7 @@ mod tests {
         let pass = FFIBoundaryPass::new();
         assert_eq!(pass.name(), "FFIBoundary");
         assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["CallGraph", "SurfaceClassifier"]);
+        assert_eq!(pass.dependencies(), vec!["RawFactCollector"]);
     }
 
     #[test]
