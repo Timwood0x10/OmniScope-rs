@@ -143,8 +143,11 @@ impl Pass for ContractGraphBuilderPass {
                 let is_cross_family = alloc_family.is_some() && alloc_family != Some(family);
 
                 let effect = if is_cross_family {
-                    Effect::Release {
-                        family,     // the actual release family
+                    // Cross-family release: release family differs from alloc family.
+                    // Model as ConditionalRelease to signal potential CrossFamilyFree risk —
+                    // the release may not follow the allocation family's protocol.
+                    Effect::ConditionalRelease {
+                        family, // the actual release family
                         arg: fact.arg_index.unwrap_or(0),
                     }
                 } else {
@@ -180,7 +183,7 @@ impl Pass for ContractGraphBuilderPass {
             }
 
             // For each function, find acquire→release patterns
-            for (_caller, callees) in &calls_by_caller {
+            for callees in calls_by_caller.values() {
                 let mut func_acquires: Vec<(u64, FamilyId, &str)> = Vec::new();
                 let mut func_releases: Vec<(FamilyId, &str)> = Vec::new();
 

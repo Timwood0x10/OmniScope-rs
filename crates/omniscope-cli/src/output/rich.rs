@@ -17,9 +17,7 @@ pub struct RichFormatter {
 impl RichFormatter {
     /// Creates a new rich formatter with auto-detected color support.
     pub fn new() -> Self {
-        Self {
-            use_color: true,
-        }
+        Self { use_color: true }
     }
 
     /// Creates a formatter with explicit color control.
@@ -247,7 +245,12 @@ impl RichFormatter {
             for (i, entry) in issue.trace.iter().enumerate() {
                 if i == last {
                     let cross = self.maybe_color("✗", "red");
-                    out.push_str(&format!("\n    └── [{}] {}  {}", i + 1, entry.description, cross));
+                    out.push_str(&format!(
+                        "\n    └── [{}] {}  {}",
+                        i + 1,
+                        entry.description,
+                        cross
+                    ));
                 } else {
                     out.push_str(&format!("\n    ├── [{}] {}", i + 1, entry.description));
                 }
@@ -273,9 +276,15 @@ impl RichFormatter {
         let duration_ms = result.duration_ms();
 
         let status = if high_count > 0 {
-            self.maybe_color(&format!("⚡ {} high-severity issue(s) found.", high_count), "red")
+            self.maybe_color(
+                &format!("⚡ {} high-severity issue(s) found.", high_count),
+                "red",
+            )
         } else if result.total_issues > 0 {
-            self.maybe_color(&format!("ℹ {} low-severity issue(s) found.", result.total_issues), "yellow")
+            self.maybe_color(
+                &format!("ℹ {} low-severity issue(s) found.", result.total_issues),
+                "yellow",
+            )
         } else {
             self.maybe_color("✓ No issues detected.", "green")
         };
@@ -295,12 +304,7 @@ impl OutputFormatter for RichFormatter {
 
         // Header
         let title = self.maybe_color("OmniScope — Cross-Language Memory Safety Analysis", "bold");
-        out.push_str(&format!(
-            "{}\n  {}\n{}\n",
-            self.rule(),
-            title,
-            self.rule()
-        ));
+        out.push_str(&format!("{}\n  {}\n{}\n", self.rule(), title, self.rule()));
 
         // Coverage
         out.push_str(&format!("\n{}\n", self.format_coverage(result)));

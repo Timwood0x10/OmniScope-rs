@@ -84,7 +84,7 @@ impl RawFactCollectorPass {
         }
 
         // Scan declarations for external alloc/dealloc symbols
-        for (name, _decl) in &module.declarations {
+        for name in module.declarations.keys() {
             let sym_name = name.trim_start_matches('@');
             if let Some(entry) = registry.lookup(sym_name) {
                 // Avoid duplicates from calls
@@ -113,7 +113,7 @@ impl RawFactCollectorPass {
         }
 
         // Also scan function definitions for calls within them
-        for (func_name, _func) in &module.functions {
+        for func_name in module.functions.keys() {
             // Check if the function itself is a known symbol
             if let Some(entry) = registry.lookup(func_name) {
                 if facts.iter().any(|f| f.function_name == func_name.as_str()) {
@@ -164,10 +164,16 @@ impl Pass for RawFactCollectorPass {
 
         // First: try to extract facts from the IRModule in the context
         let ir_module: Option<IRModule> = ctx.get("ir_module");
-        tracing::debug!("RawFactCollector: ir_module present = {}", ir_module.is_some());
+        tracing::debug!(
+            "RawFactCollector: ir_module present = {}",
+            ir_module.is_some()
+        );
         if let Some(ref module) = ir_module {
             raw_facts = Self::collect_from_ir(module);
-            tracing::debug!("RawFactCollector: collected {} facts from IR", raw_facts.len());
+            tracing::debug!(
+                "RawFactCollector: collected {} facts from IR",
+                raw_facts.len()
+            );
         }
 
         // Also scan existing facts for alloc/dealloc sites (legacy path)

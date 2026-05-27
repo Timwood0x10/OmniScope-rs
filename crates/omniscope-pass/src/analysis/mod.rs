@@ -8,7 +8,9 @@ use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::{
     BoundaryKind, Confidence, FFIBoundary, Fact, FactKind, Issue, IssueKind, Result, Severity,
 };
-use omniscope_semantics::{FamilyRegistry, SymbolEffect};
+use omniscope_semantics::{
+    assess_ffi_safety, FFIVerdict, FamilyRegistry, SymbolEffect, SyscallSemantic,
+};
 use omniscope_types::call_graph_types::CrossLangEdge;
 use std::path::PathBuf;
 use tracing::{debug, info};
@@ -69,7 +71,15 @@ impl Pass for FFIBoundaryPass {
                 continue;
             }
             boundary_count += 1;
-            self.emit_ffi_issue(ctx, &registry, edge.caller_name.clone(), edge.callee_name.clone(), edge.caller_lang, edge.callee_lang, &mut issues);
+            self.emit_ffi_issue(
+                ctx,
+                &registry,
+                edge.caller_name.clone(),
+                edge.callee_name.clone(),
+                edge.caller_lang,
+                edge.callee_lang,
+                &mut issues,
+            );
         }
 
         // If no CallGraph edges, scan IRModule for FFI boundaries
@@ -129,8 +139,14 @@ impl Pass for FFIBoundaryPass {
 
                     debug!(
                         "FFI check: {} ({:?}) -> {} ({:?}) ext={} cross={} cpp_ffi={} ffi_to_c={}",
-                        caller_name, caller_lang, callee_name, callee_lang,
-                        call.is_external, is_cross_lang, is_cpp_ffi, is_ffi_to_c
+                        caller_name,
+                        caller_lang,
+                        callee_name,
+                        callee_lang,
+                        call.is_external,
+                        is_cross_lang,
+                        is_cpp_ffi,
+                        is_ffi_to_c
                     );
 
                     if is_cross_lang || is_cpp_ffi || is_ffi_to_c {
@@ -183,6 +199,14 @@ impl Pass for FFIBoundaryPass {
 
 impl FFIBoundaryPass {
     /// Emits an FFI boundary issue for a cross-language call.
+    ///
+    /// Uses semantic tree analysis to determine severity:
+    /// - MemoryManagement syscall → HIGH severity (potential CrossFamilyFree)
+    /// - DataQuery/EnvironmentConfig → SUPPRESSED (not a memory safety issue)
+    /// - InternalDispatch → SUPPRESSED (by-design FFI boundary)
+    /// - ComputeAccelerated → SUPPRESSED (pure computation)
+    /// - StringManipulation → SUPPRESSED (caller owns buffer)
+    /// - Unknown → LOW severity (conservative, but not noise)
     fn emit_ffi_issue(
         &self,
         ctx: &mut PassContext,
@@ -193,39 +217,129 @@ impl FFIBoundaryPass {
         callee_lang: omniscope_types::config::Language,
         issues: &mut Vec<Issue>,
     ) {
+        // ── IR instruction-level semantic derivation ──
+        let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
+
+        let assessment = if let Some(ref module) = ir_module {
+            assess_ffi_safety(&callee_name, &caller_name, module)
+        } else {
+            // No IR module available — fall back to name-based heuristic
+            let syscall_semantic = SyscallSemantic::classify(&callee_name);
+            let verdict = if syscall_semantic.involves_memory_ownership() {
+                FFIVerdict::ConcernOwnershipTransfer
+            } else if syscall_semantic == SyscallSemantic::Unknown {
+                FFIVerdict::Unknown
+            } else {
+                FFIVerdict::SafeNoOwnership
+            };
+            omniscope_semantics::FFISafetyAssessment {
+                callee: callee_name.clone(),
+                caller: caller_name.clone(),
+                caller_behavior: None,
+                callee_behavior: None,
+                verdict,
+                evidence: Vec::new(),
+            }
+        };
+
+        // Store IR module back for downstream passes
+        if let Some(module) = ir_module {
+            ctx.store("ir_module", module);
+        }
+
+        debug!(
+            "FFI semantic: {} -> {} verdict={:?} score={:.2}",
+            caller_name,
+            callee_name,
+            assessment.verdict,
+            assessment.safety_score()
+        );
+
+        // Skip FFI boundaries that are semantically safe (derived from IR patterns)
+        if assessment.should_suppress_issue() {
+            debug!(
+                "FFI skip: {} -> {} ({:?}): {}",
+                caller_name,
+                callee_name,
+                assessment.verdict,
+                assessment
+                    .evidence
+                    .first()
+                    .map(|e| e.reasoning.as_str())
+                    .unwrap_or("safe pattern")
+            );
+            return;
+        }
+
+        // ── Severity determination based on semantic assessment ──
         let family_entry = registry.lookup(&callee_name);
 
-        let (kind, severity, confidence, description) = match family_entry {
-            Some(entry) => {
-                let (kind, conf) = match entry.effect {
-                    SymbolEffect::Acquire => (IssueKind::OwnershipViolation, Confidence::Medium),
-                    SymbolEffect::Release => (IssueKind::OwnershipViolation, Confidence::Medium),
-                    SymbolEffect::ConditionalRelease => (IssueKind::CrossLanguageFree, Confidence::Medium),
-                    SymbolEffect::Retain => (IssueKind::CrossLanguageFree, Confidence::Low),
-                };
-                let family_name = registry
-                    .family(entry.family_id)
-                    .map(|f| f.name.as_str())
-                    .unwrap_or("unknown");
-                (
-                    kind,
-                    Severity::Warning,
-                    conf,
+        let (kind, severity, confidence, description) = match assessment.verdict {
+            FFIVerdict::ConcernOwnershipTransfer => match family_entry {
+                Some(entry) => {
+                    let (kind, conf) = match entry.effect {
+                        SymbolEffect::Acquire => {
+                            (IssueKind::OwnershipViolation, Confidence::Medium)
+                        }
+                        SymbolEffect::Release => (IssueKind::CrossLanguageFree, Confidence::High),
+                        SymbolEffect::ConditionalRelease => {
+                            (IssueKind::CrossLanguageFree, Confidence::Medium)
+                        }
+                        SymbolEffect::Retain => (IssueKind::CrossLanguageFree, Confidence::Low),
+                    };
+                    let family_name = registry
+                        .family(entry.family_id)
+                        .map(|f| f.name.as_str())
+                        .unwrap_or("unknown");
+                    (
+                            kind,
+                            Severity::Warning,
+                            conf,
+                            format!(
+                                "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, effect={:?}, verdict=OwnershipTransfer]",
+                                caller_name, caller_lang, callee_name, callee_lang,
+                                family_name, entry.effect
+                            ),
+                        )
+                }
+                None => (
+                    IssueKind::FfiUnsafeCall,
+                    Severity::Note,
+                    Confidence::Medium,
                     format!(
-                        "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, effect={:?}]",
-                        caller_name, caller_lang, callee_name, callee_lang, family_name, entry.effect
+                        "FFI boundary: {} ({:?}) -> {} ({:?}) [ownership transfer, unknown family]",
+                        caller_name, caller_lang, callee_name, callee_lang
                     ),
-                )
-            }
-            None => (
-                IssueKind::FfiUnsafeCall,
-                Severity::Note,
-                Confidence::Low,
-                format!(
-                    "FFI boundary: {} ({:?}) -> {} ({:?}) [unknown family]",
-                    caller_name, caller_lang, callee_name, callee_lang
                 ),
-            ),
+            },
+            FFIVerdict::Unknown => match family_entry {
+                Some(entry) => {
+                    let family_name = registry
+                        .family(entry.family_id)
+                        .map(|f| f.name.as_str())
+                        .unwrap_or("unknown");
+                    (
+                        IssueKind::FfiUnsafeCall,
+                        Severity::Note,
+                        Confidence::Low,
+                        format!(
+                            "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, verdict=Unknown]",
+                            caller_name, caller_lang, callee_name, callee_lang, family_name
+                        ),
+                    )
+                }
+                None => (
+                    IssueKind::FfiUnsafeCall,
+                    Severity::Note,
+                    Confidence::Low,
+                    format!(
+                        "FFI boundary: {} ({:?}) -> {} ({:?}) [verdict=Unknown]",
+                        caller_name, caller_lang, callee_name, callee_lang
+                    ),
+                ),
+            },
+            // Safe patterns are already filtered out above
+            _ => unreachable!(),
         };
 
         let boundary_kind = classify_boundary(&caller_lang, &callee_lang);
@@ -247,14 +361,22 @@ impl FFIBoundaryPass {
             omniscope_core::fact::FactLocation::new(PathBuf::from("ffi_analysis"), 0),
         ));
 
-        debug!("FFIBoundary issue: {:?} id={}", issue.kind, issue_id);
+        debug!(
+            "FFIBoundary issue: {:?} id={} verdict={:?} score={:.2}",
+            issue.kind,
+            issue_id,
+            assessment.verdict,
+            assessment.safety_score()
+        );
         ctx.emit_issue(issue.clone());
         issues.push(issue);
     }
 }
 
 /// Convert a LanguageHint to a Language for boundary classification.
-fn _lang_hint_to_language(hint: omniscope_types::LanguageHint) -> omniscope_types::config::Language {
+fn _lang_hint_to_language(
+    hint: omniscope_types::LanguageHint,
+) -> omniscope_types::config::Language {
     use omniscope_types::config::Language;
     match hint {
         omniscope_types::LanguageHint::C => Language::C,

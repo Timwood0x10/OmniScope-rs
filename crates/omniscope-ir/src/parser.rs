@@ -61,6 +61,128 @@ pub struct CallingConvention {
     pub platform_specific: bool,
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// IR Instruction-level types for semantic derivation
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Kind of an LLVM IR instruction.
+///
+/// This enum covers the instructions relevant to semantic derivation:
+/// - Memory operations (alloca, load, store, atomicrmw)
+/// - Pointer arithmetic (getelementptr)
+/// - Control flow (icmp, branch, ret, phi)
+/// - Computation (binary ops, call)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IRInstructionKind {
+    /// `alloca` — stack allocation (pointer originates from stack)
+    Alloca,
+    /// `load` / `load atomic` — read from memory
+    Load,
+    /// `store` / `store atomic` — write to memory
+    Store,
+    /// `atomicrmw add/sub/xchg` — atomic read-modify-write (refcount pattern)
+    AtomicRmw,
+    /// `getelementptr` — pointer offset into struct/array
+    GetElementPtr,
+    /// `icmp eq/ne/...` — integer comparison (condition for branch)
+    Icmp,
+    /// `br i1` / `br label` — conditional or unconditional branch
+    Branch,
+    /// `call @func(...)` — function call
+    Call,
+    /// `ret` — return from function
+    Ret,
+    /// `phi` — SSA phi node
+    Phi,
+    /// `add`/`sub`/`mul`/`and`/`or`/`xor`/`shl`/`lshr`/`ashr` — binary arithmetic
+    BinaryOp,
+    /// `bitcast`/`inttoptr`/`ptrtoint`/`zext`/`sext`/`trunc` — type conversion
+    Conversion,
+    /// `select` — conditional select
+    Select,
+    /// Any instruction not in the above categories
+    Other,
+}
+
+/// A single LLVM IR instruction with extracted metadata.
+///
+/// This is a simplified representation that captures enough information
+/// for semantic derivation without attempting a full IR parser.
+///
+/// Example IR line and its parsed result:
+/// ```llvm
+/// %22 = atomicrmw sub ptr %string_impl, i32 2 monotonic
+/// ```
+/// → `IRInstruction { kind: AtomicRmw, dest: Some("%22"), atomic_op: Some("sub"), ... }`
+#[derive(Debug, Clone)]
+pub struct IRInstruction {
+    /// Instruction kind
+    pub kind: IRInstructionKind,
+    /// Destination register (e.g., `%3`, `%result`), if any
+    pub dest: Option<String>,
+    /// Operands as raw strings (registers, constants, types)
+    pub operands: Vec<String>,
+    /// For Call: the callee function name (without @)
+    pub callee: Option<String>,
+    /// For AtomicRmw: the operation (add, sub, xchg, etc.)
+    pub atomic_op: Option<String>,
+    /// For Icmp: the comparison predicate (eq, ne, slt, etc.)
+    pub icmp_pred: Option<String>,
+    /// Raw text of the instruction line (for evidence/debugging)
+    pub raw_text: String,
+}
+
+/// Function body with extracted instruction stream.
+///
+/// Represents the body of a defined function (not a declaration) with
+/// all instructions parsed into structured form. This is the foundation
+/// for semantic derivation: we analyze instruction sequences to derive
+/// behavior patterns without relying on function names.
+#[derive(Debug, Clone)]
+pub struct FunctionBody {
+    /// Function name
+    pub name: String,
+    /// Instructions in program order (across all basic blocks)
+    pub instructions: Vec<IRInstruction>,
+}
+
+impl FunctionBody {
+    /// Returns the number of instructions of a given kind.
+    pub fn count_kind(&self, kind: IRInstructionKind) -> usize {
+        self.instructions.iter().filter(|i| i.kind == kind).count()
+    }
+
+    /// Returns all instructions of a given kind.
+    pub fn instructions_of_kind(&self, kind: IRInstructionKind) -> Vec<&IRInstruction> {
+        self.instructions
+            .iter()
+            .filter(|i| i.kind == kind)
+            .collect()
+    }
+
+    /// Returns the return instruction, if any.
+    pub fn ret_instruction(&self) -> Option<&IRInstruction> {
+        self.instructions
+            .iter()
+            .find(|i| i.kind == IRInstructionKind::Ret)
+    }
+
+    /// Returns all call instructions in this function body.
+    pub fn call_instructions(&self) -> Vec<&IRInstruction> {
+        self.instructions_of_kind(IRInstructionKind::Call)
+    }
+
+    /// Returns all atomicrmw instructions with a specific operation.
+    pub fn atomic_rmw_with_op(&self, op: &str) -> Vec<&IRInstruction> {
+        self.instructions
+            .iter()
+            .filter(|i| {
+                i.kind == IRInstructionKind::AtomicRmw && i.atomic_op.as_deref() == Some(op)
+            })
+            .collect()
+    }
+}
+
 /// Parsed LLVM IR module
 #[derive(Debug, Clone)]
 pub struct IRModule {
@@ -70,6 +192,8 @@ pub struct IRModule {
     pub declarations: HashMap<String, Function>,
     /// Call instructions
     pub calls: Vec<CallInstruction>,
+    /// Function bodies with instruction-level detail (for defined functions)
+    pub function_bodies: HashMap<String, FunctionBody>,
     /// Data layout information
     pub data_layout: DataLayout,
     /// Calling conventions used in this module
@@ -83,6 +207,7 @@ impl IRModule {
             functions: HashMap::new(),
             declarations: HashMap::new(),
             calls: Vec::new(),
+            function_bodies: HashMap::new(),
             data_layout: DataLayout {
                 target_triple: None,
                 data_layout: None,
@@ -97,6 +222,7 @@ impl IRModule {
     pub fn parse_from_text(content: &str) -> Self {
         let mut module = Self::new();
         let mut current_function = String::new();
+        let mut current_instructions: Vec<IRInstruction> = Vec::new();
 
         for line in content.lines() {
             let line = line.trim();
@@ -118,7 +244,18 @@ impl IRModule {
             // Parse function definitions: define ... @name(...) {
             else if line.starts_with("define") {
                 if let Some(func) = parse_definition(line) {
+                    // Save previous function's body if any
+                    if !current_function.is_empty() && !current_instructions.is_empty() {
+                        let body = FunctionBody {
+                            name: current_function.clone(),
+                            instructions: std::mem::take(&mut current_instructions),
+                        };
+                        module
+                            .function_bodies
+                            .insert(current_function.clone(), body);
+                    }
                     current_function = func.name.clone();
+                    current_instructions.clear();
                     module.functions.insert(func.name.clone(), func);
 
                     // Extract calling convention
@@ -132,9 +269,37 @@ impl IRModule {
             }
             // End of function
             else if line == "}" {
+                if !current_function.is_empty() && !current_instructions.is_empty() {
+                    let body = FunctionBody {
+                        name: current_function.clone(),
+                        instructions: std::mem::take(&mut current_instructions),
+                    };
+                    module
+                        .function_bodies
+                        .insert(current_function.clone(), body);
+                }
                 current_function.clear();
+                current_instructions.clear();
             }
-            // Parse call instructions: call ... @name(...)
+            // Parse instructions inside function body
+            else if !current_function.is_empty() && !line.is_empty() {
+                // Skip labels, comments, and metadata-only lines
+                if line.starts_with(';') || line.starts_with('!') || line.ends_with(':') {
+                    continue;
+                }
+
+                // Parse instruction-level detail
+                if let Some(inst) = parse_instruction(line) {
+                    // Also extract call instruction for backward compatibility
+                    if inst.kind == IRInstructionKind::Call {
+                        if let Some(call) = parse_call(line, &current_function) {
+                            module.calls.push(call);
+                        }
+                    }
+                    current_instructions.push(inst);
+                }
+            }
+            // Top-level call (shouldn't happen in valid IR, but handle gracefully)
             else if line.contains("call") {
                 if let Some(call) = parse_call(line, &current_function) {
                     module.calls.push(call);
@@ -400,6 +565,371 @@ fn extract_calling_convention(line: &str) -> Option<String> {
     None
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Instruction-level parsing for semantic derivation
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Parse a single IR instruction line into structured form.
+///
+/// This is a best-effort parser — it extracts the instruction kind,
+/// destination register, and key operands. It does NOT attempt to be
+/// a full LLVM IR parser; instead, it captures enough information for
+/// semantic derivation (pattern detection on instruction sequences).
+///
+/// Examples of parsed lines:
+/// ```llvm
+/// %3 = alloca i64                          → Alloca
+/// %5 = load i64, ptr %3                    → Load
+/// store i64 %5, ptr %1                     → Store
+/// %22 = atomicrmw sub ptr %s, i32 2 mon    → AtomicRmw
+/// %4 = getelementptr i8, ptr %1, i64 0     → GetElementPtr
+/// %23 = icmp eq i32 %22, 2                 → Icmp
+/// br i1 %23, label %bb5, label %exit       → Branch
+/// tail call void @destroy(ptr %1)          → Call
+/// ret i32 %result                          → Ret
+/// %x = add i32 %a, %b                      → BinaryOp
+/// ```
+fn parse_instruction(line: &str) -> Option<IRInstruction> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with(';') || line.starts_with('!') {
+        return None;
+    }
+
+    // Extract destination register: `%name = ...`
+    let (dest, rest) = if let Some(eq_pos) = line.find(" = ") {
+        let dest_part = line[..eq_pos].trim();
+        let rest_part = line[eq_pos + 3..].trim();
+        // Validate it looks like a register (%something)
+        if dest_part.starts_with('%') {
+            (Some(dest_part.to_string()), rest_part)
+        } else {
+            (None, line)
+        }
+    } else {
+        (None, line)
+    };
+
+    // Classify instruction kind from the start of the (rest) line
+    let raw_text = line.to_string();
+
+    // Strip leading keywords: "tail", "musttail", "notail", "nuw", "nsw", etc.
+    let stripped = strip_calling_prefixes(rest);
+
+    // alloca
+    if stripped.starts_with("alloca") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Alloca,
+            dest,
+            operands: extract_operands(stripped, "alloca"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // load (including "load atomic")
+    if stripped.starts_with("load") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Load,
+            dest,
+            operands: extract_operands(stripped, "load"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // store (including "store atomic")
+    if stripped.starts_with("store") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Store,
+            dest,
+            operands: extract_operands(stripped, "store"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // atomicrmw
+    if stripped.starts_with("atomicrmw") {
+        let atomic_op = extract_atomicrmw_op(stripped);
+        return Some(IRInstruction {
+            kind: IRInstructionKind::AtomicRmw,
+            dest,
+            operands: extract_operands(stripped, "atomicrmw"),
+            callee: None,
+            atomic_op,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // cmpxchg
+    if stripped.starts_with("cmpxchg") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::AtomicRmw, // Treat as atomic op
+            dest,
+            operands: extract_operands(stripped, "cmpxchg"),
+            callee: None,
+            atomic_op: Some("cmpxchg".to_string()),
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // getelementptr
+    if stripped.starts_with("getelementptr") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::GetElementPtr,
+            dest,
+            operands: extract_operands(stripped, "getelementptr"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // icmp
+    if stripped.starts_with("icmp") {
+        let icmp_pred = extract_icmp_pred(stripped);
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Icmp,
+            dest,
+            operands: extract_operands(stripped, "icmp"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred,
+            raw_text,
+        });
+    }
+
+    // fcmp
+    if stripped.starts_with("fcmp") {
+        let icmp_pred = extract_icmp_pred(stripped);
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Icmp, // Treat similarly
+            dest,
+            operands: extract_operands(stripped, "fcmp"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred,
+            raw_text,
+        });
+    }
+
+    // br
+    if stripped.starts_with("br") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Branch,
+            dest,
+            operands: extract_operands(stripped, "br"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // call (including "tail call", "musttail call")
+    if stripped.starts_with("call") {
+        let callee = extract_call_callee(stripped);
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Call,
+            dest,
+            operands: Vec::new(), // operands not needed for call; callee is sufficient
+            callee,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // ret
+    if stripped.starts_with("ret") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Ret,
+            dest,
+            operands: extract_operands(stripped, "ret"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // phi
+    if stripped.starts_with("phi") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Phi,
+            dest,
+            operands: extract_operands(stripped, "phi"),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // select
+    if stripped.starts_with("select") {
+        return Some(IRInstruction {
+            kind: IRInstructionKind::Select,
+            dest,
+            operands: Vec::new(),
+            callee: None,
+            atomic_op: None,
+            icmp_pred: None,
+            raw_text,
+        });
+    }
+
+    // Binary operations
+    let binary_ops = [
+        "add", "sub", "mul", "udiv", "sdiv", "urem", "srem", "and", "or", "xor", "shl", "lshr",
+        "ashr",
+    ];
+    for op in &binary_ops {
+        if stripped.starts_with(op) {
+            // Make sure it's not a longer word (e.g., "sub" vs "subroutine")
+            let after_op = stripped.get(op.len()..).unwrap_or("");
+            if after_op.is_empty()
+                || !after_op
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphanumeric())
+                    .unwrap_or(false)
+            {
+                return Some(IRInstruction {
+                    kind: IRInstructionKind::BinaryOp,
+                    dest,
+                    operands: extract_operands(stripped, op),
+                    callee: None,
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text,
+                });
+            }
+        }
+    }
+
+    // Conversion operations
+    let conv_ops = [
+        "bitcast", "inttoptr", "ptrtoint", "zext", "sext", "trunc", "fptoui", "fptosi", "uitofp",
+        "sitofp", "fpext", "fptrunc",
+    ];
+    for op in &conv_ops {
+        if stripped.starts_with(op) {
+            return Some(IRInstruction {
+                kind: IRInstructionKind::Conversion,
+                dest,
+                operands: Vec::new(),
+                callee: None,
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text,
+            });
+        }
+    }
+
+    // switch / invoke / resume / landingpad / indirectbr / extractvalue / insertvalue
+    // → classify as Other
+    Some(IRInstruction {
+        kind: IRInstructionKind::Other,
+        dest,
+        operands: Vec::new(),
+        callee: None,
+        atomic_op: None,
+        icmp_pred: None,
+        raw_text,
+    })
+}
+
+/// Strip call-prefix keywords: "tail", "musttail", "notail"
+fn strip_calling_prefixes(s: &str) -> &str {
+    let mut rest = s;
+    loop {
+        if rest.starts_with("tail ") {
+            rest = &rest[5..];
+        } else if rest.starts_with("musttail ") {
+            rest = &rest[9..];
+        } else if rest.starts_with("notail ") {
+            rest = &rest[7..];
+        } else {
+            break;
+        }
+    }
+    rest
+}
+
+/// Extract the atomicrmw operation name (add, sub, xchg, etc.)
+fn extract_atomicrmw_op(s: &str) -> Option<String> {
+    // Format: "atomicrmw <op> <type> <ptr>, <value> <ordering>"
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 2 && parts[0] == "atomicrmw" {
+        Some(parts[1].to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract the icmp predicate (eq, ne, slt, sgt, ult, ugt, sle, sge, ule, uge)
+fn extract_icmp_pred(s: &str) -> Option<String> {
+    // Format: "icmp <pred> <type> <op1>, <op2>"
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 2 {
+        Some(parts[1].to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract the callee function name from a call instruction.
+fn extract_call_callee(s: &str) -> Option<String> {
+    // Format: "call [fastcc] <ret_type> @<name>(<args>)"
+    // Find @name( pattern
+    if let Some(at_pos) = s.find('@') {
+        let after_at = &s[at_pos + 1..];
+        if let Some(paren_pos) = after_at.find('(') {
+            let name = after_at[..paren_pos].to_string();
+            // Filter out LLVM intrinsics
+            if !name.starts_with("llvm.") {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+/// Extract operands from an instruction line after stripping the opcode.
+///
+/// This is a simplified operand extractor that captures register names
+/// (%-prefixed) and constants from the instruction text. It does NOT
+/// attempt full type-aware parsing.
+fn extract_operands(s: &str, opcode: &str) -> Vec<String> {
+    let after_opcode = if let Some(pos) = s.find(opcode) {
+        &s[pos + opcode.len()..]
+    } else {
+        s
+    };
+
+    let mut operands = Vec::new();
+
+    // Extract %-prefixed registers
+    for part in after_opcode.split(|c: char| c.is_whitespace() || c == ',') {
+        let part = part.trim();
+        if part.starts_with('%') {
+            operands.push(part.to_string());
+        }
+    }
+
+    operands
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,7 +954,7 @@ mod tests {
     fn test_parse_module() {
         let ir = r#"
             declare i32 @external_func(i32)
-            
+
             define i32 @my_func(i32 %x) {
                 %result = call i32 @external_func(i32 %x)
                 ret i32 %result
@@ -435,5 +965,147 @@ mod tests {
         assert_eq!(module.declarations.len(), 1);
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.calls.len(), 1);
+    }
+
+    // ── Instruction-level parsing tests ──
+
+    #[test]
+    fn test_parse_alloca() {
+        let inst = parse_instruction("  %3 = alloca i64").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Alloca);
+        assert_eq!(inst.dest.as_deref(), Some("%3"));
+    }
+
+    #[test]
+    fn test_parse_load() {
+        let inst = parse_instruction("  %5 = load i64, ptr %3").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Load);
+        assert_eq!(inst.dest.as_deref(), Some("%5"));
+    }
+
+    #[test]
+    fn test_parse_store() {
+        let inst = parse_instruction("  store i64 %5, ptr %1").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Store);
+        assert!(inst.dest.is_none());
+    }
+
+    #[test]
+    fn test_parse_atomicrmw_sub() {
+        let inst =
+            parse_instruction("  %22 = atomicrmw sub ptr %string_impl, i32 2 monotonic").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::AtomicRmw);
+        assert_eq!(inst.dest.as_deref(), Some("%22"));
+        assert_eq!(inst.atomic_op.as_deref(), Some("sub"));
+    }
+
+    #[test]
+    fn test_parse_atomicrmw_add() {
+        let inst = parse_instruction("  %10 = atomicrmw add ptr %refcount, i32 1 acquire").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::AtomicRmw);
+        assert_eq!(inst.atomic_op.as_deref(), Some("add"));
+    }
+
+    #[test]
+    fn test_parse_getelementptr() {
+        let inst = parse_instruction("  %4 = getelementptr i8, ptr %1, i64 0").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::GetElementPtr);
+        assert_eq!(inst.dest.as_deref(), Some("%4"));
+    }
+
+    #[test]
+    fn test_parse_icmp_eq() {
+        let inst = parse_instruction("  %23 = icmp eq i32 %22, 2").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Icmp);
+        assert_eq!(inst.icmp_pred.as_deref(), Some("eq"));
+    }
+
+    #[test]
+    fn test_parse_branch_conditional() {
+        let inst = parse_instruction("  br i1 %23, label %bb5, label %exit").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Branch);
+    }
+
+    #[test]
+    fn test_parse_call() {
+        let inst =
+            parse_instruction("  tail call void @Bun__WTFStringImpl__destroy(ptr %1)").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Call);
+        assert_eq!(inst.callee.as_deref(), Some("Bun__WTFStringImpl__destroy"));
+    }
+
+    #[test]
+    fn test_parse_ret() {
+        let inst = parse_instruction("  ret i32 %result").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Ret);
+    }
+
+    #[test]
+    fn test_parse_binary_op_add() {
+        let inst = parse_instruction("  %x = add i32 %a, %b").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::BinaryOp);
+    }
+
+    #[test]
+    fn test_parse_bitcast() {
+        let inst = parse_instruction("  %2 = bitcast ptr %1 to ptr").unwrap();
+        assert_eq!(inst.kind, IRInstructionKind::Conversion);
+    }
+
+    #[test]
+    fn test_function_body_extraction() {
+        let ir = r#"
+            declare i32 @strlen(ptr)
+
+            define i64 @my_strlen(ptr %s) {
+            entry:
+                %len = call i32 @strlen(ptr %s)
+                %result = zext i32 %len to i64
+                ret i64 %result
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        assert!(module.function_bodies.contains_key("my_strlen"));
+
+        let body = &module.function_bodies["my_strlen"];
+        assert_eq!(body.instructions.len(), 3); // call + zext + ret
+        assert_eq!(body.count_kind(IRInstructionKind::Call), 1);
+        assert_eq!(body.count_kind(IRInstructionKind::Ret), 1);
+    }
+
+    #[test]
+    fn test_conditional_release_pattern() {
+        let ir = r#"
+            define void @release_string(ptr %s) {
+            entry:
+                %22 = atomicrmw sub ptr %s, i32 2 monotonic
+                %23 = icmp eq i32 %22, 2
+                br i1 %23, label %destroy, label %exit
+            destroy:
+                tail call void @Bun__WTFStringImpl__destroy(ptr %s)
+                ret void
+            exit:
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let body = &module.function_bodies["release_string"];
+
+        // Verify the ConditionalRelease pattern is detectable
+        assert_eq!(body.count_kind(IRInstructionKind::AtomicRmw), 1);
+        assert_eq!(body.count_kind(IRInstructionKind::Icmp), 1);
+        assert_eq!(body.count_kind(IRInstructionKind::Branch), 1);
+        assert_eq!(body.count_kind(IRInstructionKind::Call), 1);
+
+        // Verify atomicrmw sub
+        let atomic_insts = body.atomic_rmw_with_op("sub");
+        assert_eq!(atomic_insts.len(), 1);
+
+        // Verify icmp eq
+        let icmp_insts = body.instructions_of_kind(IRInstructionKind::Icmp);
+        assert_eq!(icmp_insts.len(), 1);
+        assert_eq!(icmp_insts[0].icmp_pred.as_deref(), Some("eq"));
     }
 }

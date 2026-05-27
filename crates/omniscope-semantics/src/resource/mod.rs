@@ -14,7 +14,10 @@
 pub mod escape;
 pub mod family_inference;
 pub mod family_registry;
+pub mod ir_pattern;
 pub mod ownership_state;
+pub mod semantic_engine;
+pub mod semantic_tree;
 pub mod structural_inference;
 pub mod summary;
 pub mod summary_inference;

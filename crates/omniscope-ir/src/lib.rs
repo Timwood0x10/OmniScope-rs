@@ -33,7 +33,9 @@ pub mod view;
 pub use debug_info::{DebugInfoExtractor, TypeInfo};
 pub use loader::IRLoader;
 pub use location::{LocationManager, SourceLocation};
-pub use parser::{CallInstruction, Function, IRModule};
+pub use parser::{
+    CallInstruction, Function, FunctionBody, IRInstruction, IRInstructionKind, IRModule,
+};
 pub use platform::{Architecture, Platform, PlatformFilterRegistry, PlatformInfo};
 pub use safe_wrappers::{SafeBasicBlock, SafeFunction, SafeInstruction};
 pub use view::{BasicBlockView, FunctionView, InstructionView, ModuleView};

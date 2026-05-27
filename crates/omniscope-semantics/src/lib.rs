@@ -21,8 +21,16 @@ pub use resource::family_inference::infer_family;
 pub use resource::family_registry::{
     FamilyEntry, FamilyRegistry, ResourceFamilyOwned, SymbolEffect,
 };
+pub use resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior, ReturnSource};
 pub use resource::ownership_state::{
     OwnershipError, OwnershipEvent, OwnershipState, ResourceInstance,
+};
+pub use resource::semantic_engine::{
+    assess_ffi_safety, FFISafetyAssessment, FFIVerdict, IREvidence,
+};
+pub use resource::semantic_tree::{
+    build_semantic_tree, infer_provenance_from_context, PointerProvenance, SemanticNode,
+    SemanticTree, SyscallSemantic, TypeSemantic,
 };
 pub use resource::structural_inference::{
     infer_bridge_summary, infer_destructor_summary, infer_refcount_release_summary,
