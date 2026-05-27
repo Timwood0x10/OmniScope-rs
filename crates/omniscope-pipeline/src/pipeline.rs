@@ -5,9 +5,9 @@
 use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_pass::{
-    BufferOverflowPass, CFGPass, ContractGraphBuilderPass, DFGPass, FFIBoundaryPass,
-    IssueCandidateBuilderPass, IssueVerifierPass, MemorySafetyPass, OwnershipSolverPass,
-    PassManager, PointerOwnershipPass, RawFactCollectorPass, SummaryBuilderPass,
+    ContractGraphBuilderPass, FFIBoundaryPass, IssueCandidateBuilderPass, IssueVerifierPass,
+    OwnershipSolverPass, PassManager, PathSensitiveLeakPass, RawFactCollectorPass,
+    StructuralInferencePass, SummaryBuilderPass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -44,23 +44,18 @@ impl Pipeline {
 
     /// Registers default passes
     pub fn register_default_passes(&mut self) {
-        // Foundation passes
-        self.pass_manager.register(CFGPass::new());
-        self.pass_manager.register(DFGPass::new());
-
         // Analysis passes
         self.pass_manager.register(FFIBoundaryPass::new());
-        self.pass_manager.register(MemorySafetyPass::new());
-        self.pass_manager.register(PointerOwnershipPass::new());
-        self.pass_manager.register(BufferOverflowPass::new());
 
         // Resource contract passes (new architecture)
         self.pass_manager.register(RawFactCollectorPass::new());
         self.pass_manager.register(SummaryBuilderPass::new());
+        self.pass_manager.register(StructuralInferencePass::new());
         self.pass_manager.register(ContractGraphBuilderPass::new());
         self.pass_manager.register(OwnershipSolverPass::new());
         self.pass_manager.register(IssueCandidateBuilderPass::new());
         self.pass_manager.register(IssueVerifierPass::new());
+        self.pass_manager.register(PathSensitiveLeakPass::new());
     }
 
     /// Runs the full analysis pipeline
@@ -114,7 +109,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
 
-        assert_eq!(pipeline.pass_count(), 12);
+        assert_eq!(pipeline.pass_count(), 9);
     }
 
     #[test]

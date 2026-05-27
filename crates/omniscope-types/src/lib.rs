@@ -20,21 +20,18 @@ pub mod config;
 pub mod effect;
 pub mod escape;
 pub mod evidence;
-pub mod ownership;
 pub mod pointer_contract;
 pub mod resource_family;
-pub mod zone_types;
 
-// Re-exports — Legacy types (will be gradually replaced)
+// Re-exports
 pub use abi::{AbiType, CallingConvention};
 pub use call_graph_types::{
     is_dangerous, is_libc, is_sink, is_source, CallGraphEdge, CallGraphNode, CrossLangEdge,
     FunctionKind,
 };
 pub use config::{AnalysisConfig, Language, OutputFormat};
-pub use ownership::{Ownership, OwnershipKind};
 
-// Re-exports — Resource contract types (new architecture)
+// Re-exports — Resource contract types
 pub use effect::{ArgIndex, Effect, FunctionOrigin, LanguageHint, VerifierVerdict};
 pub use escape::EscapeKind;
 pub use evidence::{Evidence, EvidenceKind, IssueCandidateKind};
@@ -45,7 +42,6 @@ pub use resource_family::{
     FAMILY_GO_GC, FAMILY_JAVA_GLOBAL_REF, FAMILY_JAVA_LOCAL_REF, FAMILY_PYTHON_MEM,
     FAMILY_PYTHON_MEM_RAW, FAMILY_PYTHON_OBJECT, FAMILY_RUST_GLOBAL, FAMILY_ZIG_ALLOCATOR,
 };
-pub use zone_types::{classify_by_patterns, EscapeTrigger, ZoneClass, ZoneKind, ZoneStats};
 
 /// Unique identifier for nodes in analysis graphs
 pub type NodeId = u64;

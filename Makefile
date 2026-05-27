@@ -40,7 +40,7 @@ build:
 	$(CARGO) build --workspace --release
 	@echo "$(BLUE)Copying binaries to ./build directory...$(NC)"
 	@mkdir -p build
-	@cp -f target/release/omniscope build/
+	@cp -f target/release/omniscope-cli build/omniscope
 	@chmod +x build/omniscope
 	@echo "$(GREEN)✓ Binary copied to build/omniscope$(NC)"
 	@echo "$(GREEN)✓ Run with: ./build/omniscope [command]$(NC)"

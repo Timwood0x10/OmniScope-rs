@@ -2,12 +2,24 @@
 //!
 //! Builds `ResourceSummary` entries from the `FamilyRegistry` for
 //! known symbols, and from structural inference for unknown symbols.
+//!
+//! Inference priority (first match wins):
+//! 1. Family registry lookup (highest confidence)
+//! 2. Structural inference — destructor/drop/dispose
+//! 3. Structural inference — bridge/slice-to-pointer
+//! 4. Structural inference — refcount conditional release
+//! 5. Structural inference — static-lifetime sink
+//! 6. Family inference from naming patterns (lowest confidence)
 
 use omniscope_types::{
     Effect, Evidence, EvidenceKind, FamilyId, FunctionId, FunctionOrigin, SymbolId,
 };
 
 use super::family_registry::{FamilyRegistry, SymbolEffect};
+use super::structural_inference::{
+    infer_bridge_summary, infer_destructor_summary, infer_refcount_release_summary,
+    infer_static_lifetime_summary,
+};
 use super::summary::{ResourceSummary, SummaryStore};
 
 /// Builds summaries for all symbols in the family registry.
@@ -24,18 +36,64 @@ pub fn build_builtin_summaries(registry: &FamilyRegistry) -> SummaryStore {
 }
 
 /// Infers a `ResourceSummary` for a symbol by looking up the registry
-/// and, if not found, attempting pattern-based inference.
+/// and, if not found, attempting structural and pattern-based inference.
+///
+/// The inference chain applies in priority order: registry first,
+/// then structural inference (destructor, bridge, refcount, static-lifetime),
+/// then naming pattern fallback.
 pub fn infer_summary_for_symbol(
     symbol: &str,
     function: FunctionId,
     canonical_name: SymbolId,
     registry: &FamilyRegistry,
 ) -> ResourceSummary {
+    // Priority 1: Registry lookup (highest confidence)
     if let Some(entry) = registry.lookup(symbol) {
         return build_summary_from_entry(symbol, function, canonical_name, entry);
     }
 
-    // Fall back to pattern-based inference
+    // Determine language hint from symbol naming conventions.
+    let language_hint = super::family_inference::infer_language_hint(symbol);
+
+    // Priority 2: Structural inference — destructor/drop/dispose
+    let (destructor_summary, destructor_result) = infer_destructor_summary(
+        symbol,
+        function,
+        canonical_name,
+        language_hint,
+        None, // release family unknown at this stage
+    );
+    if destructor_result.is_destructor {
+        return destructor_summary;
+    }
+
+    // Priority 3: Structural inference — bridge/slice-to-pointer
+    let (bridge_summary, bridge_result) =
+        infer_bridge_summary(symbol, function, canonical_name, language_hint);
+    if bridge_result.is_bridge {
+        return bridge_summary;
+    }
+
+    // Priority 4: Structural inference — refcount conditional release
+    let (refcount_summary, refcount_result) =
+        infer_refcount_release_summary(symbol, function, canonical_name, language_hint);
+    if refcount_result.is_refcount_release {
+        return refcount_summary;
+    }
+
+    // Priority 5: Structural inference — static-lifetime sink
+    let (static_summary, static_result) = infer_static_lifetime_summary(
+        symbol,
+        function,
+        canonical_name,
+        language_hint,
+        FamilyId::C_HEAP, // default family for static init
+    );
+    if static_result.is_static_lifetime {
+        return static_summary;
+    }
+
+    // Priority 6: Family inference from naming patterns (lowest confidence)
     let inferred = super::family_inference::infer_family(symbol, registry);
     let mut summary = ResourceSummary::new(function, canonical_name, symbol);
     summary.language_hint = inferred.language_hint;

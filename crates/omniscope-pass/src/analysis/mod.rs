@@ -1,8 +1,8 @@
 //! Analysis passes for FFI and memory safety.
 //!
-//! This module provides analysis passes for detecting FFI issues and
-//! memory safety problems. The FFIBoundaryPass uses CallGraphPass and
-//! SemanticRegistry to produce actionable diagnostics.
+//! This module provides analysis passes for detecting FFI issues.
+//! The FFIBoundaryPass uses CallGraphPass and SemanticRegistry to
+//! produce actionable diagnostics.
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::{
@@ -202,145 +202,6 @@ fn classify_boundary(
     }
 }
 
-/// Memory safety analysis pass.
-///
-/// Performs local memory safety checks on FFI-relevant functions
-/// (double free, use-after-free, memory leak detection).
-pub struct MemorySafetyPass;
-
-impl MemorySafetyPass {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Pass for MemorySafetyPass {
-    fn name(&self) -> &'static str {
-        "MemorySafety"
-    }
-
-    fn kind(&self) -> PassKind {
-        PassKind::Analysis
-    }
-
-    fn dependencies(&self) -> Vec<&'static str> {
-        vec!["FFIBoundary"]
-    }
-
-    fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
-        // Analyze memory safety using facts from context
-        let nodes_analyzed = ctx.facts().len();
-        tracing::debug!(
-            "MemorySafetyPass: analyzing {} nodes (stub)",
-            nodes_analyzed
-        );
-
-        let result = PassResult::new(self.name())
-            .with_issues(0)
-            .with_nodes(nodes_analyzed)
-            .with_duration(0);
-
-        Ok(result)
-    }
-}
-
-impl Default for MemorySafetyPass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Pointer ownership analysis pass.
-///
-/// Tracks pointer ownership across FFI boundaries and detects
-/// cross-language free mismatches.
-pub struct PointerOwnershipPass;
-
-impl PointerOwnershipPass {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Pass for PointerOwnershipPass {
-    fn name(&self) -> &'static str {
-        "PointerOwnership"
-    }
-
-    fn kind(&self) -> PassKind {
-        PassKind::Analysis
-    }
-
-    fn dependencies(&self) -> Vec<&'static str> {
-        vec!["FFIBoundary"]
-    }
-
-    fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
-        let nodes_analyzed = ctx.facts().len();
-        tracing::debug!(
-            "PointerOwnershipPass: analyzing {} nodes (stub)",
-            nodes_analyzed
-        );
-
-        let result = PassResult::new(self.name())
-            .with_issues(0)
-            .with_nodes(nodes_analyzed)
-            .with_duration(0);
-
-        Ok(result)
-    }
-}
-
-impl Default for PointerOwnershipPass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Buffer overflow detection pass.
-pub struct BufferOverflowPass;
-
-impl BufferOverflowPass {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Pass for BufferOverflowPass {
-    fn name(&self) -> &'static str {
-        "BufferOverflow"
-    }
-
-    fn kind(&self) -> PassKind {
-        PassKind::Analysis
-    }
-
-    fn dependencies(&self) -> Vec<&'static str> {
-        vec!["DFG"]
-    }
-
-    fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
-        let nodes_analyzed = ctx.facts().len();
-        tracing::debug!(
-            "BufferOverflowPass: analyzing {} nodes (stub)",
-            nodes_analyzed
-        );
-
-        let result = PassResult::new(self.name())
-            .with_issues(0)
-            .with_nodes(nodes_analyzed)
-            .with_duration(0);
-
-        Ok(result)
-    }
-}
-
-impl Default for BufferOverflowPass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,24 +232,5 @@ mod tests {
             BoundaryKind::GoToC,
             "Go→C must be GoToC"
         );
-    }
-
-    #[test]
-    fn test_memory_safety_pass() {
-        let pass = MemorySafetyPass::new();
-        assert_eq!(pass.name(), "MemorySafety");
-        assert_eq!(pass.dependencies(), vec!["FFIBoundary"]);
-    }
-
-    #[test]
-    fn test_pointer_ownership_pass() {
-        let pass = PointerOwnershipPass::new();
-        assert_eq!(pass.name(), "PointerOwnership");
-    }
-
-    #[test]
-    fn test_buffer_overflow_pass() {
-        let pass = BufferOverflowPass::new();
-        assert_eq!(pass.name(), "BufferOverflow");
     }
 }

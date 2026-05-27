@@ -156,7 +156,4 @@ fn test_pipeline_orchestration() {
 
     assert!(result.pass_count() > 0, "Pipeline should execute passes");
     println!("✓ Pipeline executed {} passes", result.pass_count());
-    println!("  Pass breakdown:");
-    println!("    - Foundation passes: 2 (CFG, DFG)");
-    println!("    - Analysis passes: 4 (FFI, Memory, Ownership, Buffer)");
 }

@@ -91,7 +91,10 @@ fn try_release_pattern(symbol: &str, _registry: &FamilyRegistry) -> Option<Infer
 }
 
 /// Infer a language hint from symbol naming conventions.
-fn infer_language_hint(symbol: &str) -> LanguageHint {
+///
+/// This is used by summary inference to determine the language context
+/// before attempting structural inference patterns.
+pub fn infer_language_hint(symbol: &str) -> LanguageHint {
     if symbol.starts_with("_Z") {
         LanguageHint::Cpp
     } else if symbol.starts_with("__rust_") {

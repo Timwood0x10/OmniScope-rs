@@ -73,6 +73,20 @@ impl ResourceSummary {
     pub fn is_bridge(&self) -> bool {
         self.effects.contains(&Effect::ReturnsBorrowed)
     }
+
+    /// Returns true if this function was inferred as a destructor.
+    ///
+    /// A destructor consumes an argument and releases a resource.
+    /// This is identified by the presence of both `ConsumesArg` and
+    /// `Release` effects, or by `DestructorRelease` evidence.
+    pub fn is_destructor(&self) -> bool {
+        let has_consumes = self
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::ConsumesArg { .. }));
+        let has_release = self.releases_resource();
+        has_consumes && has_release
+    }
 }
 
 /// Store for sharing function summaries across passes.

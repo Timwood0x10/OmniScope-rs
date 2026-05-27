@@ -224,7 +224,7 @@ impl Default for PassManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CFGPass, DFGPass, FFIBoundaryPass};
+    use crate::{FFIBoundaryPass, RawFactCollectorPass, SummaryBuilderPass};
 
     #[test]
     fn test_pass_manager_creation() {
@@ -236,8 +236,8 @@ mod tests {
     fn test_pass_registration() {
         let mut manager = PassManager::new();
 
-        manager.register(CFGPass::new());
-        manager.register(DFGPass::new());
+        manager.register(RawFactCollectorPass::new());
+        manager.register(SummaryBuilderPass::new());
 
         assert_eq!(manager.pass_count(), 2);
     }
@@ -246,8 +246,8 @@ mod tests {
     fn test_execution_order() {
         let mut manager = PassManager::new();
 
-        manager.register(CFGPass::new());
-        manager.register(DFGPass::new());
+        manager.register(RawFactCollectorPass::new());
+        manager.register(SummaryBuilderPass::new());
         manager.register(FFIBoundaryPass::new());
 
         manager.compute_order().unwrap();

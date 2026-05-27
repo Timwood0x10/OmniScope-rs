@@ -5,8 +5,7 @@
 //! - NoiseReduction suppression check
 //! - SurfaceClassifier classification
 //! - PrecisionMetrics computation
-//! - CallGraphPass on synthetic IR
-//! - FFIBoundaryPass on synthetic edges
+//! - PassContext issue collection
 //!
 //! Run: `cargo bench -p omniscope-pass`
 
@@ -52,7 +51,6 @@ fn bench_registry_is_high_risk(c: &mut Criterion) {
     let mut group = c.benchmark_group("registry_high_risk");
     group.bench_function("is_high_risk_hot_path", |b| {
         b.iter(|| {
-            // Simulate checking 100 function names against registry
             for name in [
                 "malloc",
                 "strcpy",
@@ -188,49 +186,6 @@ fn bench_pass_context_issue_collection(c: &mut Criterion) {
     group.finish();
 }
 
-// ========================================================================
-// Zone classification benchmarks
-// ========================================================================
-
-fn bench_zone_classification(c: &mut Criterion) {
-    use omniscope_types::zone_types::classify_by_patterns;
-
-    let mut group = c.benchmark_group("zone_classification");
-    group.bench_function("classify_rust_100", |b| {
-        b.iter(|| {
-            for name in [
-                "core::mem::transmute",
-                "alloc::vec::Vec::push",
-                "from_raw",
-                "my_custom_fn",
-                "core::ptr::write",
-            ] {
-                black_box(classify_by_patterns(
-                    black_box(name),
-                    black_box(Language::Rust),
-                ));
-            }
-        });
-    });
-    group.bench_function("classify_python_100", |b| {
-        b.iter(|| {
-            for name in [
-                "PyObject_New",
-                "Py_DECREF",
-                "Py_INCREF",
-                "PyLong_FromLong",
-                "my_py_func",
-            ] {
-                black_box(classify_by_patterns(
-                    black_box(name),
-                    black_box(Language::Python),
-                ));
-            }
-        });
-    });
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_registry_lookup,
@@ -239,7 +194,6 @@ criterion_group!(
     bench_surface_classifier,
     bench_precision_metrics,
     bench_pass_context_issue_collection,
-    bench_zone_classification,
 );
 
 criterion_main!(benches);

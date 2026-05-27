@@ -12,19 +12,11 @@ keywords = ["static-analysis", "llvm", "ffi", "security", "analyzer"]
 categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
-omniscope-core = { path = "crates/omniscope-core" }
-omniscope-types = { path = "crates/omniscope-types" }
+chrono = { workspace = true }
+
+[dev-dependencies]
 omniscope-ir = { path = "crates/omniscope-ir" }
 omniscope-pipeline = { path = "crates/omniscope-pipeline" }
-
-clap = { workspace = true }
-anyhow = { workspace = true }
-tracing-subscriber = { workspace = true }
-colored = "3.1.1"
-chrono = { workspace = true }
-
-[build-dependencies]
-chrono = { workspace = true }
 
 [workspace]
 members = [

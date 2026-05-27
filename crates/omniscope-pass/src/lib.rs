@@ -4,24 +4,20 @@
 //! including:
 //!
 //! - Pass trait and context
-//! - Foundation passes (CFG, DFG, CallGraph)
 //! - Analysis passes (FFI boundary, surface classifier, danger surface)
 //! - Noise reduction and FP precision guard
+//! - Resource contract passes (new architecture)
 //! - Pass manager for orchestration
 
 pub mod analysis;
-pub mod foundation;
 pub mod manager;
 pub mod pass;
 pub mod resource;
 
-// Re-exports — Foundation passes
-pub use foundation::{BasicBlock, CFGEdge, CFGEdgeKind, CFGPass, DFGPass, CFG};
-
 // Re-exports — Analysis passes
 pub use analysis::{
-    BufferOverflowPass, CallGraphPass, DangerSurfacePass, FFIBoundaryPass, MemorySafetyPass,
-    NoiseReduction, PointerOwnershipPass, PrecisionMetrics, SurfaceClassifierPass,
+    CallGraphPass, DangerSurfacePass, FFIBoundaryPass, NoiseReduction, PrecisionMetrics,
+    SurfaceClassifierPass,
 };
 
 // Re-exports — Resource contract passes
@@ -29,7 +25,9 @@ pub use resource::contract_graph_builder::{ContractEdge, ContractGraph, Contract
 pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
 pub use resource::issue_verifier::IssueVerifierPass;
 pub use resource::ownership_solver::OwnershipSolverPass;
+pub use resource::path_sensitive_leak::{LeakPath, PathAnalysisResult, PathSensitiveLeakPass};
 pub use resource::raw_fact_collector::RawFactCollectorPass;
+pub use resource::structural_inference_pass::StructuralInferencePass;
 pub use resource::summary_builder::SummaryBuilderPass;
 
 // Re-exports — Infrastructure
@@ -42,15 +40,10 @@ mod tests {
 
     #[test]
     fn test_pass_module_exports() {
-        let _cfg_pass = CFGPass::new();
-        let _dfg_pass = DFGPass::new();
         let _call_graph = CallGraphPass::new();
         let _ffi_pass = FFIBoundaryPass::new();
         let _surface_pass = SurfaceClassifierPass::new();
         let _danger_pass = DangerSurfacePass::new();
-        let _mem_pass = MemorySafetyPass::new();
-        let _ownership_pass = PointerOwnershipPass::new();
-        let _buffer_pass = BufferOverflowPass::new();
         let _noise = NoiseReduction::new();
         let _manager = PassManager::new();
     }

@@ -37,6 +37,7 @@ pub enum SymbolEffect {
 /// Built-in entries cover C, C++, Rust, Python, Java/JNI, C#, Go, and Zig
 /// allocation/deallocation functions. User-inferred entries can be added
 /// from model mining (Phase 7).
+#[derive(Debug, Clone)]
 pub struct FamilyRegistry {
     /// Symbol name -> FamilyEntry lookup table.
     entries: HashMap<String, FamilyEntry>,
