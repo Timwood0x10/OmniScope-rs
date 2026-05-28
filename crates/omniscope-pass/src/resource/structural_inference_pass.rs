@@ -5,9 +5,20 @@
 //! to raw facts whose function names were not resolved by the family
 //! registry. Inferred summaries are added to the `SummaryStore` so
 //! downstream passes can consume them without re-running inference.
+//!
+//! # IR Behavior First
+//!
+//! This pass now prioritizes IR behavior-based summaries over
+//! symbol-name-based inference. If a `function_behaviors` map is
+//! available in the pass context (from `IRBehaviorSummaryPass`),
+//! we first check whether the function has a behavior-derived summary.
+//! Only when no behavior summary exists do we fall back to
+//! `infer_summary_for_symbol`.
 
 use omniscope_core::Result;
-use omniscope_semantics::{infer_summary_for_symbol, FamilyRegistry, SummaryStore};
+use omniscope_semantics::{
+    behavior_to_summary, infer_summary_for_symbol, FamilyRegistry, FunctionBehavior, SummaryStore,
+};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
@@ -16,6 +27,10 @@ use crate::resource::raw_fact_collector::RawResourceFact;
 ///
 /// Applies destructor, bridge, refcount, and static-lifetime inference
 /// to raw facts and augments the summary store with inferred entries.
+///
+/// Inference priority (enhancement):
+/// 1. IR behavior summary (from `IRBehaviorSummaryPass`) — highest confidence
+/// 2. Symbol-name inference (registry → structural → pattern) — fallback
 pub struct StructuralInferencePass;
 
 impl StructuralInferencePass {
@@ -46,6 +61,7 @@ impl Pass for StructuralInferencePass {
         let mut bridge_count: usize = 0;
         let mut refcount_count: usize = 0;
         let mut static_lifetime_count: usize = 0;
+        let mut behavior_override_count: usize = 0;
 
         // Retrieve shared data from earlier passes.
         let registry: Option<FamilyRegistry> = ctx.get("family_registry");
@@ -53,23 +69,41 @@ impl Pass for StructuralInferencePass {
 
         let registry = registry.unwrap_or_default();
 
+        // Retrieve IR behavior summaries (from IRBehaviorSummaryPass)
+        let behaviors: Option<Vec<FunctionBehavior>> = ctx.get("function_behaviors");
+        let behaviors = behaviors.unwrap_or_default();
+
+        // Build a quick lookup: function_name → FunctionBehavior
+        // so we can check if a behavior-derived summary exists before
+        // falling back to symbol-name inference.
+        let behavior_map: std::collections::HashMap<&str, &FunctionBehavior> =
+            behaviors.iter().map(|b| (b.name.as_str(), b)).collect();
+
         // Retrieve raw facts collected by the RawFactCollector.
         let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
         let raw_facts = raw_facts.unwrap_or_default();
 
-        // For each raw fact with a known function name, infer a summary
-        // using the full inference chain (registry → structural → pattern).
+        // For each raw fact, prefer IR behavior inference over symbol-name inference.
         for fact in &raw_facts {
             if fact.function_name.is_empty() {
                 continue;
             }
 
-            let summary = infer_summary_for_symbol(
-                &fact.function_name,
-                fact.function,
-                0, // canonical_name placeholder
-                &registry,
-            );
+            // 1: Check if we have an IR behavior for this function
+            let summary = if let Some(behavior) = behavior_map.get(fact.function_name.as_str()) {
+                // Use behavior-based inference — this can recognize unknown
+                // function names with recognizable IR patterns
+                behavior_override_count += 1;
+                behavior_to_summary(behavior, fact.function, 0)
+            } else {
+                // 2: Fall back to symbol-name inference
+                infer_summary_for_symbol(
+                    &fact.function_name,
+                    fact.function,
+                    0, // canonical_name placeholder
+                    &registry,
+                )
+            };
 
             // Count inference types for statistics.
             let is_new = store.get(summary.function).is_none();
@@ -98,6 +132,24 @@ impl Pass for StructuralInferencePass {
             store.insert(summary);
         }
 
+        // Also process functions that have IR behaviors but NO raw facts
+        // (i.e., functions that weren't seen as alloc/dealloc sites but
+        // have recognizable patterns like ConditionalRelease or PointerProjection).
+        for behavior in &behaviors {
+            // Skip if we already have a summary for this function
+            // (either from raw facts or from IRBehaviorSummaryPass merge)
+            let already_has_summary = store.iter().any(|(_, s)| s.name == behavior.name);
+            if already_has_summary {
+                continue;
+            }
+
+            if !behavior.patterns.is_empty() {
+                let summary = behavior_to_summary(behavior, 0, 0);
+                store.insert(summary);
+                inferred_count += 1;
+            }
+        }
+
         // Store the augmented summary store back into the context.
         ctx.store("summary_store", store);
         ctx.store("structural_inference_done", true);
@@ -111,6 +163,7 @@ impl Pass for StructuralInferencePass {
         result.add_stat("bridge_inferences", bridge_count);
         result.add_stat("refcount_inferences", refcount_count);
         result.add_stat("static_lifetime_inferences", static_lifetime_count);
+        result.add_stat("behavior_override_count", behavior_override_count);
 
         Ok(result)
     }

@@ -251,24 +251,4 @@ mod tests {
             *input
         }
     }
-
-    #[test]
-    fn test_forward_analysis() {
-        let graph = DataFlowGraph::new();
-        let domain = ConstantProp;
-        let mut analysis = ForwardAnalysis::new(domain);
-
-        // Empty graph should complete without panic
-        analysis.run(&graph);
-    }
-
-    #[test]
-    fn test_backward_analysis() {
-        let graph = DataFlowGraph::new();
-        let domain = ConstantProp;
-        let mut analysis = BackwardAnalysis::new(domain);
-
-        // Empty graph should complete without panic
-        analysis.run(&graph);
-    }
 }

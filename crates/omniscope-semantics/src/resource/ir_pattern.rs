@@ -822,4 +822,131 @@ mod tests {
 
         assert_eq!(behavior.return_source, ReturnSource::Void);
     }
+
+    // ── Golden Tests : Unknown function names with recognizable IR patterns ──
+
+    /// golden test: An unknown function with malloc+free IR pattern
+    /// should be detected as OwnershipTransfer, even though the function
+    /// name "custom_buffer_alloc" is not in any whitelist.
+    #[test]
+    fn test_golden_unknown_alloc_function() {
+        let ir = r#"
+            define ptr @custom_buffer_alloc(i64 %size) {
+            entry:
+                %buf = call ptr @malloc(i64 %size)
+                ret ptr %buf
+            }
+        "#;
+
+        let body = parse_body(ir);
+        let behavior = extract_behavior(&body);
+
+        assert!(
+            behavior.patterns.contains(&BehaviorPattern::OwnershipTransfer { is_acquire: true }),
+            "Unknown function 'custom_buffer_alloc' with malloc call should be OwnershipTransfer, got: {:?}",
+            behavior.patterns
+        );
+    }
+
+    /// An unknown function with atomicrmw sub + icmp eq
+    /// should be detected as ConditionalRelease, even though the function
+    /// name "mystery_refcount_release" is not in any whitelist.
+    #[test]
+    fn test_golden_unknown_refcount_release() {
+        let ir = r#"
+            define void @mystery_refcount_release(ptr %obj) {
+            entry:
+                %old = atomicrmw sub ptr %obj, i32 1 monotonic
+                %cmp = icmp eq i32 %old, 1
+                br i1 %cmp, label %drop, label %done
+            drop:
+                call void @some_destructor(ptr %obj)
+                ret void
+            done:
+                ret void
+            }
+        "#;
+
+        let body = parse_body(ir);
+        let behavior = extract_behavior(&body);
+
+        assert!(
+            behavior.patterns.iter().any(|p| matches!(p, BehaviorPattern::ConditionalRelease { .. })),
+            "Unknown function 'mystery_refcount_release' with atomicrmw sub + icmp eq should be ConditionalRelease, got: {:?}",
+            behavior.patterns
+        );
+    }
+
+    /// An unknown function with only GEP + ret
+    /// should be detected as PointerProjection, even though the function
+    /// name "weird_accessor" is not in any whitelist.
+    #[test]
+    fn test_golden_unknown_pointer_projection() {
+        let ir = r#"
+            define ptr @weird_accessor(ptr %obj) {
+            entry:
+                %field = getelementptr i8, ptr %obj, i64 24
+                ret ptr %field
+            }
+        "#;
+
+        let body = parse_body(ir);
+        let behavior = extract_behavior(&body);
+
+        assert!(
+            behavior.patterns.contains(&BehaviorPattern::PointerProjection),
+            "Unknown function 'weird_accessor' with GEP + ret should be PointerProjection, got: {:?}",
+            behavior.patterns
+        );
+    }
+
+    /// An unknown function that only does arithmetic
+    /// should be detected as PureComputation, even though the function
+    /// name "obscure_math_helper" is not in any whitelist.
+    #[test]
+    fn test_golden_unknown_pure_computation() {
+        let ir = r#"
+            define i32 @obscure_math_helper(i32 %x, i32 %y) {
+            entry:
+                %sum = add i32 %x, %y
+                %result = mul i32 %sum, 2
+                ret i32 %result
+            }
+        "#;
+
+        let body = parse_body(ir);
+        let behavior = extract_behavior(&body);
+
+        assert!(
+            behavior.patterns.contains(&BehaviorPattern::PureComputation),
+            "Unknown function 'obscure_math_helper' with only arithmetic should be PureComputation, got: {:?}",
+            behavior.patterns
+        );
+    }
+
+    /// An unknown function with stores to struct fields + ret void
+    /// should be detected as Initialization, even though the function
+    /// name "custom_init" is not in any whitelist.
+    #[test]
+    fn test_golden_unknown_initialization() {
+        let ir = r#"
+            define void @custom_init(ptr %obj, i32 %val) {
+            entry:
+                %f1 = getelementptr i8, ptr %obj, i64 0
+                store i32 %val, ptr %f1
+                %f2 = getelementptr i8, ptr %obj, i64 4
+                store i32 0, ptr %f2
+                ret void
+            }
+        "#;
+
+        let body = parse_body(ir);
+        let behavior = extract_behavior(&body);
+
+        assert!(
+            behavior.patterns.contains(&BehaviorPattern::Initialization),
+            "Unknown function 'custom_init' with stores + ret void should be Initialization, got: {:?}",
+            behavior.patterns
+        );
+    }
 }

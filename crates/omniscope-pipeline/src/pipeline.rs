@@ -6,9 +6,9 @@ use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_pass::{
-    ContractGraphBuilderPass, FFIBoundaryPass, IssueCandidateBuilderPass, IssueVerifierPass,
-    OwnershipSolverPass, PassManager, PathSensitiveLeakPass, RawFactCollectorPass,
-    StructuralInferencePass, SummaryBuilderPass,
+    ContractGraphBuilderPass, FFIBoundaryPass, IRBehaviorSummaryPass, IssueCandidateBuilderPass,
+    IssueVerifierPass, OwnershipSolverPass, PassManager, PathSensitiveLeakPass,
+    RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -59,6 +59,7 @@ impl Pipeline {
 
         // Resource contract passes (new architecture)
         self.pass_manager.register(RawFactCollectorPass::new());
+        self.pass_manager.register(IRBehaviorSummaryPass::new());
         self.pass_manager.register(SummaryBuilderPass::new());
         self.pass_manager.register(StructuralInferencePass::new());
         self.pass_manager.register(ContractGraphBuilderPass::new());
@@ -119,7 +120,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
 
-        assert_eq!(pipeline.pass_count(), 9);
+        assert_eq!(pipeline.pass_count(), 10);
     }
 
     #[test]

@@ -3,17 +3,26 @@
 //! Builds `ResourceSummary` entries from the `FamilyRegistry`
 //! for known symbols and stores them in the `SummaryStore` shared
 //! through the pass context.
+//!
+//! # IR Behavior Integration
+//!
+//! This pass now also consumes `function_behaviors` from the
+//! `IRBehaviorSummaryPass` (if available) to build summaries
+//! for functions whose names are not in the family registry.
 
 use omniscope_core::Result;
-use omniscope_semantics::{FamilyRegistry, SummaryStore};
+use omniscope_ir::IRModule;
+use omniscope_semantics::{
+    behavior_to_summary, extract_behavior, FamilyRegistry, FunctionBehavior, SummaryStore,
+};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
 /// Summary builder pass.
 ///
 /// Creates the `SummaryStore` populated with built-in summaries
-/// from the `FamilyRegistry` and stores it in the pass context
-/// for downstream passes to consume.
+/// from the `FamilyRegistry` and IR behavior-based summaries,
+/// and stores it in the pass context for downstream passes to consume.
 pub struct SummaryBuilderPass;
 
 impl SummaryBuilderPass {
@@ -40,21 +49,54 @@ impl Pass for SummaryBuilderPass {
         let start = std::time::Instant::now();
 
         let registry = FamilyRegistry::new();
-        let store = SummaryStore::new();
+        let mut store = SummaryStore::new();
 
         // Build summaries for all registered symbols.
-        // In a full implementation, we would iterate over the
-        // raw facts and create summaries for each function.
-        // For now, we build the registry and store it for
-        // on-demand lookup by downstream passes.
         let symbol_count = registry.symbol_count();
+
+        // Also build summaries from IR behaviors if available.
+        // The IRBehaviorSummaryPass may have already stored
+        // `function_behaviors` in the context.
+        let behaviors: Option<Vec<FunctionBehavior>> = ctx.get("function_behaviors");
+        let mut behavior_summary_count = 0;
+
+        if let Some(behaviors) = &behaviors {
+            for (idx, behavior) in behaviors.iter().enumerate() {
+                if !behavior.patterns.is_empty() {
+                    let summary = behavior_to_summary(behavior, idx as u64, idx as u64);
+                    // Only insert if not already in registry
+                    if registry.lookup(&behavior.name).is_none() {
+                        store.insert(summary);
+                        behavior_summary_count += 1;
+                    }
+                }
+            }
+        }
+
+        //  Also try to extract behaviors directly from IRModule
+        // if function_bodies exist but IRBehaviorSummaryPass hasn't run yet.
+        if behaviors.is_none() {
+            let ir_module: Option<IRModule> = ctx.get("ir_module");
+            if let Some(module) = ir_module {
+                for (idx, (name, body)) in module.function_bodies.iter().enumerate() {
+                    let behavior = extract_behavior(body);
+                    if !behavior.patterns.is_empty() && registry.lookup(name).is_none() {
+                        let summary = behavior_to_summary(&behavior, idx as u64, idx as u64);
+                        store.insert(summary);
+                        behavior_summary_count += 1;
+                    }
+                }
+            }
+        }
 
         ctx.store("family_registry", registry);
         ctx.store("summary_store", store);
 
-        let result = PassResult::new(self.name())
+        let mut result = PassResult::new(self.name())
             .with_nodes(symbol_count)
             .with_duration(start.elapsed().as_millis() as u64);
+
+        result.add_stat("behavior_summary_count", behavior_summary_count);
 
         Ok(result)
     }

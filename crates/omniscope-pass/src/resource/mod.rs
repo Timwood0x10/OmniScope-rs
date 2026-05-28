@@ -14,6 +14,7 @@
 //! - `path_sensitive_leak` — Path-sensitive leak detection (Phase 6).
 
 pub mod contract_graph_builder;
+pub mod ir_behavior_summary_pass;
 pub mod issue_candidate_builder;
 pub mod issue_gate;
 pub mod issue_verifier;

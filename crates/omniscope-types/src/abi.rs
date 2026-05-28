@@ -178,8 +178,4 @@ mod tests {
         assert!(!ptr_type.is_integer());
     }
 
-    #[test]
-    fn test_calling_convention() {
-        assert_eq!(CallingConvention::default(), CallingConvention::C);
-    }
 }

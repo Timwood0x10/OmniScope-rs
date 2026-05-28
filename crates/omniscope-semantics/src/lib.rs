@@ -42,7 +42,7 @@ pub use resource::structural_inference::{
     StaticLifetimeKind,
 };
 pub use resource::summary::{ResourceSummary, SummaryStore};
-pub use resource::summary_inference::infer_summary_for_symbol;
+pub use resource::summary_inference::{behavior_to_summary, infer_summary_for_symbol};
 
 #[cfg(test)]
 mod tests {

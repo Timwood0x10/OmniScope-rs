@@ -162,9 +162,217 @@ fn build_summary_from_entry(
     summary
 }
 
+/// Converts a `FunctionBehavior` (derived from IR instruction patterns)
+/// into a `ResourceSummary`.
+///
+/// This is the key bridge from "IR pattern analysis" to "resource contract
+/// pipeline". Instead of classifying by function name, we classify by the
+/// instruction patterns within the function body.
+///
+/// Confidence levels:
+/// - 0.92 for ConditionalRelease (strong IR evidence)
+/// - 0.90 for OwnershipTransfer (direct alloc/free call)
+/// - 0.85 for PointerProjection (pure GEP pattern)
+/// - 0.80 for PureComputation (no ownership implication)
+/// - 0.80 for Initialization (constructor pattern)
+/// - 0.75 for InternalBridge (heuristic, project-prefix based)
+/// - 0.88 for BorrowedReturn (readonly param evidence)
+/// - 0.92 for RAiiDropRelease (compiler-inserted pattern)
+/// - 0.88 for IntoRawTransfer (into_raw pattern)
+/// - 0.85 for PosixNonMemoryOp (POSIX classification)
+pub fn behavior_to_summary(
+    behavior: &super::ir_pattern::FunctionBehavior,
+    function: FunctionId,
+    canonical_name: SymbolId,
+) -> ResourceSummary {
+    use super::ir_pattern::{BehaviorPattern, ReturnSource};
+
+    let mut summary = ResourceSummary::new(function, canonical_name, &behavior.name);
+
+    // If no patterns detected, return low-confidence unknown summary
+    if behavior.patterns.is_empty() {
+        summary.confidence = 0.1;
+        summary.add_evidence(Evidence::new(
+            EvidenceKind::Insufficient,
+            format!("no IR behavior patterns detected for '{}'", behavior.name),
+        ));
+        return summary;
+    }
+
+    // Process each detected pattern into effects + evidence
+    for pattern in &behavior.patterns {
+        match pattern {
+            BehaviorPattern::ConditionalRelease {
+                atomic_op,
+                threshold,
+            } => {
+                summary.add_effect(Effect::ConditionalRelease {
+                    family: FamilyId::RUST_GLOBAL,
+                    arg: 0,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::RefcountConditional,
+                    format!(
+                        "IR pattern: atomicrmw {} + icmp eq → conditional release (threshold={})",
+                        atomic_op, threshold
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.92);
+            }
+
+            BehaviorPattern::OwnershipTransfer { is_acquire } => {
+                if *is_acquire {
+                    summary.add_effect(Effect::ReturnsOwned {
+                        family: FamilyId::C_HEAP,
+                    });
+                    summary.add_evidence(Evidence::new(
+                        EvidenceKind::OwnershipTransfer,
+                        "IR pattern: call returns ptr from alloc → ownership acquired".to_string(),
+                    ));
+                } else {
+                    summary.add_effect(Effect::Release {
+                        family: FamilyId::C_HEAP,
+                        arg: 0,
+                    });
+                    summary.add_evidence(Evidence::new(
+                        EvidenceKind::OwnershipTransfer,
+                        "IR pattern: ptr passed to dealloc → ownership released".to_string(),
+                    ));
+                }
+                summary.confidence = summary.confidence.max(0.90);
+            }
+
+            BehaviorPattern::PureComputation => {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    "IR pattern: call results only in arithmetic/store → pure computation, no ownership".to_string(),
+                ));
+                summary.confidence = summary.confidence.max(0.80);
+            }
+
+            BehaviorPattern::PointerProjection => {
+                summary.add_effect(Effect::ReturnsBorrowed);
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    "IR pattern: GEP + bitcast + ret → pointer projection (borrowed return)"
+                        .to_string(),
+                ));
+                summary.confidence = summary.confidence.max(0.85);
+            }
+
+            BehaviorPattern::Initialization => {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    "IR pattern: stores to struct fields + ret void → initialization, no ownership leak".to_string(),
+                ));
+                summary.confidence = summary.confidence.max(0.80);
+            }
+
+            BehaviorPattern::InternalBridge => {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::CallGraphStructure,
+                    "IR pattern: all calls to same-project functions → internal bridge".to_string(),
+                ));
+                summary.confidence = summary.confidence.max(0.75);
+            }
+
+            BehaviorPattern::BorrowedReturn {
+                from_readonly_param,
+            } => {
+                summary.add_effect(Effect::ReturnsBorrowed);
+                let evidence_desc = if *from_readonly_param {
+                    "IR pattern: returns pointer from readonly param → borrowed return (&T → &T)"
+                        .to_string()
+                } else {
+                    "IR pattern: returns pointer from field load → borrowed return".to_string()
+                };
+                summary.add_evidence(Evidence::new(EvidenceKind::IrPattern, evidence_desc));
+                summary.confidence = summary.confidence.max(0.88);
+            }
+
+            BehaviorPattern::RAiiDropRelease { is_drop_in_place } => {
+                summary.add_effect(Effect::Release {
+                    family: FamilyId::RUST_GLOBAL,
+                    arg: 0,
+                });
+                summary.add_effect(Effect::ConsumesArg {
+                    arg: 0,
+                    family: Some(FamilyId::RUST_GLOBAL),
+                });
+                let desc = if *is_drop_in_place {
+                    "IR pattern: drop_in_place<T> → compiler-inserted RAII drop".to_string()
+                } else {
+                    "IR pattern: tail-position dealloc → RAII drop release".to_string()
+                };
+                summary.add_evidence(Evidence::new(EvidenceKind::RaiiDropRelease, desc));
+                summary.confidence = summary.confidence.max(0.92);
+            }
+
+            BehaviorPattern::IntoRawTransfer => {
+                summary.add_effect(Effect::ReturnsOwned {
+                    family: FamilyId::RUST_GLOBAL,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::OwnershipTransfer,
+                    "IR pattern: into_raw → intentional ownership transfer to caller".to_string(),
+                ));
+                summary.confidence = summary.confidence.max(0.88);
+            }
+
+            BehaviorPattern::PosixNonMemoryOp { category } => {
+                let cat = match category {
+                    super::ir_pattern::PosixOpCategory::File => "file",
+                    super::ir_pattern::PosixOpCategory::Network => "network",
+                    super::ir_pattern::PosixOpCategory::Process => "process",
+                    super::ir_pattern::PosixOpCategory::Other => "other",
+                };
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::PosixSyscallClass,
+                    format!(
+                        "IR pattern: POSIX {} operation → non-memory, no ownership effect",
+                        cat
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.85);
+            }
+        }
+    }
+
+    // Enrich with return source information
+    match &behavior.return_source {
+        ReturnSource::CallResult(callee) => {
+            if summary.effects.is_empty() {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::CallGraphStructure,
+                    format!("returns result of call to '{}' — wrapper/delegate", callee),
+                ));
+            }
+        }
+        ReturnSource::GepResult => {
+            if !behavior
+                .patterns
+                .contains(&BehaviorPattern::PointerProjection)
+            {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    "return value derived from GEP — likely borrowed pointer".to_string(),
+                ));
+            }
+        }
+        ReturnSource::Void
+        | ReturnSource::Constant
+        | ReturnSource::Unknown
+        | ReturnSource::LoadedValue
+        | ReturnSource::Computed => {}
+    }
+
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BehaviorPattern;
 
     #[test]
     fn test_infer_malloc_summary() {
@@ -201,6 +409,154 @@ mod tests {
         assert!(
             summary.confidence < 0.9,
             "Pattern inference should have lower confidence than registry match"
+        );
+    }
+
+    // ── behavior_to_summary tests (M4) ──
+
+    #[test]
+    fn test_behavior_to_summary_conditional_release() {
+        let behavior = super::super::ir_pattern::FunctionBehavior {
+            name: "mystery_drop".to_string(),
+            alloca_count: 0,
+            call_count: 1,
+            atomic_rmw_count: 1,
+            load_count: 0,
+            store_count: 0,
+            gep_count: 0,
+            icmp_count: 1,
+            branch_count: 1,
+            patterns: vec![BehaviorPattern::ConditionalRelease {
+                atomic_op: "sub".to_string(),
+                threshold: "1".to_string(),
+            }],
+            return_source: super::super::ir_pattern::ReturnSource::Void,
+        };
+
+        let summary = behavior_to_summary(&behavior, 1, 1);
+        assert!(
+            summary.releases_resource(),
+            "ConditionalRelease behavior should produce a release effect"
+        );
+        assert!(
+            summary.confidence >= 0.92,
+            "ConditionalRelease should have high confidence, got {}",
+            summary.confidence
+        );
+        assert!(
+            summary
+                .evidence
+                .iter()
+                .any(|e| e.kind == EvidenceKind::RefcountConditional),
+            "Should have RefcountConditional evidence"
+        );
+    }
+
+    #[test]
+    fn test_behavior_to_summary_ownership_transfer_acquire() {
+        let behavior = super::super::ir_pattern::FunctionBehavior {
+            name: "custom_alloc".to_string(),
+            alloca_count: 0,
+            call_count: 1,
+            atomic_rmw_count: 0,
+            load_count: 0,
+            store_count: 0,
+            gep_count: 0,
+            icmp_count: 0,
+            branch_count: 0,
+            patterns: vec![BehaviorPattern::OwnershipTransfer { is_acquire: true }],
+            return_source: super::super::ir_pattern::ReturnSource::CallResult("malloc".to_string()),
+        };
+
+        let summary = behavior_to_summary(&behavior, 2, 2);
+        assert!(
+            summary.acquires_resource(),
+            "OwnershipTransfer acquire should produce an acquire effect"
+        );
+        assert!(
+            summary
+                .evidence
+                .iter()
+                .any(|e| e.kind == EvidenceKind::OwnershipTransfer),
+            "Should have OwnershipTransfer evidence"
+        );
+    }
+
+    #[test]
+    fn test_behavior_to_summary_pointer_projection() {
+        let behavior = super::super::ir_pattern::FunctionBehavior {
+            name: "weird_accessor".to_string(),
+            alloca_count: 0,
+            call_count: 0,
+            atomic_rmw_count: 0,
+            load_count: 0,
+            store_count: 0,
+            gep_count: 1,
+            icmp_count: 0,
+            branch_count: 0,
+            patterns: vec![BehaviorPattern::PointerProjection],
+            return_source: super::super::ir_pattern::ReturnSource::GepResult,
+        };
+
+        let summary = behavior_to_summary(&behavior, 3, 3);
+        assert!(
+            summary.is_bridge(),
+            "PointerProjection should produce ReturnsBorrowed (bridge)"
+        );
+    }
+
+    #[test]
+    fn test_behavior_to_summary_pure_computation_no_effects() {
+        let behavior = super::super::ir_pattern::FunctionBehavior {
+            name: "obscure_math".to_string(),
+            alloca_count: 0,
+            call_count: 0,
+            atomic_rmw_count: 0,
+            load_count: 0,
+            store_count: 0,
+            gep_count: 0,
+            icmp_count: 0,
+            branch_count: 0,
+            patterns: vec![BehaviorPattern::PureComputation],
+            return_source: super::super::ir_pattern::ReturnSource::Computed,
+        };
+
+        let summary = behavior_to_summary(&behavior, 4, 4);
+        // PureComputation should have NO resource effects
+        assert!(
+            !summary.acquires_resource() && !summary.releases_resource(),
+            "PureComputation should have no resource effects"
+        );
+        assert!(
+            summary
+                .evidence
+                .iter()
+                .any(|e| e.kind == EvidenceKind::IrPattern),
+            "Should have IrPattern evidence explaining why"
+        );
+    }
+
+    #[test]
+    fn test_behavior_to_summary_empty_patterns() {
+        let behavior = super::super::ir_pattern::FunctionBehavior {
+            name: "unknown_func".to_string(),
+            alloca_count: 0,
+            call_count: 0,
+            atomic_rmw_count: 0,
+            load_count: 0,
+            store_count: 0,
+            gep_count: 0,
+            icmp_count: 0,
+            branch_count: 0,
+            patterns: vec![],
+            return_source: super::super::ir_pattern::ReturnSource::Unknown,
+        };
+
+        let summary = behavior_to_summary(&behavior, 5, 5);
+        assert!(
+            summary.confidence < 0.2,
+            "No patterns should result in low confidence, got {}",
+            summary.confidence
         );
     }
 }

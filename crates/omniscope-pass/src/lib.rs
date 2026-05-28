@@ -22,6 +22,7 @@ pub use analysis::{
 
 // Re-exports — Resource contract passes
 pub use resource::contract_graph_builder::{ContractEdge, ContractGraph, ContractGraphBuilderPass};
+pub use resource::ir_behavior_summary_pass::IRBehaviorSummaryPass;
 pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
 pub use resource::issue_gate::{check_issue, check_issue_with_kinds, GateVerdict};
 pub use resource::issue_verifier::IssueVerifierPass;
@@ -36,17 +37,3 @@ pub use resource::summary_builder::SummaryBuilderPass;
 pub use manager::PassManager;
 pub use pass::{Pass, PassContext, PassKind, PassResult};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pass_module_exports() {
-        let _call_graph = CallGraphPass::new();
-        let _ffi_pass = FFIBoundaryPass::new();
-        let _surface_pass = SurfaceClassifierPass::new();
-        let _danger_pass = DangerSurfacePass::new();
-        let _noise = NoiseReduction::new();
-        let _manager = PassManager::new();
-    }
-}

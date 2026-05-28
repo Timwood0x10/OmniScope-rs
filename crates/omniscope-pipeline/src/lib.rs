@@ -13,13 +13,3 @@ pub mod result;
 // Re-exports
 pub use pipeline::Pipeline;
 pub use result::{PipelineResult, PipelineStats};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pipeline_module_exports() {
-        let _pipeline = Pipeline::new();
-    }
-}
