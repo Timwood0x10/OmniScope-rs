@@ -80,6 +80,7 @@ pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
         IssueKind::DataRace => "data_race",
         IssueKind::LockOrderViolation => "lock_order_violation",
         IssueKind::ThreadCrossing => "thread_crossing",
+        IssueKind::WriteToImmutable => "write_to_immutable",
         IssueKind::Unknown => "unknown",
     }
 }

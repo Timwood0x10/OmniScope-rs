@@ -112,6 +112,8 @@ pub struct PassContext {
     facts: Vec<Fact>,
     /// Issues collected across all passes
     issues: Vec<Issue>,
+    /// Issues suppressed by the SRT gate
+    suppressed_issues: Vec<Issue>,
     /// Monotonic issue ID counter
     next_issue_id: u64,
 }
@@ -124,6 +126,7 @@ impl PassContext {
             diagnostics: Vec::new(),
             facts: Vec::new(),
             issues: Vec::new(),
+            suppressed_issues: Vec::new(),
             next_issue_id: 1,
         }
     }
@@ -177,11 +180,47 @@ impl PassContext {
         id
     }
 
-    /// Emits an issue into the context and returns its ID.
+    /// Emits an issue into the context, checking the SRT gate first.
+    ///
+    /// If SRT resolutions are available in the context (key "srt_resolutions"),
+    /// the issue is checked against the SRT-based issue gate before being
+    /// added to the issues list. Suppressed issues are stored separately
+    /// for diagnostics.
     pub fn emit_issue(&mut self, issue: Issue) -> u64 {
         let id = issue.id;
+
+        // Check SRT gate if resolutions are available
+        let srt_resolutions: Option<
+            std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>,
+        > = self.get("srt_resolutions");
+
+        if let Some(ref resolutions) = srt_resolutions {
+            let gate_verdict =
+                crate::resource::issue_gate::check_issue_with_kinds(&issue, resolutions);
+            if !gate_verdict.is_allowed() {
+                tracing::debug!(
+                    "IssueGate suppressed {:?}: {} [{}]",
+                    issue.kind,
+                    issue.description,
+                    gate_verdict.reason(),
+                );
+                self.suppressed_issues.push(issue);
+                return id;
+            }
+        }
+
         self.issues.push(issue);
         id
+    }
+
+    /// Returns all suppressed issues (filtered by SRT gate).
+    pub fn suppressed_issues(&self) -> &[Issue] {
+        &self.suppressed_issues
+    }
+
+    /// Returns the number of suppressed issues.
+    pub fn suppressed_issue_count(&self) -> usize {
+        self.suppressed_issues.len()
     }
 
     /// Returns all collected issues.

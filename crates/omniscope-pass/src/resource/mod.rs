@@ -15,6 +15,7 @@
 
 pub mod contract_graph_builder;
 pub mod issue_candidate_builder;
+pub mod issue_gate;
 pub mod issue_verifier;
 pub mod ownership_solver;
 pub mod path_sensitive_leak;

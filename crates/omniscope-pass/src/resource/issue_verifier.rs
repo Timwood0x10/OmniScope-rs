@@ -15,6 +15,9 @@
 //! - Destructor/drop/cleanup release path
 //! - Runtime/compiler origin (lower severity for runtime-originated)
 //! - Unknown-family and unknown-cleanup policy
+//! - **Issue Gate (SRT-based)** — before emitting, every issue is
+//!   checked against the Semantic Resolution Tree. If the SRT has
+//!   a suppression tag (R-0~R-7), the issue is suppressed.
 
 use omniscope_core::{Issue, IssueCandidate, Result};
 use omniscope_semantics::FamilyRegistry;
@@ -70,12 +73,21 @@ impl Pass for IssueVerifierPass {
 
             if candidate.is_reportable() {
                 let issue_id = ctx.next_issue_id();
-                let issue = Issue::new(
+                let mut issue = Issue::new(
                     issue_id,
                     candidate.to_issue_kind(),
                     candidate.severity(),
                     candidate.description.clone().unwrap_or_default(),
                 );
+
+                // Set symbol for SRT lookup from the candidate's function names.
+                let symbol = candidate
+                    .release_function
+                    .as_deref()
+                    .unwrap_or(&candidate.alloc_function);
+                issue = issue.with_symbol(symbol);
+
+                // emit_issue automatically checks the SRT gate via PassContext.
                 ctx.emit_issue(issue.clone());
                 issues.push(issue);
             }
@@ -84,6 +96,7 @@ impl Pass for IssueVerifierPass {
         }
 
         let verified_count = verified.len();
+        let gate_suppressed = ctx.suppressed_issue_count();
         ctx.store("verified_candidates", verified);
 
         let mut result = PassResult::new(self.name())
@@ -92,6 +105,7 @@ impl Pass for IssueVerifierPass {
         for issue in issues {
             result.add_issue(issue);
         }
+        result.add_stat("gate_suppressed", gate_suppressed);
 
         Ok(result)
     }

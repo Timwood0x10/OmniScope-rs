@@ -23,6 +23,7 @@ pub use analysis::{
 // Re-exports — Resource contract passes
 pub use resource::contract_graph_builder::{ContractEdge, ContractGraph, ContractGraphBuilderPass};
 pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
+pub use resource::issue_gate::{check_issue, check_issue_with_kinds, GateVerdict};
 pub use resource::issue_verifier::IssueVerifierPass;
 pub use resource::ownership_solver::OwnershipSolverPass;
 pub use resource::path_sensitive_leak::{LeakPath, PathAnalysisResult, PathSensitiveLeakPass};

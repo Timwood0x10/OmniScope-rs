@@ -68,6 +68,8 @@ pub enum IssueKind {
     CallbackEscapeIssue,
     /// Needs a model annotation — unknown family or cleanup.
     NeedsModel,
+    /// Write to immutable memory location.
+    WriteToImmutable,
 
     // === Concurrency Issues ===
     /// Data race across FFI boundary.
@@ -298,6 +300,9 @@ pub struct Issue {
     pub trace: Vec<TraceEntry>,
     /// CWE identifier (if applicable).
     pub cwe_id: Option<u32>,
+    /// Symbol name for SRT lookup (callee or function name).
+    /// Used by the issue gate to query the Semantic Resolution Tree.
+    pub symbol: String,
 }
 
 impl Issue {
@@ -319,12 +324,19 @@ impl Issue {
             ffi_boundary: None,
             trace: Vec::new(),
             cwe_id,
+            symbol: String::new(),
         }
     }
 
     /// Sets the location.
     pub fn with_location(mut self, location: IssueLocation) -> Self {
         self.location = Some(location);
+        self
+    }
+
+    /// Sets the symbol name for SRT lookup.
+    pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.symbol = symbol.into();
         self
     }
 

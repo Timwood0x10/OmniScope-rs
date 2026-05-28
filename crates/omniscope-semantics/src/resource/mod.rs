@@ -11,6 +11,7 @@
 //! - `structural_inference`: Phase 4 structural inference patterns
 //!   (destructor, bridge, refcount, static-lifetime).
 
+pub mod confidence_scorer;
 pub mod escape;
 pub mod family_inference;
 pub mod family_registry;

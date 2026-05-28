@@ -15,15 +15,25 @@ use omniscope_types::call_graph_types::CrossLangEdge;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
+pub mod borrow_escape;
 pub mod call_graph;
 pub mod danger_surface;
+pub mod heap_provenance;
+pub mod interior_mutability;
 pub mod noise_reduction;
+pub mod raii_drop;
 pub mod surface_classifier_pass;
+pub mod write_to_immutable;
 
+pub use borrow_escape::BorrowEscapePass;
 pub use call_graph::CallGraphPass;
 pub use danger_surface::DangerSurfacePass;
+pub use heap_provenance::HeapProvenancePass;
+pub use interior_mutability::InteriorMutabilityPass;
 pub use noise_reduction::{NoiseReduction, PrecisionMetrics};
+pub use raii_drop::RaiiDropPass;
 pub use surface_classifier_pass::SurfaceClassifierPass;
+pub use write_to_immutable::WriteToImmutablePass;
 
 /// FFI boundary detection pass.
 ///
@@ -347,6 +357,7 @@ impl FFIBoundaryPass {
         let issue_id = ctx.next_issue_id();
         let issue = Issue::new(issue_id, kind, severity, description)
             .with_confidence(confidence)
+            .with_symbol(&callee_name)
             .with_ffi_boundary(FFIBoundary {
                 caller_name: caller_name.clone(),
                 callee_name: callee_name.clone(),

@@ -2,13 +2,26 @@
 //!
 //! This module provides two complementary mechanisms:
 //!
-//! 1. **NoiseReduction** — Suppresses false positives based on
-//!    SurfaceClassifier results and known safe patterns.
+//! 1. **NoiseReduction** — Suppresses false positives using a two-layer
+//!    approach:
+//!    - **Layer 1 (fast)**: String-based safe patterns (drop_in_place,
+//!      __rust_alloc, llvm.*, etc.) — used as a quick pre-filter.
+//!    - **Layer 2 (semantic)**: SRT-based `SemanticKind` queries —
+//!      the authoritative suppression mechanism per bun_fp_reduction_plan.
+//!      When SRT data is available, Layer 2 overrides Layer 1.
 //!
 //! 2. **PrecisionMetrics** — Tracks TP/FP/FN for the hard gate
 //!    from the refactoring plan: "You CANNOT remove existing FP
 //!    filtering until MemoryGraph ownership precision >= current
 //!    FP filtering effect."
+//!
+//! ## Migration Note
+//!
+//! The string-based `safe_patterns` list is retained for backward
+//! compatibility and as a fast pre-filter. The SRT-based `issue_gate`
+//! module (`crate::resource::issue_gate`) is the single choke point
+//! for all issue suppression. New suppression logic should go into
+//! SRT detectors (R-0~R-7), NOT into this safe_patterns list.
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -68,6 +81,58 @@ impl NoiseReduction {
     /// Returns the number of safe patterns registered.
     pub fn pattern_count(&self) -> usize {
         self.safe_patterns.len()
+    }
+
+    /// Checks if an issue should be suppressed based on SRT semantic kinds.
+    ///
+    /// This is the Layer 2 (semantic) check. It queries the SRT for
+    /// suppression signals (R-0~R-7) and returns true if any signal
+    /// indicates the issue is a false positive.
+    ///
+    /// When SRT data is available, this method is authoritative —
+    /// it overrides the string-based `should_suppress` check.
+    pub fn should_suppress_by_srt(
+        &self,
+        symbol: &str,
+        issue_kind: &str,
+        resolutions: &std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>,
+    ) -> bool {
+        use omniscope_semantics::SemanticKind;
+
+        let Some(kinds) = resolutions.get(symbol) else {
+            return false;
+        };
+
+        let suppressed = match issue_kind {
+            "borrow_escape" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    SemanticKind::HeapProvenance | SemanticKind::GlobalProvenance
+                )
+            }),
+            "use_after_free" | "double_free" => kinds
+                .iter()
+                .any(|k| matches!(k, SemanticKind::RaiiDropRelease)),
+            "cross_language_free" | "cross_family_free" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    SemanticKind::IntoRawTransfer
+                        | SemanticKind::FileOperation
+                        | SemanticKind::NetworkOperation
+                        | SemanticKind::ProcessOperation
+                        | SemanticKind::LibraryRelease
+                )
+            }),
+            _ => false,
+        };
+
+        if suppressed {
+            debug!(
+                "NoiseReduction(SRT): suppressing FP for '{}' (kind={})",
+                symbol, issue_kind
+            );
+        }
+        suppressed
     }
 }
 

@@ -548,6 +548,11 @@ pub enum SemanticKind {
     /// mi_free / inflateEnd / EVP_CIPHER_CTX_free / sqlite3_finalize etc.
     /// cross_language_free detection hitting this kind → suppress (legitimate intra-library release).
     LibraryRelease,
+
+    // ── R-8: Function parameter is not stack escape (covers borrow_escape 39 FP) ──
+    /// Function parameter is not a stack escape — it's caller-provided pointer.
+    /// Parameters are not stack escapes in the current function; caller owns the pointer.
+    FromParameter,
 }
 
 impl SemanticKind {
@@ -563,7 +568,9 @@ impl SemanticKind {
     pub fn suppresses_borrow_escape(&self) -> bool {
         matches!(
             self,
-            SemanticKind::HeapProvenance | SemanticKind::GlobalProvenance
+            SemanticKind::HeapProvenance
+                | SemanticKind::GlobalProvenance
+                | SemanticKind::FromParameter
         )
     }
 
