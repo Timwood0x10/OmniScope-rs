@@ -3,7 +3,11 @@
     "allow": [
       "Bash(rtk ls *)",
       "Bash(rtk grep *)",
-      "Bash(rtk cargo *)"
+      "Bash(rtk cargo *)",
+      "Bash(rtk make *)",
+      "Bash(rtk find *)",
+      "WebSearch",
+      "Bash(rtk read *)"
     ]
   }
 }

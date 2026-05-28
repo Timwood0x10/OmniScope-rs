@@ -135,4 +135,77 @@ mod tests {
             "Pipeline should have executed passes"
         );
     }
+
+    /// Objective: End-to-end pipeline — cross-family malloc→operator delete
+    /// must produce a CrossFamilyFree issue in the final pipeline output.
+    /// Invariants: Pipeline.run() returns issues that include CrossFamilyFree.
+    #[test]
+    fn test_pipeline_cross_family_issue() {
+        let mut module = omniscope_ir::IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "_ZdlPv".to_string(), // operator delete
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut pipeline = Pipeline::new();
+        pipeline.register_default_passes();
+        pipeline.set_ir_module(module);
+
+        let result = pipeline.run().unwrap();
+
+        let cross_family: Vec<_> = result
+            .issues()
+            .iter()
+            .filter(|i| i.kind == omniscope_core::IssueKind::CrossFamilyFree)
+            .collect();
+        assert!(
+            !cross_family.is_empty(),
+            "Pipeline must emit CrossFamilyFree for malloc→operator delete, got {} total issues",
+            result.issues().len()
+        );
+    }
+
+    /// Objective: End-to-end pipeline — same-family malloc→free
+    /// must NOT produce a CrossFamilyFree issue.
+    /// Invariants: Same-family release = no CrossFamilyFree in output.
+    #[test]
+    fn test_pipeline_same_family_no_cross_family() {
+        let mut module = omniscope_ir::IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "safe_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "free".to_string(),
+            caller: "safe_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut pipeline = Pipeline::new();
+        pipeline.register_default_passes();
+        pipeline.set_ir_module(module);
+
+        let result = pipeline.run().unwrap();
+
+        let cross_family: Vec<_> = result
+            .issues()
+            .iter()
+            .filter(|i| i.kind == omniscope_core::IssueKind::CrossFamilyFree)
+            .collect();
+        assert!(
+            cross_family.is_empty(),
+            "Pipeline must NOT emit CrossFamilyFree for same-family malloc→free"
+        );
+    }
 }

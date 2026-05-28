@@ -596,4 +596,217 @@ mod tests {
             "cpp_new_array and c_heap must NOT be compatible"
         );
     }
+
+    /// Objective: End-to-end pipeline test — malloc/free (same family) must
+    /// produce zero CrossFamilyFree candidates.
+    /// Invariants: Same C_HEAP family acquire→release = no candidate.
+    #[test]
+    fn test_e2e_same_family_no_issue() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "free".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        // Run RawFactCollector → ContractGraphBuilder → OwnershipSolver → IssueCandidateBuilder
+        let raw_pass = crate::resource::raw_fact_collector::RawFactCollectorPass::new();
+        raw_pass.run(&mut ctx).unwrap();
+
+        let cg_pass = crate::resource::contract_graph_builder::ContractGraphBuilderPass::new();
+        cg_pass.run(&mut ctx).unwrap();
+
+        let os_pass = crate::resource::ownership_solver::OwnershipSolverPass::new();
+        os_pass.run(&mut ctx).unwrap();
+
+        let ic_pass = IssueCandidateBuilderPass::new();
+        ic_pass.run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        // malloc→free is same C_HEAP family → no CrossFamilyFree candidates
+        let cross_family: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::CrossFamilyFree)
+            .collect();
+        assert!(
+            cross_family.is_empty(),
+            "Same-family malloc→free must NOT produce CrossFamilyFree candidate, got {}",
+            cross_family.len()
+        );
+    }
+
+    /// Objective: End-to-end pipeline test — malloc + operator delete (cross-family)
+    /// must produce a CrossFamilyFree candidate that passes through the verifier.
+    /// Invariants: C_HEAP acquire + CPP_NEW_SCALAR release = CrossFamilyFree candidate.
+    #[test]
+    fn test_e2e_cross_family_produces_issue() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "_ZdlPv".to_string(), // operator delete(void*)
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        // Run full candidate pipeline
+        let raw_pass = crate::resource::raw_fact_collector::RawFactCollectorPass::new();
+        raw_pass.run(&mut ctx).unwrap();
+
+        let cg_pass = crate::resource::contract_graph_builder::ContractGraphBuilderPass::new();
+        cg_pass.run(&mut ctx).unwrap();
+
+        let os_pass = crate::resource::ownership_solver::OwnershipSolverPass::new();
+        os_pass.run(&mut ctx).unwrap();
+
+        let ic_pass = IssueCandidateBuilderPass::new();
+        ic_pass.run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        // malloc→operator delete is cross-family → must produce candidate
+        let cross_family: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::CrossFamilyFree)
+            .collect();
+        assert!(
+            !cross_family.is_empty(),
+            "Cross-family malloc→operator delete MUST produce CrossFamilyFree candidate"
+        );
+
+        // Now run the verifier
+        let ver_pass = crate::resource::issue_verifier::IssueVerifierPass::new();
+        ver_pass.run(&mut ctx).unwrap();
+
+        // Verify that the issue was actually emitted
+        let issues = ctx.issues();
+        let cross_family_issues: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind == omniscope_core::IssueKind::CrossFamilyFree)
+            .collect();
+        assert!(
+            !cross_family_issues.is_empty(),
+            "CrossFamilyFree must appear in emitted issues after verification"
+        );
+    }
+
+    /// Objective: End-to-end — malloc without free produces ConditionalLeak candidate.
+    /// Invariants: Acquired-only instance = leak candidate.
+    #[test]
+    fn test_e2e_conditional_leak_candidate() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // Only malloc, no free — leak
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "leaky_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let leak_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::ConditionalLeak)
+            .collect();
+        assert!(
+            !leak_candidates.is_empty(),
+            "malloc without free MUST produce ConditionalLeak candidate"
+        );
+    }
+
+    /// Objective: End-to-end — double free produces DoubleRelease candidate.
+    /// Invariants: Two free calls on same instance = DoubleRelease candidate.
+    #[test]
+    fn test_e2e_double_release_candidate() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "buggy_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "free".to_string(),
+            caller: "buggy_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "free".to_string(),
+            caller: "buggy_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let double_release: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::DoubleRelease)
+            .collect();
+        assert!(
+            !double_release.is_empty(),
+            "Double free MUST produce DoubleRelease candidate"
+        );
+    }
 }

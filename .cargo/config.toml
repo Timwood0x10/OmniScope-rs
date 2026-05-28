@@ -8,9 +8,10 @@
 # [target.x86_64-unknown-linux-gnu]
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
-# Use sccache for caching if available
-[build]
-rustc-wrapper = "sccache"
+# Use sccache for caching if available (disabled — not installed on CI runners)
+# To enable locally: install sccache and uncomment the line below
+# [build]
+# rustc-wrapper = "sccache"
 
 # Parallel compilation
 [env]
