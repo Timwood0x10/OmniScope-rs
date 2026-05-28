@@ -165,8 +165,15 @@ impl FamilyRegistry {
         self.add_jni_symbols();
         // C#/.NET
         self.add_csharp_symbols();
-        // Go
+        // Go (GC + cgo)
         self.add_go_symbols();
+        // Library-managed families (IR Pattern Atlas §1.4, §9)
+        self.add_zlib_symbols();
+        self.add_openssl_symbols();
+        self.add_sqlite_symbols();
+        self.add_mimalloc_symbols();
+        // C# COM interop
+        self.add_csharp_com_symbols();
     }
 
     fn add_c_heap_symbols(&mut self) {
@@ -186,6 +193,12 @@ impl FamilyRegistry {
         }
         self.add_symbol("free", f, SymbolEffect::Release, lang);
         self.add_symbol("reallocarray", f, SymbolEffect::Acquire, lang);
+        // Whitelist: macOS malloc_set_zone_name — copies name string content,
+        // does NOT retain the `name` pointer (per macOS man page).
+        // Evidence: bun_alloc.bc — observed 12 times across corpus.
+        // This is a Retain (no ownership change) because the function
+        // only copies the string content, not the pointer.
+        self.add_symbol("malloc_set_zone_name", f, SymbolEffect::Retain, lang);
     }
 
     fn add_cpp_symbols(&mut self) {
@@ -216,13 +229,44 @@ impl FamilyRegistry {
         }
         self.add_symbol("__rust_dealloc", f, SymbolEffect::Release, lang);
         self.add_symbol("__rust_realloc", f, SymbolEffect::Acquire, lang);
+        // Rust allocator deallocation symbols (evidence: bun_alloc.ll)
+        self.add_symbol("__rdl_dealloc", f, SymbolEffect::Release, lang);
+        self.add_symbol("__rg_dealloc", f, SymbolEffect::Release, lang);
+        // Zig allocator vtable symbols (evidence: boundary_test.ll, zig_main.ll)
+        let zig_f = FamilyId::ZIG_ALLOCATOR;
+        let zig_lang = LanguageHint::Zig;
+        self.add_symbol(
+            "zig_allocator_allocImpl",
+            zig_f,
+            SymbolEffect::Acquire,
+            zig_lang,
+        );
+        self.add_symbol(
+            "zig_allocator_freeImpl",
+            zig_f,
+            SymbolEffect::Release,
+            zig_lang,
+        );
     }
 
     fn add_python_symbols(&mut self) {
         let lang = LanguageHint::Python;
         // Python object family
         let obj = FamilyId::PYTHON_OBJECT;
-        for sym in &["PyObject_New", "PyObject_NewVar", "PyType_GenericAlloc"] {
+        for sym in &[
+            "PyObject_New",
+            "PyObject_NewVar",
+            "PyType_GenericAlloc",
+            // New-ref constructors (evidence: python_cffi_bugs.ll)
+            "PyBytes_FromStringAndSize",
+            "PyBytes_FromString",
+            "PyUnicode_FromString",
+            "PyUnicode_FromStringAndSize",
+            "PyList_New",
+            "PyTuple_New",
+            "PyDict_New",
+            "PySet_New",
+        ] {
             self.add_symbol(sym, obj, SymbolEffect::Acquire, lang);
         }
         for sym in &["PyObject_Del", "PyObject_Free"] {
@@ -233,12 +277,24 @@ impl FamilyRegistry {
         self.add_symbol("Py_XDECREF", obj, SymbolEffect::ConditionalRelease, lang);
         // Py_INCREF is a retain
         self.add_symbol("Py_INCREF", obj, SymbolEffect::Retain, lang);
+        // Borrowed-ref accessors: return a pointer without transferring ownership.
+        // These MUST NOT be treated as Acquire — calling Py_DECREF on a borrowed
+        // ref is a bug (over-decrement). Evidence: python_cffi_bugs.ll §5.1.
+        self.add_symbol("PyList_GetItem", obj, SymbolEffect::Retain, lang);
+        self.add_symbol("PyList_GetItemRef", obj, SymbolEffect::Acquire, lang);
+        self.add_symbol("PyBytes_AsString", obj, SymbolEffect::Retain, lang);
+        self.add_symbol("PyUnicode_AsUTF8", obj, SymbolEffect::Retain, lang);
+        // PyTuple_SetItem steals the reference (no INCREF needed on item).
+        self.add_symbol("PyTuple_SetItem", obj, SymbolEffect::Release, lang);
+        self.add_symbol("PyList_SetItem", obj, SymbolEffect::Release, lang);
         // Python mem family
         let mem = FamilyId::PYTHON_MEM;
         for sym in &["PyMem_Malloc", "PyMem_Calloc", "PyMem_Realloc"] {
             self.add_symbol(sym, mem, SymbolEffect::Acquire, lang);
         }
         self.add_symbol("PyMem_Free", mem, SymbolEffect::Release, lang);
+        // ctypes allocation (evidence: python_cffi_bugs.ll §5.2)
+        self.add_symbol("ctypes_alloc", mem, SymbolEffect::Acquire, lang);
         // Python raw mem family
         let raw = FamilyId::PYTHON_MEM_RAW;
         for sym in &["PyMem_RawMalloc", "PyMem_RawCalloc", "PyMem_RawRealloc"] {
@@ -249,30 +305,44 @@ impl FamilyRegistry {
 
     fn add_jni_symbols(&mut self) {
         let lang = LanguageHint::Java;
+        // JNI local reference family
+        let local = FamilyId::JAVA_LOCAL_REF;
+        self.add_symbol("NewLocalRef", local, SymbolEffect::Acquire, lang);
+        self.add_symbol("DeleteLocalRef", local, SymbolEffect::Release, lang);
+        // JNI borrowed-ref accessors: return pointers that must be released.
+        // Evidence: java_jni_bugs.ll §6.1 — GetStringUTFChars is a borrow
+        // that must be paired with ReleaseStringUTFChars.
+        self.add_symbol("GetStringUTFChars", local, SymbolEffect::Acquire, lang);
+        self.add_symbol("ReleaseStringUTFChars", local, SymbolEffect::Release, lang);
+        self.add_symbol("GetStringCritical", local, SymbolEffect::Acquire, lang);
+        self.add_symbol("ReleaseStringCritical", local, SymbolEffect::Release, lang);
+        // JNI critical array access (evidence: java_jni_bugs.ll §6.1)
         self.add_symbol(
-            "NewLocalRef",
-            FamilyId::JAVA_LOCAL_REF,
+            "GetPrimitiveArrayCritical",
+            local,
             SymbolEffect::Acquire,
             lang,
         );
         self.add_symbol(
-            "DeleteLocalRef",
-            FamilyId::JAVA_LOCAL_REF,
+            "ReleasePrimitiveArrayCritical",
+            local,
             SymbolEffect::Release,
             lang,
         );
+        self.add_symbol("GetByteArrayElements", local, SymbolEffect::Acquire, lang);
         self.add_symbol(
-            "NewGlobalRef",
-            FamilyId::JAVA_GLOBAL_REF,
-            SymbolEffect::Acquire,
-            lang,
-        );
-        self.add_symbol(
-            "DeleteGlobalRef",
-            FamilyId::JAVA_GLOBAL_REF,
+            "ReleaseByteArrayElements",
+            local,
             SymbolEffect::Release,
             lang,
         );
+        // JNI global reference family
+        let global = FamilyId::JAVA_GLOBAL_REF;
+        self.add_symbol("NewGlobalRef", global, SymbolEffect::Acquire, lang);
+        self.add_symbol("DeleteGlobalRef", global, SymbolEffect::Release, lang);
+        // JNI string/object creation (acquire new reference)
+        self.add_symbol("NewStringUTF", global, SymbolEffect::Acquire, lang);
+        self.add_symbol("NewByteArray", global, SymbolEffect::Acquire, lang);
     }
 
     fn add_csharp_symbols(&mut self) {
@@ -311,6 +381,90 @@ impl FamilyRegistry {
             SymbolEffect::Acquire,
             lang,
         );
+        // Go cgo internal (evidence: go_cgo_bugs.ll)
+        let cgo = FamilyId::GO_CGO;
+        self.add_symbol("_cgo_allocate", cgo, SymbolEffect::Acquire, lang);
+        self.add_symbol("_cgo_free", cgo, SymbolEffect::Release, lang);
+        self.add_symbol("_Cfunc_GoMalloc", cgo, SymbolEffect::Acquire, lang);
+        self.add_symbol("_Cfunc_GoFree", cgo, SymbolEffect::Release, lang);
+        // Go TinyGo runtime alloc
+        self.add_symbol(
+            "runtime.alloc",
+            FamilyId::GO_GC,
+            SymbolEffect::Acquire,
+            lang,
+        );
+    }
+
+    /// Register zlib stream family symbols.
+    /// Evidence: `zlib_binding.ll` — library-level resource pairing.
+    fn add_zlib_symbols(&mut self) {
+        let f = FamilyId::ZLIB_STREAM;
+        let lang = LanguageHint::C;
+        self.add_symbol("inflateInit_", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("inflateInit2_", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("inflateEnd", f, SymbolEffect::Release, lang);
+        self.add_symbol("deflateInit_", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("deflateInit2_", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("deflateEnd", f, SymbolEffect::Release, lang);
+    }
+
+    /// Register OpenSSL resource family symbols.
+    /// Evidence: `openssl_wrapper.ll` — library-level resource pairing.
+    fn add_openssl_symbols(&mut self) {
+        let f = FamilyId::OPENSSL_RESOURCE;
+        let lang = LanguageHint::C;
+        // EVP cipher context
+        self.add_symbol("EVP_CIPHER_CTX_new", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("EVP_CIPHER_CTX_free", f, SymbolEffect::Release, lang);
+        // BIO
+        self.add_symbol("BIO_new", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("BIO_free", f, SymbolEffect::Release, lang);
+        self.add_symbol("BIO_free_all", f, SymbolEffect::Release, lang);
+        // RSA
+        self.add_symbol("RSA_new", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("RSA_free", f, SymbolEffect::Release, lang);
+        // BN (bignum)
+        self.add_symbol("BN_new", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("BN_free", f, SymbolEffect::Release, lang);
+        self.add_symbol("BN_clear_free", f, SymbolEffect::Release, lang);
+    }
+
+    /// Register SQLite resource family symbols.
+    /// Evidence: `sqlite_binding.ll` — library-level resource pairing.
+    fn add_sqlite_symbols(&mut self) {
+        let f = FamilyId::SQLITE_RESOURCE;
+        let lang = LanguageHint::C;
+        self.add_symbol("sqlite3_open", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("sqlite3_open_v2", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("sqlite3_close", f, SymbolEffect::Release, lang);
+        self.add_symbol("sqlite3_close_v2", f, SymbolEffect::Release, lang);
+        self.add_symbol("sqlite3_prepare_v2", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("sqlite3_prepare_v3", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("sqlite3_finalize", f, SymbolEffect::Release, lang);
+        self.add_symbol("sqlite3_free", f, SymbolEffect::Release, lang);
+    }
+
+    /// Register mimalloc family symbols.
+    /// Evidence: `bun_alloc-ef7250b81132b4bd.ll` — Bun's custom allocator.
+    fn add_mimalloc_symbols(&mut self) {
+        let f = FamilyId::MIMALLOC;
+        let lang = LanguageHint::C;
+        self.add_symbol("mi_malloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("mi_free", f, SymbolEffect::Release, lang);
+        self.add_symbol("mi_realloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("mi_heap_destroy", f, SymbolEffect::ConditionalRelease, lang);
+        self.add_symbol("mi_calloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("mi_malloc_aligned", f, SymbolEffect::Acquire, lang);
+    }
+
+    /// Register C# COM interop family symbols.
+    /// Evidence: `csharp_ffi_bugs.ll` — COM interop memory management.
+    fn add_csharp_com_symbols(&mut self) {
+        let f = FamilyId::CSHARP_COM;
+        let lang = LanguageHint::CSharp;
+        self.add_symbol("CoTaskMemAlloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("CoTaskMemFree", f, SymbolEffect::Release, lang);
     }
 }
 
@@ -333,8 +487,8 @@ mod tests {
         );
         assert_eq!(
             registry.family_count(),
-            13,
-            "Must have 13 built-in families"
+            19,
+            "Must have 19 built-in families"
         );
     }
 

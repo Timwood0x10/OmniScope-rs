@@ -87,6 +87,31 @@ impl ResourceSummary {
         let has_release = self.releases_resource();
         has_consumes && has_release
     }
+
+    /// Returns true if this function performs ownership transfer.
+    ///
+    /// Ownership transfer is identified by `ReturnsOwned` or
+    /// `OwnershipTransfer` evidence.
+    pub fn is_ownership_transfer(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e, Effect::ReturnsOwned { .. }))
+            || self
+                .evidence
+                .iter()
+                .any(|e| matches!(e.kind, omniscope_types::EvidenceKind::OwnershipTransfer))
+    }
+
+    /// Returns true if this function was inferred as a RAII drop.
+    ///
+    /// RAII drop is identified by `RaiiDropRelease` evidence.
+    pub fn is_drop(&self) -> bool {
+        self.is_destructor()
+            || self
+                .evidence
+                .iter()
+                .any(|e| matches!(e.kind, omniscope_types::EvidenceKind::RaiiDropRelease))
+    }
 }
 
 /// Store for sharing function summaries across passes.

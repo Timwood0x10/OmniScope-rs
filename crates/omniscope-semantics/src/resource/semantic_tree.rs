@@ -483,6 +483,128 @@ impl SyscallSemantic {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// Semantic Kind — R-0~R-6 resolution tags for FP suppression
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Semantic kind for a value, derived from IR pattern detectors (R-0~R-6).
+///
+/// Each variant corresponds to a mined regularity from bun_fp_reduction_plan.
+/// These tags are written by Layer 1 detectors and queried by Layer 3 passes
+/// before emitting issues. If a value has a suppression tag, the issue is
+/// suppressed or downgraded.
+///
+/// This is NOT a whitelist — each variant has a clear semantic definition
+/// derived from IR patterns, not from function names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SemanticKind {
+    // ── Existing (preserved for backward compatibility) ──
+    /// Unknown or cannot be determined.
+    Unknown,
+
+    // ── R-0: LLVM parameter attributes (covers write_to_immutable 1877 FP) ──
+    /// Function parameter has LLVM `readonly` attribute → Rust &T / C const ptr.
+    /// Writing through a pointer derived from this param is a true violation.
+    ReadonlyParam,
+    /// Function parameter lacks `readonly` → Rust &mut T / C mutable ptr.
+    /// Writing through a pointer derived from this param is legal.
+    MutableParam,
+
+    // ── R-2: Interior mutability (covers write_to_immutable residual ~100 FP) ──
+    /// Type chain contains UnsafeCell<T> → Cell/RefCell/Mutex/RwLock/Atomic*/OnceLock.
+    /// Writing through &T is safe when the type has interior mutability.
+    InteriorMutability,
+
+    // ── R-1: Heap provenance (covers borrow_escape 71 FP) ──
+    /// Value originates from heap allocation (Box, Arc, Rc, Vec, String, *mut T).
+    /// Not a stack escape — passing to FFI is safe.
+    HeapProvenance,
+    /// Value originates from global/static storage.
+    /// Not a stack escape — passing to FFI is safe for read.
+    GlobalProvenance,
+
+    // ── R-6: Ownership transfer (covers cross_language_free 4 FP) ──
+    /// Value comes from Box/CString/Vec::into_raw — ownership transferred.
+    /// Subsequent C free() is by-design, not a cross_language_free bug.
+    IntoRawTransfer,
+
+    // ── R-4: POSIX syscall classification ──
+    /// POSIX file operation (unlink, close, open, rename, etc.).
+    /// Not a memory management operation.
+    FileOperation,
+    /// POSIX network operation (socket, bind, connect, etc.).
+    /// Not a memory management operation.
+    NetworkOperation,
+    /// POSIX process operation (fork, execve, waitpid, etc.).
+    /// Not a memory management operation.
+    ProcessOperation,
+
+    // ── R-3: RAII drop (covers use_after_free 3 FP) ──
+    /// Compiler-inserted RAII drop/dealloc — not a user bug.
+    /// drop_in_place<T> or tail-position __rust_dealloc.
+    RaiiDropRelease,
+
+    // ── R-7: Library-level allocator release (covers mimalloc/zlib/openssl/sqlite etc.) ──
+    /// Release function from a library-level allocator pair.
+    /// mi_free / inflateEnd / EVP_CIPHER_CTX_free / sqlite3_finalize etc.
+    /// cross_language_free detection hitting this kind → suppress (legitimate intra-library release).
+    LibraryRelease,
+}
+
+impl SemanticKind {
+    /// Returns true if this kind should suppress write_to_immutable issues.
+    pub fn suppresses_write_to_immutable(&self) -> bool {
+        matches!(
+            self,
+            SemanticKind::MutableParam | SemanticKind::InteriorMutability
+        )
+    }
+
+    /// Returns true if this kind should suppress borrow_escape issues.
+    pub fn suppresses_borrow_escape(&self) -> bool {
+        matches!(
+            self,
+            SemanticKind::HeapProvenance | SemanticKind::GlobalProvenance
+        )
+    }
+
+    /// Returns true if this kind should suppress use_after_free issues.
+    pub fn suppresses_use_after_free(&self) -> bool {
+        matches!(self, SemanticKind::RaiiDropRelease)
+    }
+
+    /// Returns true if this kind should suppress cross_language_free issues.
+    pub fn suppresses_cross_language_free(&self) -> bool {
+        matches!(
+            self,
+            SemanticKind::IntoRawTransfer
+                | SemanticKind::FileOperation
+                | SemanticKind::NetworkOperation
+                | SemanticKind::ProcessOperation
+                | SemanticKind::LibraryRelease
+        )
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Semantic Resolution — a single resolution entry for a value
+// ──────────────────────────────────────────────────────────────────────────
+
+/// A resolution entry for a value, recording why it has a particular
+/// semantic kind. Multiple resolutions can exist for the same value
+/// (e.g., a value can be both HeapProvenance and MutableParam).
+#[derive(Debug, Clone)]
+pub struct SemanticResolution {
+    /// The semantic kind of this resolution.
+    pub kind: SemanticKind,
+    /// Confidence of this resolution (0.0 - 1.0).
+    pub confidence: f32,
+    /// Evidence supporting this resolution (e.g., "alloca DI=Box<ClientSession>").
+    pub evidence: String,
+    /// The R-N pattern that produced this resolution (e.g., "R-0", "R-3").
+    pub pattern_id: &'static str,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // Semantic Node — a single semantic annotation for an IR element
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -492,8 +614,9 @@ impl SyscallSemantic {
 /// 1. The provenance of pointers crossing the boundary
 /// 2. The type semantics of Rust types involved
 /// 3. The syscall semantic of the callee function
+/// 4. Semantic resolutions from R-0~R-6 pattern detectors
 ///
-/// These three dimensions determine whether the FFI call is safe.
+/// These dimensions determine whether the FFI call is safe.
 #[derive(Debug, Clone)]
 pub struct SemanticNode {
     /// The function or symbol this annotation applies to.
@@ -504,6 +627,8 @@ pub struct SemanticNode {
     pub type_semantic: TypeSemantic,
     /// Syscall semantic of the callee (for FFI calls).
     pub syscall_semantic: SyscallSemantic,
+    /// Semantic resolutions from R-0~R-6 pattern detectors.
+    pub resolutions: Vec<SemanticResolution>,
     /// Combined safety score (0.0 = dangerous, 1.0 = safe).
     pub safety_score: f32,
     /// Human-readable reason for the safety score.
@@ -527,6 +652,7 @@ impl SemanticNode {
             provenance,
             type_semantic,
             syscall_semantic,
+            resolutions: Vec::new(),
             safety_score,
             reason,
         }
@@ -604,14 +730,17 @@ impl SemanticNode {
 /// The semantic tree for an entire IR module.
 ///
 /// Built by walking the IR and annotating each FFI boundary with
-/// provenance, type, and syscall semantics. Used by downstream passes
-/// to make informed decisions about issue severity.
+/// provenance, type, syscall semantics, and R-0~R-6 resolutions.
+/// Used by downstream passes to make informed decisions about issue
+/// severity and FP suppression.
 #[derive(Debug, Clone)]
 pub struct SemanticTree {
     /// Semantic annotations for each FFI call.
     nodes: Vec<SemanticNode>,
     /// Index from callee symbol to node indices.
     callee_index: HashMap<String, Vec<usize>>,
+    /// Resolution index: symbol -> semantic resolutions (R-0~R-6).
+    resolution_index: HashMap<String, Vec<SemanticResolution>>,
 }
 
 impl SemanticTree {
@@ -620,6 +749,7 @@ impl SemanticTree {
         Self {
             nodes: Vec::new(),
             callee_index: HashMap::new(),
+            resolution_index: HashMap::new(),
         }
     }
 
@@ -634,6 +764,78 @@ impl SemanticTree {
                 .push(idx);
         }
         self.nodes.push(node);
+    }
+
+    /// Adds a semantic resolution for a symbol.
+    ///
+    /// Multiple resolutions can exist for the same symbol (e.g., a value
+    /// can be both HeapProvenance and MutableParam).
+    pub fn add_resolution(&mut self, symbol: &str, resolution: SemanticResolution) {
+        self.resolution_index
+            .entry(symbol.to_string())
+            .or_default()
+            .push(resolution);
+    }
+
+    /// Queries whether a symbol has a specific semantic kind.
+    ///
+    /// Returns the highest-confidence resolution matching the kind,
+    /// or None if no such resolution exists.
+    pub fn has_kind(&self, symbol: &str, kind: SemanticKind) -> Option<&SemanticResolution> {
+        self.resolution_index.get(symbol).and_then(|resolutions| {
+            resolutions
+                .iter()
+                .filter(|r| r.kind == kind)
+                .max_by(|a, b| {
+                    a.confidence
+                        .partial_cmp(&b.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+    }
+
+    /// Returns all resolutions for a symbol.
+    pub fn all_resolutions(&self, symbol: &str) -> &[SemanticResolution] {
+        self.resolution_index
+            .get(symbol)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Returns true if any resolution for the symbol would suppress
+    /// write_to_immutable issues.
+    pub fn suppresses_write_to_immutable(&self, symbol: &str) -> bool {
+        self.resolution_index
+            .get(symbol)
+            .map(|rs| rs.iter().any(|r| r.kind.suppresses_write_to_immutable()))
+            .unwrap_or(false)
+    }
+
+    /// Returns true if any resolution for the symbol would suppress
+    /// borrow_escape issues.
+    pub fn suppresses_borrow_escape(&self, symbol: &str) -> bool {
+        self.resolution_index
+            .get(symbol)
+            .map(|rs| rs.iter().any(|r| r.kind.suppresses_borrow_escape()))
+            .unwrap_or(false)
+    }
+
+    /// Returns true if any resolution for the symbol would suppress
+    /// use_after_free issues.
+    pub fn suppresses_use_after_free(&self, symbol: &str) -> bool {
+        self.resolution_index
+            .get(symbol)
+            .map(|rs| rs.iter().any(|r| r.kind.suppresses_use_after_free()))
+            .unwrap_or(false)
+    }
+
+    /// Returns true if any resolution for the symbol would suppress
+    /// cross_language_free issues.
+    pub fn suppresses_cross_language_free(&self, symbol: &str) -> bool {
+        self.resolution_index
+            .get(symbol)
+            .map(|rs| rs.iter().any(|r| r.kind.suppresses_cross_language_free()))
+            .unwrap_or(false)
     }
 
     /// Returns all semantic nodes.

@@ -46,6 +46,18 @@ pub enum EvidenceKind {
     IrPattern,
     /// Manual model annotation.
     ModelAnnotation,
+    /// Parameter mutability inference (readonly=&T, mutable=&mut T).
+    /// Evidence: bun_fp R-0 — LLVM readonly/noalias parameter attributes.
+    ParameterMutability,
+    /// Ownership transfer via into_raw (Box/CString/Vec::into_raw).
+    /// Evidence: bun_fp R-6 — intentional ownership transfer to caller.
+    OwnershipTransfer,
+    /// POSIX syscall semantic classification (file/net/proc/mem).
+    /// Evidence: bun_fp R-4 — non-memory POSIX ops don't participate in UAF.
+    PosixSyscallClass,
+    /// RAII drop release (compiler-inserted cleanup, not user bug).
+    /// Evidence: bun_fp R-3 — drop_in_place / tail dealloc.
+    RaiiDropRelease,
     /// Unknown or insufficient evidence.
     Insufficient,
 }

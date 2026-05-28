@@ -94,6 +94,55 @@ pub enum BehaviorPattern {
     ///
     /// By-design FFI boundary — the cross-language call is intentional.
     InternalBridge,
+
+    // ── New patterns from bun_fp_reduction_plan R-0~R-6 ──
+    /// Borrowed return pattern (R-0 complementary):
+    /// Function returns a pointer derived from a `readonly` parameter
+    /// or from a field load (not a fresh allocation).
+    /// Evidence: bun_fp R-0 — `readonly` param means &T, return is &T derived.
+    BorrowedReturn {
+        /// Whether the source parameter has `readonly` attribute.
+        from_readonly_param: bool,
+    },
+
+    /// RAII drop-release pattern (R-3):
+    /// Function is a `drop_in_place<T>` or has a tail-position `__rust_dealloc`.
+    /// This is compiler-inserted scope-end deallocation, NOT a user bug.
+    /// Evidence: bun_fp R-3 — 23,904 drop_in_place entries in bun_install.ll.
+    RAiiDropRelease {
+        /// Whether this is a drop_in_place context (vs tail dealloc).
+        is_drop_in_place: bool,
+    },
+
+    /// Ownership transfer via into_raw (R-6):
+    /// `Box::into_raw` / `CString::into_raw` / `Vec::into_raw` returns
+    /// a raw pointer, transferring ownership to the caller. Subsequent
+    /// C `free()` is by-design, NOT a cross_language_free bug.
+    /// Evidence: bun_fp R-6 — rust_ffi_bugs.ll, bun_*.bc.
+    IntoRawTransfer,
+
+    /// POSIX syscall non-memory operation (R-4):
+    /// The callee is a POSIX function that performs file/network/process
+    /// operations — NOT memory management. It should not participate in
+    /// cross_language_free or use_after_free analysis.
+    /// Evidence: bun_fp R-4 — unlink, close, socket, execve, etc.
+    PosixNonMemoryOp {
+        /// Category: file, network, process, or other non-mem operation.
+        category: PosixOpCategory,
+    },
+}
+
+/// Category for POSIX non-memory operations (R-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PosixOpCategory {
+    /// File operations: open, close, read, write, unlink, rename, etc.
+    File,
+    /// Network operations: socket, bind, connect, listen, send, recv, etc.
+    Network,
+    /// Process operations: fork, execve, waitpid, kill, etc.
+    Process,
+    /// Other non-memory operations: time, signal, etc.
+    Other,
 }
 
 /// Summary of a function's behavior derived from its IR instruction stream.

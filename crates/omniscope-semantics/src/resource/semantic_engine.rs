@@ -12,9 +12,18 @@
 //! ```text
 //! IRModule ──→ extract_behavior(callee_body) ──→ FunctionBehavior
 //!           ──→ extract_behavior(caller_body) ──→ FunctionBehavior
+//!           ──→ FamilyRegistry.lookup(callee) ──→ FamilyEntry
 //!           ──→ assess_ffi_safety(callee, caller, module) ──→ FFISafetyAssessment
 //! ```
+//!
+//! # R-0~R-6 Integration (bun_fp_reduction_plan)
+//!
+//! The engine now integrates with:
+//! - FamilyRegistry for 20 built-in families (7 new from IR Pattern Atlas)
+//! - Structural inference for RAII drop (R-3), into_raw (R-6), POSIX (R-4)
+//! - Parameter attribute inference for readonly/mutable (R-0)
 
+use crate::resource::family_registry::FamilyRegistry;
 use crate::resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior};
 use omniscope_ir::{IRInstructionKind, IRModule};
 
@@ -144,6 +153,8 @@ impl FFISafetyAssessment {
 /// Assess the safety of an FFI call using IR instruction-level semantic derivation.
 ///
 /// This is the main entry point that replaces `SyscallSemantic::classify()`.
+/// Integrates with FamilyRegistry for 20 built-in families and structural
+/// inference patterns (R-0~R-6).
 pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISafetyAssessment {
     let callee_body = module.function_bodies.get(callee);
     let caller_body = module.function_bodies.get(caller);
@@ -152,6 +163,175 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
     let caller_behavior = caller_body.map(extract_behavior);
 
     let mut evidence = Vec::new();
+
+    // ── Step 0: Check FamilyRegistry for known symbols ──
+    // This covers all 20 families including the 7 new library-managed ones
+    // from IR Pattern Atlas (zlib, openssl, sqlite, go_cgo, mimalloc, etc.)
+    let registry = FamilyRegistry::new();
+    if let Some(entry) = registry.lookup(callee) {
+        use crate::resource::family_registry::SymbolEffect;
+        match entry.effect {
+            SymbolEffect::Acquire => {
+                evidence.push(IREvidence {
+                    instruction_kind: IRInstructionKind::Call,
+                    reasoning: format!(
+                        "Callee '{}' is a known acquire for family {:?}",
+                        callee, entry.family_id
+                    ),
+                });
+                return FFISafetyAssessment {
+                    callee: callee.to_string(),
+                    caller: caller.to_string(),
+                    caller_behavior,
+                    callee_behavior,
+                    verdict: FFIVerdict::ConcernOwnershipTransfer,
+                    evidence,
+                };
+            }
+            SymbolEffect::Release | SymbolEffect::ConditionalRelease => {
+                // R-7: Library-managed families (zlib/openssl/sqlite/mimalloc)
+                // have paired init+end release functions. These are legitimate
+                // intra-library releases, NOT cross-language free bugs.
+                let is_library_managed = registry
+                    .family(entry.family_id)
+                    .is_some_and(|f| f.kind == omniscope_types::FamilyKind::LibraryManaged);
+                if is_library_managed {
+                    evidence.push(IREvidence {
+                        instruction_kind: IRInstructionKind::Call,
+                        reasoning: format!(
+                            "R-7: Callee '{}' is a library-managed release for family {:?} — legitimate intra-library release",
+                            callee, entry.family_id
+                        ),
+                    });
+                    return FFISafetyAssessment {
+                        callee: callee.to_string(),
+                        caller: caller.to_string(),
+                        caller_behavior,
+                        callee_behavior,
+                        verdict: FFIVerdict::SafeConditionalRelease,
+                        evidence,
+                    };
+                }
+                evidence.push(IREvidence {
+                    instruction_kind: IRInstructionKind::Call,
+                    reasoning: format!(
+                        "Callee '{}' is a known release for family {:?}",
+                        callee, entry.family_id
+                    ),
+                });
+                return FFISafetyAssessment {
+                    callee: callee.to_string(),
+                    caller: caller.to_string(),
+                    caller_behavior,
+                    callee_behavior,
+                    verdict: FFIVerdict::ConcernOwnershipTransfer,
+                    evidence,
+                };
+            }
+            SymbolEffect::Retain => {
+                // Retain operations (Py_INCREF, objc_retain) are safe
+                evidence.push(IREvidence {
+                    instruction_kind: IRInstructionKind::Call,
+                    reasoning: format!(
+                        "Callee '{}' is a known retain for family {:?} — no ownership transfer",
+                        callee, entry.family_id
+                    ),
+                });
+                return FFISafetyAssessment {
+                    callee: callee.to_string(),
+                    caller: caller.to_string(),
+                    caller_behavior,
+                    callee_behavior,
+                    verdict: FFIVerdict::SafeNoOwnership,
+                    evidence,
+                };
+            }
+        }
+    }
+
+    // ── Step 0.5: Check new BehaviorPatterns from R-0~R-6 ──
+    if let Some(ref cb) = callee_behavior {
+        // R-6: IntoRawTransfer — ownership transferred, C free() is legal
+        if cb
+            .patterns
+            .iter()
+            .any(|p| matches!(p, BehaviorPattern::IntoRawTransfer))
+        {
+            evidence.push(IREvidence {
+                instruction_kind: IRInstructionKind::Call,
+                reasoning: "Callee is into_raw transfer — ownership moved to caller".to_string(),
+            });
+            return FFISafetyAssessment {
+                callee: callee.to_string(),
+                caller: caller.to_string(),
+                caller_behavior,
+                callee_behavior,
+                verdict: FFIVerdict::SafeInternalBridge,
+                evidence,
+            };
+        }
+
+        // R-3: RAiiDropRelease — compiler-inserted cleanup, not a bug
+        if cb
+            .patterns
+            .iter()
+            .any(|p| matches!(p, BehaviorPattern::RAiiDropRelease { .. }))
+        {
+            evidence.push(IREvidence {
+                instruction_kind: IRInstructionKind::Call,
+                reasoning: "Callee is RAII drop release — compiler-inserted cleanup".to_string(),
+            });
+            return FFISafetyAssessment {
+                callee: callee.to_string(),
+                caller: caller.to_string(),
+                caller_behavior,
+                callee_behavior,
+                verdict: FFIVerdict::SafeConditionalRelease,
+                evidence,
+            };
+        }
+
+        // R-4: PosixNonMemoryOp — file/network/process, not memory
+        if cb
+            .patterns
+            .iter()
+            .any(|p| matches!(p, BehaviorPattern::PosixNonMemoryOp { .. }))
+        {
+            evidence.push(IREvidence {
+                instruction_kind: IRInstructionKind::Call,
+                reasoning: "Callee is a POSIX non-memory operation — not memory management"
+                    .to_string(),
+            });
+            return FFISafetyAssessment {
+                callee: callee.to_string(),
+                caller: caller.to_string(),
+                caller_behavior,
+                callee_behavior,
+                verdict: FFIVerdict::SafeNoOwnership,
+                evidence,
+            };
+        }
+
+        // R-0: BorrowedReturn — returns borrowed pointer from readonly param
+        if cb
+            .patterns
+            .iter()
+            .any(|p| matches!(p, BehaviorPattern::BorrowedReturn { .. }))
+        {
+            evidence.push(IREvidence {
+                instruction_kind: IRInstructionKind::Call,
+                reasoning: "Callee returns borrowed pointer — no ownership transfer".to_string(),
+            });
+            return FFISafetyAssessment {
+                callee: callee.to_string(),
+                caller: caller.to_string(),
+                caller_behavior,
+                callee_behavior,
+                verdict: FFIVerdict::SafePointerProjection,
+                evidence,
+            };
+        }
+    }
 
     // ── Step 1: If callee has a body, derive from callee behavior ──
     if let Some(ref cb) = callee_behavior {
@@ -347,14 +527,118 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // as FALLBACK when IR-level derivation is impossible (no function body).
     // When a function body IS available, we derive from IR patterns.
 
+    // ── R-3: RAII drop glue — compiler-inserted cleanup ──
+    if callee.contains("drop_in_place") || callee.contains("4drop") && callee.starts_with("_R") {
+        return FFIVerdict::SafeConditionalRelease;
+    }
+    if callee == "__rust_dealloc" || callee == "__rdl_dealloc" || callee == "__rg_dealloc" {
+        return FFIVerdict::SafeConditionalRelease;
+    }
+
+    // ── R-6: into_raw — ownership transfer (Box/CString/Vec::into_raw) ──
+    if callee.contains("into_raw") && (callee.starts_with("_R") || callee.contains("::into_raw")) {
+        return FFIVerdict::SafeInternalBridge;
+    }
+
+    // ── R-4: POSIX syscall classification ──
+    // File operations — not memory management
+    if matches!(
+        callee,
+        "open"
+            | "close"
+            | "read"
+            | "write"
+            | "unlink"
+            | "rename"
+            | "symlink"
+            | "mkdir"
+            | "rmdir"
+            | "stat"
+            | "fstat"
+            | "lstat"
+            | "chmod"
+            | "chown"
+            | "fcntl"
+            | "ioctl"
+            | "fsync"
+            | "fdatasync"
+            | "dup"
+            | "dup2"
+            | "pipe"
+            | "getcwd"
+            | "chdir"
+            | "opendir"
+            | "readdir"
+            | "closedir"
+            | "access"
+            | "faccessat"
+            | "truncate"
+            | "ftruncate"
+            | "realpath"
+    ) {
+        return FFIVerdict::SafeNoOwnership;
+    }
+    // Network operations — not memory management
+    if matches!(
+        callee,
+        "socket"
+            | "bind"
+            | "connect"
+            | "listen"
+            | "accept"
+            | "send"
+            | "recv"
+            | "sendto"
+            | "recvfrom"
+            | "shutdown"
+            | "getsockname"
+            | "getpeername"
+            | "getsockopt"
+            | "setsockopt"
+            | "select"
+            | "poll"
+            | "epoll_create"
+            | "epoll_ctl"
+            | "epoll_wait"
+            | "kqueue"
+            | "kevent"
+    ) {
+        return FFIVerdict::SafeNoOwnership;
+    }
+    // Process operations — not memory management
+    if matches!(
+        callee,
+        "fork"
+            | "vfork"
+            | "execve"
+            | "execv"
+            | "execl"
+            | "waitpid"
+            | "wait"
+            | "kill"
+            | "raise"
+            | "exit"
+            | "_exit"
+            | "getpid"
+            | "getppid"
+            | "prctl"
+            | "ptrace"
+            | "getrlimit"
+            | "setrlimit"
+    ) {
+        return FFIVerdict::SafeNoOwnership;
+    }
+
     // SIMD/compute acceleration — pure computation
     if callee.starts_with("simdutf__") || callee.starts_with("highway_") {
         return FFIVerdict::SafeNoOwnership;
     }
 
     // Project-internal FFI bridges (by-design cross-language calls)
-    if callee.starts_with("Bun__") || callee.starts_with("BunString__")
-        || callee.starts_with("WTF__") || callee.starts_with("WTFStringImpl__")
+    if callee.starts_with("Bun__")
+        || callee.starts_with("BunString__")
+        || callee.starts_with("WTF__")
+        || callee.starts_with("WTFStringImpl__")
         || callee.starts_with("__bun_dispatch__")
     {
         return FFIVerdict::SafeInternalBridge;
@@ -363,11 +647,29 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // Well-known libc data queries — always safe (universal semantic)
     if matches!(
         callee,
-        "strlen" | "strnlen" | "strcmp" | "strncmp" | "strcasecmp" | "strncasecmp"
-        | "memcmp" | "memmem" | "strstr" | "strchr" | "strrchr"
-        | "getenv" | "secure_getenv" | "sysconf" | "getentropy"
-        | "memcpy" | "memset" | "memmove" | "strcpy" | "strncpy"
-        | "strerror" | "__error" | "getcwd"
+        "strlen"
+            | "strnlen"
+            | "strcmp"
+            | "strncmp"
+            | "strcasecmp"
+            | "strncasecmp"
+            | "memcmp"
+            | "memmem"
+            | "strstr"
+            | "strchr"
+            | "strrchr"
+            | "getenv"
+            | "secure_getenv"
+            | "sysconf"
+            | "getentropy"
+            | "memcpy"
+            | "memset"
+            | "memmove"
+            | "strcpy"
+            | "strncpy"
+            | "strerror"
+            | "__error"
+            | "getcwd"
     ) {
         return FFIVerdict::SafeNoOwnership;
     }
@@ -375,12 +677,24 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // Well-known thread/process/time operations — no ownership
     if matches!(
         callee,
-        "pthread_mutex_lock" | "pthread_mutex_unlock" | "pthread_mutex_trylock"
-        | "pthread_mutex_init" | "pthread_mutex_destroy"
-        | "pthread_cond_wait" | "pthread_cond_signal" | "pthread_cond_broadcast"
-        | "pthread_setname_np" | "pthread_threadid_np" | "pthread_exit"
-        | "clock_gettime" | "gettimeofday" | "nanosleep" | "time"
-        | "sigaction" | "sigemptyset" | "sigprocmask"
+        "pthread_mutex_lock"
+            | "pthread_mutex_unlock"
+            | "pthread_mutex_trylock"
+            | "pthread_mutex_init"
+            | "pthread_mutex_destroy"
+            | "pthread_cond_wait"
+            | "pthread_cond_signal"
+            | "pthread_cond_broadcast"
+            | "pthread_setname_np"
+            | "pthread_threadid_np"
+            | "pthread_exit"
+            | "clock_gettime"
+            | "gettimeofday"
+            | "nanosleep"
+            | "time"
+            | "sigaction"
+            | "sigemptyset"
+            | "sigprocmask"
     ) {
         return FFIVerdict::SafeNoOwnership;
     }
@@ -388,10 +702,19 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // Memory management — the real concern
     if matches!(
         callee,
-        "malloc" | "calloc" | "realloc" | "free" | "reallocarray"
-        | "__rust_alloc" | "__rust_dealloc" | "__rust_realloc" | "__rust_alloc_zeroed"
-    ) || callee.starts_with("_Zdl") || callee.starts_with("_Zda")
-        || callee.starts_with("_Znw") || callee.starts_with("_Zna")
+        "malloc"
+            | "calloc"
+            | "realloc"
+            | "free"
+            | "reallocarray"
+            | "__rust_alloc"
+            | "__rust_dealloc"
+            | "__rust_realloc"
+            | "__rust_alloc_zeroed"
+    ) || callee.starts_with("_Zdl")
+        || callee.starts_with("_Zda")
+        || callee.starts_with("_Znw")
+        || callee.starts_with("_Zna")
     {
         return FFIVerdict::ConcernOwnershipTransfer;
     }
@@ -403,8 +726,10 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
             return FFIVerdict::ConcernOwnershipTransfer;
         }
         // Thread sync — interior mutability
-        if callee.contains("5mutex") || callee.contains("6rwlock")
-            || callee.contains("4once") || callee.contains("7condvar")
+        if callee.contains("5mutex")
+            || callee.contains("6rwlock")
+            || callee.contains("4once")
+            || callee.contains("7condvar")
         {
             return FFIVerdict::SafeNoOwnership;
         }

@@ -43,6 +43,30 @@ impl FamilyId {
     /// Zig allocator: modeled through allocator-vtable evidence
     pub const ZIG_ALLOCATOR: FamilyId = FamilyId(13);
 
+    // ── Library-managed families (from IR Pattern Atlas §1.4, §4, §7) ──
+
+    /// zlib stream family: inflateInit_/inflateEnd, deflateInit_/deflateEnd.
+    /// Evidence: `zlib_binding.ll` — library-level resource pairing.
+    pub const ZLIB_STREAM: FamilyId = FamilyId(14);
+    /// OpenSSL resource family: EVP_CIPHER_CTX_new/_free, BIO_new/_free,
+    /// RSA_new/_free, BN_new/_free.
+    /// Evidence: `openssl_wrapper.ll` — library-level resource pairing.
+    pub const OPENSSL_RESOURCE: FamilyId = FamilyId(15);
+    /// SQLite resource family: sqlite3_open/_close, sqlite3_prepare_v2/_finalize.
+    /// Evidence: `sqlite_binding.ll` — library-level resource pairing.
+    pub const SQLITE_RESOURCE: FamilyId = FamilyId(16);
+    /// Go cgo internal family: _cgo_allocate/_cgo_free, _Cfunc_GoMalloc/_Cfunc_GoFree.
+    /// Evidence: `go_cgo_bugs.ll` — cgo runtime memory management.
+    pub const GO_CGO: FamilyId = FamilyId(17);
+    /// mimalloc family: mi_malloc/mi_free/mi_realloc/mi_heap_destroy.
+    /// Evidence: `bun_alloc-ef7250b81132b4bd.ll` — Bun's custom allocator.
+    pub const MIMALLOC: FamilyId = FamilyId(18);
+    /// C# COM family: CoTaskMemAlloc/CoTaskMemFree (separate from HGlobal).
+    /// Evidence: `csharp_ffi_bugs.ll` — COM interop memory management.
+    /// Note: Swift ARC removed — Swift is not in this release's scope
+    /// (bun_fp_reduction_plan §1.A.3: Swift excluded).
+    pub const CSHARP_COM: FamilyId = FamilyId(19);
+
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 }
@@ -60,6 +84,10 @@ pub enum FamilyKind {
     VtableDispatched,
     /// Runtime handle-based (JNI refs, C# SafeHandle).
     HandleBased,
+    /// Library-managed pairing (zlib/openssl/sqlite init+end).
+    /// The library internally manages resource lifecycle through
+    /// paired init/end functions that cannot be inferred from IR alone.
+    LibraryManaged,
     /// User-inferred family from model mining.
     UserDefined,
 }
@@ -243,6 +271,72 @@ pub static FAMILY_ZIG_ALLOCATOR: ResourceFamily = ResourceFamily {
     compatible_releases: &[],
 };
 
+// ── Library-managed families (IR Pattern Atlas §1.4, §4, §7) ──
+
+/// zlib stream family: inflateInit_/inflateEnd, deflateInit_/deflateEnd.
+/// Evidence: `zlib_binding.ll` — paired init/end resource management.
+pub static FAMILY_ZLIB_STREAM: ResourceFamily = ResourceFamily {
+    id: FamilyId::ZLIB_STREAM,
+    name: "zlib_stream",
+    kind: FamilyKind::LibraryManaged,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[],
+};
+
+/// OpenSSL resource family: EVP_CIPHER_CTX_new/_free, BIO_new/_free,
+/// RSA_new/_free, BN_new/_free.
+/// Evidence: `openssl_wrapper.ll` — paired new/free resource management.
+pub static FAMILY_OPENSSL_RESOURCE: ResourceFamily = ResourceFamily {
+    id: FamilyId::OPENSSL_RESOURCE,
+    name: "openssl_resource",
+    kind: FamilyKind::LibraryManaged,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[],
+};
+
+/// SQLite resource family: sqlite3_open/_close, sqlite3_prepare_v2/_finalize.
+/// Evidence: `sqlite_binding.ll` — paired open/close resource management.
+pub static FAMILY_SQLITE_RESOURCE: ResourceFamily = ResourceFamily {
+    id: FamilyId::SQLITE_RESOURCE,
+    name: "sqlite_resource",
+    kind: FamilyKind::LibraryManaged,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[],
+};
+
+/// Go cgo internal family: _cgo_allocate/_cgo_free, _Cfunc_GoMalloc/_Cfunc_GoFree.
+/// Evidence: `go_cgo_bugs.ll` — cgo runtime memory management.
+pub static FAMILY_GO_CGO: ResourceFamily = ResourceFamily {
+    id: FamilyId::GO_CGO,
+    name: "go_cgo",
+    kind: FamilyKind::GcManaged,
+    lifetime: LifetimeDomain::GcManaged,
+    compatible_releases: &[FamilyId::GO_GC],
+};
+
+/// mimalloc family: mi_malloc/mi_free/mi_realloc/mi_heap_destroy.
+/// Evidence: `bun_alloc-ef7250b81132b4bd.ll` — Bun's custom allocator.
+/// Compatible with C_HEAP because mimalloc is a malloc replacement.
+pub static FAMILY_MIMALLOC: ResourceFamily = ResourceFamily {
+    id: FamilyId::MIMALLOC,
+    name: "mimalloc",
+    kind: FamilyKind::ManualHeap,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[FamilyId::C_HEAP],
+};
+
+/// C# COM family: CoTaskMemAlloc/CoTaskMemFree.
+/// Evidence: `csharp_ffi_bugs.ll` — COM interop memory management.
+/// Note: Swift ARC removed — Swift is not in this release's scope
+/// (bun_fp_reduction_plan §1.A.3: Swift excluded).
+pub static FAMILY_CSHARP_COM: ResourceFamily = ResourceFamily {
+    id: FamilyId::CSHARP_COM,
+    name: "csharp_com",
+    kind: FamilyKind::HandleBased,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[FamilyId::C_HEAP],
+};
+
 /// Serializable form of `ResourceFamily` for serde round-tripping.
 /// `ResourceFamily` uses `&'static str` and `&'static [FamilyId]` which
 /// cannot derive `Deserialize`, so we convert to this owned form.
@@ -282,6 +376,13 @@ pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_CSHARP_COTASK,
     &FAMILY_GO_GC,
     &FAMILY_ZIG_ALLOCATOR,
+    // Library-managed families (IR Pattern Atlas)
+    &FAMILY_ZLIB_STREAM,
+    &FAMILY_OPENSSL_RESOURCE,
+    &FAMILY_SQLITE_RESOURCE,
+    &FAMILY_GO_CGO,
+    &FAMILY_MIMALLOC,
+    &FAMILY_CSHARP_COM,
 ];
 
 #[cfg(test)]
@@ -292,8 +393,8 @@ mod tests {
     fn test_builtin_families_count() {
         assert_eq!(
             BUILTIN_FAMILIES.len(),
-            13,
-            "Must have exactly 13 built-in families"
+            19,
+            "Must have exactly 19 built-in families"
         );
     }
 
