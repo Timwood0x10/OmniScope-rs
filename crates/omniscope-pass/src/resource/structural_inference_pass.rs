@@ -246,15 +246,14 @@ impl Pass for StructuralInferencePass {
         if let Some(ref module) = ir_module {
             let registry = FamilyRegistry::new();
             for call in &module.calls {
-                let callee = call.callee.trim_start_matches('@');
-                // If the callee is NOT a known alloc/release, it receives
-                // pointers from the caller → R-8 FromParameter.
-                if registry.lookup(callee).is_none() {
-                    srt_resolutions
-                        .entry(callee.to_string())
-                        .or_insert_with(|| vec![SemanticKind::FromParameter]);
-                }
-                // The caller always has its parameters from the caller's caller.
+                // Only annotate the CALLER with FromParameter — the caller's
+                // pointers come from its own caller (parameters), so passing
+                // them to FFI is not a "stack escape".
+                //
+                // Do NOT annotate the CALLEE with FromParameter. External FFI
+                // functions may return null or allocate — we don't know their
+                // pointer provenance. Annotating them would suppress valid
+                // BorrowEscape/UncheckedReturn issues.
                 let caller = call.caller.trim_start_matches('@');
                 if !caller.is_empty() && registry.lookup(caller).is_none() {
                     srt_resolutions
