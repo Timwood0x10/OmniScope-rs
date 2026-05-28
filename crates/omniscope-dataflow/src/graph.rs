@@ -341,4 +341,228 @@ mod tests {
         assert_eq!(loc.offset, Some(8));
         assert_eq!(loc.size, Some(4));
     }
+
+    /// Objective: Verify that a self-loop edge makes a node both its own successor and predecessor.
+    /// Invariants: successors(n) and predecessors(n) both contain n when edge n->n exists.
+    #[test]
+    fn test_self_loop() {
+        let mut graph = DataFlowGraph::new();
+        let node = DataNode::new(ValueType::Variable("x".to_string()));
+        let id = graph.add_node(node);
+        graph.add_edge(DataEdge::new(id, id, EdgeType::Assignment));
+
+        let succs = graph.successors(id);
+        assert!(
+            succs.contains(&id),
+            "self-loop node must be its own successor"
+        );
+
+        let preds = graph.predecessors(id);
+        assert!(
+            preds.contains(&id),
+            "self-loop node must be its own predecessor"
+        );
+    }
+
+    /// Objective: Verify that a cyclic graph a->b->c->a has correct predecessor/successor relationships.
+    /// Invariants: Each node's successors and predecessors reflect the cycle structure.
+    #[test]
+    fn test_cycle_detection() {
+        let mut graph = DataFlowGraph::new();
+        let a = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let b = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        let c = graph.add_node(DataNode::new(ValueType::Variable("c".to_string())));
+
+        graph.add_edge(DataEdge::new(a, b, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(b, c, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(c, a, EdgeType::Assignment));
+
+        assert_eq!(graph.successors(a), vec![b], "a's successor must be b");
+        assert_eq!(graph.successors(b), vec![c], "b's successor must be c");
+        assert_eq!(graph.successors(c), vec![a], "c's successor must be a");
+
+        assert_eq!(graph.predecessors(a), vec![c], "a's predecessor must be c");
+        assert_eq!(graph.predecessors(b), vec![a], "b's predecessor must be a");
+        assert_eq!(graph.predecessors(c), vec![b], "c's predecessor must be b");
+    }
+
+    /// Objective: Verify that clear() resets all graph state to empty defaults.
+    /// Invariants: After clear(), node_count=0, edge_count=0, entry=None, exit=None.
+    #[test]
+    fn test_clear_resets_state() {
+        let mut graph = DataFlowGraph::new();
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n2 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        graph.add_edge(DataEdge::new(n1, n2, EdgeType::Assignment));
+        graph.set_entry(n1);
+        graph.set_exit(n2);
+
+        graph.clear();
+
+        assert_eq!(graph.node_count(), 0, "node_count must be 0 after clear");
+        assert_eq!(graph.edge_count(), 0, "edge_count must be 0 after clear");
+        assert_eq!(graph.entry(), None, "entry must be None after clear");
+        assert_eq!(graph.exit(), None, "exit must be None after clear");
+    }
+
+    /// Objective: Verify that get_node returns None for a non-existent node ID.
+    /// Invariants: Looking up an ID that was never assigned yields None.
+    #[test]
+    fn test_get_node_returns_none_for_missing() {
+        let graph = DataFlowGraph::new();
+        assert!(
+            graph.get_node(999).is_none(),
+            "get_node for missing ID must return None"
+        );
+    }
+
+    /// Objective: Verify that get_edge returns None for a non-existent edge ID.
+    /// Invariants: Looking up an ID that was never assigned yields None.
+    #[test]
+    fn test_get_edge_returns_none_for_missing() {
+        let graph = DataFlowGraph::new();
+        assert!(
+            graph.get_edge(999).is_none(),
+            "get_edge for missing ID must return None"
+        );
+    }
+
+    /// Objective: Verify that set_entry and set_exit correctly configure entry/exit nodes.
+    /// Invariants: entry() and exit() return the IDs passed to set_entry/set_exit.
+    #[test]
+    fn test_set_entry_exit() {
+        let mut graph = DataFlowGraph::new();
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n2 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+
+        graph.set_entry(n1);
+        graph.set_exit(n2);
+
+        assert_eq!(
+            graph.entry(),
+            Some(n1),
+            "entry must return the ID set by set_entry"
+        );
+        assert_eq!(
+            graph.exit(),
+            Some(n2),
+            "exit must return the ID set by set_exit"
+        );
+    }
+
+    /// Objective: Verify that a newly created graph has no entry or exit node.
+    /// Invariants: entry() and exit() both return None on a fresh graph.
+    #[test]
+    fn test_entry_exit_default_none() {
+        let graph = DataFlowGraph::new();
+        assert_eq!(graph.entry(), None, "new graph must have no entry node");
+        assert_eq!(graph.exit(), None, "new graph must have no exit node");
+    }
+
+    /// Objective: Verify that edges of different EdgeType variants are stored correctly.
+    /// Invariants: Each edge retains its EdgeType variant after insertion.
+    #[test]
+    fn test_multiple_edge_types() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        let n2 = graph.add_node(DataNode::new(ValueType::Variable("c".to_string())));
+        let n3 = graph.add_node(DataNode::new(ValueType::Variable("d".to_string())));
+        let n4 = graph.add_node(DataNode::new(ValueType::Variable("e".to_string())));
+
+        let e0 = graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+        let e1 = graph.add_edge(DataEdge::new(n1, n2, EdgeType::Parameter(0)));
+        let e2 = graph.add_edge(DataEdge::new(n2, n3, EdgeType::Return));
+        let e3 = graph.add_edge(DataEdge::new(
+            n3,
+            n4,
+            EdgeType::FieldAccess("field".to_string()),
+        ));
+        let e4 = graph.add_edge(DataEdge::new(n0, n4, EdgeType::ArrayIndex));
+
+        assert_eq!(
+            graph.get_edge(e0).unwrap().edge_type,
+            EdgeType::Assignment,
+            "edge 0 must be Assignment"
+        );
+        assert_eq!(
+            graph.get_edge(e1).unwrap().edge_type,
+            EdgeType::Parameter(0),
+            "edge 1 must be Parameter(0)"
+        );
+        assert_eq!(
+            graph.get_edge(e2).unwrap().edge_type,
+            EdgeType::Return,
+            "edge 2 must be Return"
+        );
+        assert_eq!(
+            graph.get_edge(e3).unwrap().edge_type,
+            EdgeType::FieldAccess("field".to_string()),
+            "edge 3 must be FieldAccess"
+        );
+        assert_eq!(
+            graph.get_edge(e4).unwrap().edge_type,
+            EdgeType::ArrayIndex,
+            "edge 4 must be ArrayIndex"
+        );
+    }
+
+    /// Objective: Verify that a node with no incoming edges has empty predecessors.
+    /// Invariants: predecessors() for a root node returns an empty vec.
+    #[test]
+    fn test_predecessors_empty_for_root() {
+        let mut graph = DataFlowGraph::new();
+        let root = graph.add_node(DataNode::new(ValueType::Variable("root".to_string())));
+        let child = graph.add_node(DataNode::new(ValueType::Variable("child".to_string())));
+        graph.add_edge(DataEdge::new(root, child, EdgeType::Assignment));
+
+        assert!(
+            graph.predecessors(root).is_empty(),
+            "root node must have no predecessors"
+        );
+    }
+
+    /// Objective: Verify that a node with no outgoing edges has empty successors.
+    /// Invariants: successors() for a leaf node returns an empty vec.
+    #[test]
+    fn test_successors_empty_for_leaf() {
+        let mut graph = DataFlowGraph::new();
+        let parent = graph.add_node(DataNode::new(ValueType::Variable("parent".to_string())));
+        let leaf = graph.add_node(DataNode::new(ValueType::Variable("leaf".to_string())));
+        graph.add_edge(DataEdge::new(parent, leaf, EdgeType::Assignment));
+
+        assert!(
+            graph.successors(leaf).is_empty(),
+            "leaf node must have no successors"
+        );
+    }
+
+    /// Objective: Verify that DataNode::with_metadata stores key-value pairs correctly.
+    /// Invariants: Metadata inserted via with_metadata is retrievable from the HashMap.
+    #[test]
+    fn test_node_with_metadata() {
+        let node =
+            DataNode::new(ValueType::Variable("x".to_string())).with_metadata("key1", "value1");
+
+        assert_eq!(
+            node.metadata.get("key1"),
+            Some(&"value1".to_string()),
+            "metadata must contain key1=value1"
+        );
+        assert_eq!(
+            node.metadata.len(),
+            1,
+            "metadata must have exactly one entry"
+        );
+    }
+
+    /// Objective: Verify that MemoryLocation::new sets base but defaults offset and size to None.
+    /// Invariants: offset and size are both None unless explicitly set.
+    #[test]
+    fn test_memory_location_defaults() {
+        let loc = MemoryLocation::new("base_ptr");
+        assert_eq!(loc.base, "base_ptr", "base must match the provided string");
+        assert_eq!(loc.offset, None, "offset must default to None");
+        assert_eq!(loc.size, None, "size must default to None");
+    }
 }

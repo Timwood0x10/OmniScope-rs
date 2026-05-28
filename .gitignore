@@ -16,6 +16,7 @@ Cargo.lock
 .idea/
 .joycode/
 .CodeGraph/
+.claude/
 
 *.swp
 *.swo

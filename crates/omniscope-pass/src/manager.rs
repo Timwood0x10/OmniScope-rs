@@ -243,6 +243,7 @@ impl Default for PassManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pass::PassKind;
     use crate::{FFIBoundaryPass, RawFactCollectorPass, SummaryBuilderPass};
 
     #[test]
@@ -272,5 +273,135 @@ mod tests {
         manager.compute_order().unwrap();
 
         assert_eq!(manager.execution_order.len(), 3);
+    }
+
+    /// Mock pass with configurable name and dependencies for testing.
+    struct MockPass {
+        pass_name: &'static str,
+        pass_deps: Vec<&'static str>,
+    }
+
+    impl MockPass {
+        fn new(name: &'static str, deps: Vec<&'static str>) -> Self {
+            Self {
+                pass_name: name,
+                pass_deps: deps,
+            }
+        }
+    }
+
+    impl Pass for MockPass {
+        fn name(&self) -> &'static str {
+            self.pass_name
+        }
+        fn kind(&self) -> PassKind {
+            PassKind::Analysis
+        }
+        fn dependencies(&self) -> Vec<&'static str> {
+            self.pass_deps.clone()
+        }
+        fn run(&self, _ctx: &mut PassContext) -> Result<PassResult> {
+            Ok(PassResult::new(self.pass_name))
+        }
+    }
+
+    /// Objective: Verify that circular dependencies are detected and return an error.
+    /// Invariants: compute_order() must return Err when two passes depend on each other.
+    #[test]
+    fn test_circular_dependency_detection() {
+        let mut manager = PassManager::new();
+        manager.register(MockPass::new("a", vec!["b"]));
+        manager.register(MockPass::new("b", vec!["a"]));
+
+        let result = manager.compute_order();
+        assert!(
+            result.is_err(),
+            "circular dependency must cause compute_order to return Err"
+        );
+    }
+
+    /// Objective: Verify that run_all on an empty manager succeeds with no results.
+    /// Invariants: An empty PassManager produces an empty result vec without error.
+    #[test]
+    fn test_empty_pass_manager_run_all() {
+        let mut manager = PassManager::new();
+        let results = manager.run_all().expect("empty manager must not fail");
+        assert!(
+            results.is_empty(),
+            "run_all on empty manager must return empty vec"
+        );
+    }
+
+    /// Objective: Verify that passes with no dependencies are all placed in a single level.
+    /// Invariants: Three independent passes produce one level containing all three.
+    #[test]
+    fn test_compute_levels_no_deps() {
+        let mut manager = PassManager::new();
+        manager.register(MockPass::new("x", vec![]));
+        manager.register(MockPass::new("y", vec![]));
+        manager.register(MockPass::new("z", vec![]));
+
+        let levels = manager.compute_levels();
+        assert_eq!(
+            levels.len(),
+            1,
+            "independent passes must form exactly one level"
+        );
+        assert_eq!(
+            levels[0].len(),
+            3,
+            "all 3 passes must be in the single level"
+        );
+    }
+
+    /// Objective: Verify that a linear dependency chain produces one pass per level.
+    /// Invariants: a -> b -> c produces [[a], [b], [c]].
+    #[test]
+    fn test_compute_levels_with_chain() {
+        let mut manager = PassManager::new();
+        manager.register(MockPass::new("a", vec![]));
+        manager.register(MockPass::new("b", vec!["a"]));
+        manager.register(MockPass::new("c", vec!["b"]));
+
+        let levels = manager.compute_levels();
+        assert_eq!(levels.len(), 3, "chain of 3 must produce 3 levels");
+        assert_eq!(
+            levels[0],
+            vec![0],
+            "level 0 must contain pass 'a' (index 0)"
+        );
+        assert_eq!(
+            levels[1],
+            vec![1],
+            "level 1 must contain pass 'b' (index 1)"
+        );
+        assert_eq!(
+            levels[2],
+            vec![2],
+            "level 2 must contain pass 'c' (index 2)"
+        );
+    }
+
+    /// Objective: Verify that clear() removes all registered passes.
+    /// Invariants: pass_count() == 0 after clear().
+    #[test]
+    fn test_clear_resets() {
+        let mut manager = PassManager::new();
+        manager.register(RawFactCollectorPass::new());
+        manager.register(SummaryBuilderPass::new());
+        manager.register(FFIBoundaryPass::new());
+        assert_eq!(manager.pass_count(), 3, "must have 3 passes before clear");
+
+        manager.clear();
+        assert_eq!(manager.pass_count(), 0, "pass_count must be 0 after clear");
+    }
+
+    /// Objective: Verify that set_parallel does not panic when toggled.
+    /// Invariants: set_parallel(true) and set_parallel(false) both complete without error.
+    #[test]
+    fn test_set_parallel() {
+        let mut manager = PassManager::new();
+        manager.set_parallel(true);
+        manager.set_parallel(false);
     }
 }

@@ -87,9 +87,12 @@ impl Pass for IssueVerifierPass {
                     .unwrap_or(&candidate.alloc_function);
                 issue = issue.with_symbol(symbol);
 
-                // emit_issue automatically checks the SRT gate via PassContext.
-                ctx.emit_issue(issue.clone());
-                issues.push(issue);
+                // emit_issue is the SRT gate choke point — only add to
+                // PassResult.issues if the gate allows it.
+                let outcome = ctx.emit_issue(issue.clone());
+                if outcome.is_allowed() {
+                    issues.push(issue);
+                }
             }
 
             verified.push(candidate);

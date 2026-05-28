@@ -177,5 +177,4 @@ mod tests {
         assert!(ptr_type.is_pointer());
         assert!(!ptr_type.is_integer());
     }
-
 }

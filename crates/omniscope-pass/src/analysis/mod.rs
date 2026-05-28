@@ -15,6 +15,17 @@ use omniscope_types::call_graph_types::CrossLangEdge;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
+/// FFI boundary info for emit_ffi_issue.
+///
+/// Groups caller/callee names and languages to avoid
+/// excessive function arguments (clippy::too_many_arguments).
+struct FFIBoundaryInfo {
+    caller_name: String,
+    callee_name: String,
+    caller_lang: omniscope_types::config::Language,
+    callee_lang: omniscope_types::config::Language,
+}
+
 pub mod borrow_escape;
 pub mod call_graph;
 pub mod danger_surface;
@@ -84,10 +95,12 @@ impl Pass for FFIBoundaryPass {
             self.emit_ffi_issue(
                 ctx,
                 &registry,
-                edge.caller_name.clone(),
-                edge.callee_name.clone(),
-                edge.caller_lang,
-                edge.callee_lang,
+                &FFIBoundaryInfo {
+                    caller_name: edge.caller_name.clone(),
+                    callee_name: edge.callee_name.clone(),
+                    caller_lang: edge.caller_lang,
+                    callee_lang: edge.callee_lang,
+                },
                 &mut issues,
             );
         }
@@ -174,10 +187,12 @@ impl Pass for FFIBoundaryPass {
                             self.emit_ffi_issue(
                                 ctx,
                                 &registry,
-                                caller_name.to_string(),
-                                callee_name.to_string(),
-                                final_caller,
-                                final_callee,
+                                &FFIBoundaryInfo {
+                                    caller_name: caller_name.to_string(),
+                                    callee_name: callee_name.to_string(),
+                                    caller_lang: final_caller,
+                                    callee_lang: final_callee,
+                                },
                                 &mut issues,
                             );
                         }
@@ -221,20 +236,17 @@ impl FFIBoundaryPass {
         &self,
         ctx: &mut PassContext,
         registry: &FamilyRegistry,
-        caller_name: String,
-        callee_name: String,
-        caller_lang: omniscope_types::config::Language,
-        callee_lang: omniscope_types::config::Language,
+        boundary: &FFIBoundaryInfo,
         issues: &mut Vec<Issue>,
     ) {
         // ── IR instruction-level semantic derivation ──
         let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
 
         let assessment = if let Some(ref module) = ir_module {
-            assess_ffi_safety(&callee_name, &caller_name, module)
+            assess_ffi_safety(&boundary.callee_name, &boundary.caller_name, module)
         } else {
             // No IR module available — fall back to name-based heuristic
-            let syscall_semantic = SyscallSemantic::classify(&callee_name);
+            let syscall_semantic = SyscallSemantic::classify(&boundary.callee_name);
             let verdict = if syscall_semantic.involves_memory_ownership() {
                 FFIVerdict::ConcernOwnershipTransfer
             } else if syscall_semantic == SyscallSemantic::Unknown {
@@ -243,8 +255,8 @@ impl FFIBoundaryPass {
                 FFIVerdict::SafeNoOwnership
             };
             omniscope_semantics::FFISafetyAssessment {
-                callee: callee_name.clone(),
-                caller: caller_name.clone(),
+                callee: boundary.callee_name.clone(),
+                caller: boundary.caller_name.clone(),
                 caller_behavior: None,
                 callee_behavior: None,
                 verdict,
@@ -259,8 +271,8 @@ impl FFIBoundaryPass {
 
         debug!(
             "FFI semantic: {} -> {} verdict={:?} score={:.2}",
-            caller_name,
-            callee_name,
+            boundary.caller_name,
+            boundary.callee_name,
             assessment.verdict,
             assessment.safety_score()
         );
@@ -269,8 +281,8 @@ impl FFIBoundaryPass {
         if assessment.should_suppress_issue() {
             debug!(
                 "FFI skip: {} -> {} ({:?}): {}",
-                caller_name,
-                callee_name,
+                boundary.caller_name,
+                boundary.callee_name,
                 assessment.verdict,
                 assessment
                     .evidence
@@ -282,7 +294,7 @@ impl FFIBoundaryPass {
         }
 
         // ── Severity determination based on semantic assessment ──
-        let family_entry = registry.lookup(&callee_name);
+        let family_entry = registry.lookup(&boundary.callee_name);
 
         let (kind, severity, confidence, description) = match assessment.verdict {
             FFIVerdict::ConcernOwnershipTransfer => match family_entry {
@@ -307,7 +319,7 @@ impl FFIBoundaryPass {
                             conf,
                             format!(
                                 "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, effect={:?}, verdict=OwnershipTransfer]",
-                                caller_name, caller_lang, callee_name, callee_lang,
+                                boundary.caller_name, boundary.caller_lang, boundary.callee_name, boundary.callee_lang,
                                 family_name, entry.effect
                             ),
                         )
@@ -318,7 +330,10 @@ impl FFIBoundaryPass {
                     Confidence::Medium,
                     format!(
                         "FFI boundary: {} ({:?}) -> {} ({:?}) [ownership transfer, unknown family]",
-                        caller_name, caller_lang, callee_name, callee_lang
+                        boundary.caller_name,
+                        boundary.caller_lang,
+                        boundary.callee_name,
+                        boundary.callee_lang
                     ),
                 ),
             },
@@ -334,7 +349,11 @@ impl FFIBoundaryPass {
                         Confidence::Low,
                         format!(
                             "FFI boundary: {} ({:?}) -> {} ({:?}) [family={}, verdict=Unknown]",
-                            caller_name, caller_lang, callee_name, callee_lang, family_name
+                            boundary.caller_name,
+                            boundary.caller_lang,
+                            boundary.callee_name,
+                            boundary.callee_lang,
+                            family_name
                         ),
                     )
                 }
@@ -344,7 +363,10 @@ impl FFIBoundaryPass {
                     Confidence::Low,
                     format!(
                         "FFI boundary: {} ({:?}) -> {} ({:?}) [verdict=Unknown]",
-                        caller_name, caller_lang, callee_name, callee_lang
+                        boundary.caller_name,
+                        boundary.caller_lang,
+                        boundary.callee_name,
+                        boundary.callee_lang
                     ),
                 ),
             },
@@ -352,17 +374,17 @@ impl FFIBoundaryPass {
             _ => unreachable!(),
         };
 
-        let boundary_kind = classify_boundary(&caller_lang, &callee_lang);
+        let boundary_kind = classify_boundary(&boundary.caller_lang, &boundary.callee_lang);
 
         let issue_id = ctx.next_issue_id();
         let issue = Issue::new(issue_id, kind, severity, description)
             .with_confidence(confidence)
-            .with_symbol(&callee_name)
+            .with_symbol(&boundary.callee_name)
             .with_ffi_boundary(FFIBoundary {
-                caller_name: caller_name.clone(),
-                callee_name: callee_name.clone(),
-                caller_lang,
-                callee_lang,
+                caller_name: boundary.caller_name.clone(),
+                callee_name: boundary.callee_name.clone(),
+                caller_lang: boundary.caller_lang,
+                callee_lang: boundary.callee_lang,
                 boundary_kind,
             });
 
@@ -379,8 +401,10 @@ impl FFIBoundaryPass {
             assessment.verdict,
             assessment.safety_score()
         );
-        ctx.emit_issue(issue.clone());
-        issues.push(issue);
+        let outcome = ctx.emit_issue(issue.clone());
+        if outcome.is_allowed() {
+            issues.push(issue);
+        }
     }
 }
 

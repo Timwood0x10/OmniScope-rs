@@ -15,8 +15,10 @@ categories = ["development-tools", "development-tools::debugging"]
 chrono = { workspace = true }
 
 [dev-dependencies]
+omniscope-core = { path = "crates/omniscope-core" }
 omniscope-ir = { path = "crates/omniscope-ir" }
 omniscope-pipeline = { path = "crates/omniscope-pipeline" }
+serde_json = "1.0"
 
 [workspace]
 members = [

@@ -68,10 +68,10 @@ impl Pass for IRBehaviorSummaryPass {
 
         let mut behaviors: Vec<FunctionBehavior> = Vec::new();
         let mut summary_store: SummaryStore = ctx.get("summary_store").unwrap_or_default();
-        let mut func_id: u64 = 0;
 
         // Iterate over all function bodies and extract behaviors
-        for (_name, body) in &module.function_bodies {
+        for (func_id, body) in module.function_bodies.values().enumerate() {
+            let func_id = func_id as u64;
             let behavior = extract_behavior(body);
             behaviors.push(behavior.clone());
 
@@ -80,8 +80,6 @@ impl Pass for IRBehaviorSummaryPass {
                 let summary = behavior_to_summary(&behavior, func_id, func_id);
                 summary_store.insert(summary);
             }
-
-            func_id += 1;
         }
 
         // Store behaviors for downstream passes (M2 integration)

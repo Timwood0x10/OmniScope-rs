@@ -14,11 +14,24 @@
 //! we first check whether the function has a behavior-derived summary.
 //! Only when no behavior summary exists do we fall back to
 //! `infer_summary_for_symbol`.
+//!
+//! # SRT Resolution Population
+//!
+//! After building summaries, this pass extracts semantic resolutions
+//! (R-0 MutableParam, R-8 FromParameter, R-1 HeapProvenance, etc.)
+//! from the summary evidence and writes them into `srt_resolutions`
+//! in the pass context. This is what makes the SRT gate in
+//! `PassContext::emit_issue` actually work — without this step,
+//! the gate has no data to query.
+
+use std::collections::HashMap;
 
 use omniscope_core::Result;
 use omniscope_semantics::{
-    behavior_to_summary, infer_summary_for_symbol, FamilyRegistry, FunctionBehavior, SummaryStore,
+    behavior_to_summary, infer_summary_for_symbol, FamilyRegistry, FunctionBehavior, SemanticKind,
+    SummaryStore,
 };
+use omniscope_types::EvidenceKind;
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
@@ -151,8 +164,110 @@ impl Pass for StructuralInferencePass {
         }
 
         // Store the augmented summary store back into the context.
-        ctx.store("summary_store", store);
+        ctx.store("summary_store", store.clone());
         ctx.store("structural_inference_done", true);
+
+        // ── Build SRT resolutions from summary evidence ──
+        // This populates `srt_resolutions` so that `PassContext::emit_issue`
+        // can enforce the SRT gate. Without this, the gate is a no-op.
+        let mut srt_resolutions: HashMap<String, Vec<SemanticKind>> = HashMap::new();
+
+        for (_, summary) in store.iter() {
+            let symbol = &summary.name;
+            let mut kinds: Vec<SemanticKind> = Vec::new();
+
+            for evidence in &summary.evidence {
+                match evidence.kind {
+                    // R-0: Parameter mutability → MutableParam suppresses WriteToImmutable
+                    EvidenceKind::ParameterMutability => {
+                        if evidence.description.contains("Mutable") {
+                            kinds.push(SemanticKind::MutableParam);
+                        } else if evidence.description.contains("Readonly") {
+                            kinds.push(SemanticKind::ReadonlyParam);
+                        }
+                    }
+                    // R-1: Heap/global provenance
+                    EvidenceKind::SameFamilyRelease => {
+                        kinds.push(SemanticKind::HeapProvenance);
+                    }
+                    // R-3: RAII drop release
+                    EvidenceKind::RaiiDropRelease => {
+                        kinds.push(SemanticKind::RaiiDropRelease);
+                    }
+                    // R-6: Ownership transfer via into_raw
+                    EvidenceKind::OwnershipTransfer => {
+                        kinds.push(SemanticKind::IntoRawTransfer);
+                    }
+                    // R-4: POSIX syscall classification
+                    EvidenceKind::PosixSyscallClass => {
+                        if evidence.description.contains("file")
+                            || evidence.description.contains("File")
+                        {
+                            kinds.push(SemanticKind::FileOperation);
+                        } else if evidence.description.contains("network")
+                            || evidence.description.contains("Network")
+                        {
+                            kinds.push(SemanticKind::NetworkOperation);
+                        } else if evidence.description.contains("process")
+                            || evidence.description.contains("Process")
+                        {
+                            kinds.push(SemanticKind::ProcessOperation);
+                        }
+                    }
+                    // R-7: Library allocator release
+                    EvidenceKind::SymbolPattern if evidence.description.contains("library") => {
+                        kinds.push(SemanticKind::LibraryRelease);
+                    }
+                    _ => {}
+                }
+            }
+
+            // R-8: FromParameter — if the function takes pointer parameters and
+            // doesn't allocate, the pointer comes from the caller, not a stack escape.
+            // Heuristic: Rust functions with `_R` prefix that aren't alloc/dealloc
+            // have parameters from the caller.
+            if summary.language_hint == omniscope_types::LanguageHint::Rust
+                && !summary.acquires_resource()
+                && !summary.releases_resource()
+                && !summary.name.contains("alloc")
+                && !summary.name.contains("dealloc")
+            {
+                kinds.push(SemanticKind::FromParameter);
+            }
+
+            if !kinds.is_empty() {
+                srt_resolutions.insert(symbol.clone(), kinds);
+            }
+        }
+
+        // Also populate SRT from IRModule function declarations — functions that
+        // take pointer arguments but aren't alloc/dealloc have FromParameter.
+        let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
+        if let Some(ref module) = ir_module {
+            let registry = FamilyRegistry::new();
+            for call in &module.calls {
+                let callee = call.callee.trim_start_matches('@');
+                // If the callee is NOT a known alloc/release, it receives
+                // pointers from the caller → R-8 FromParameter.
+                if registry.lookup(callee).is_none() {
+                    srt_resolutions
+                        .entry(callee.to_string())
+                        .or_insert_with(|| vec![SemanticKind::FromParameter]);
+                }
+                // The caller always has its parameters from the caller's caller.
+                let caller = call.caller.trim_start_matches('@');
+                if !caller.is_empty() && registry.lookup(caller).is_none() {
+                    srt_resolutions
+                        .entry(caller.to_string())
+                        .or_insert_with(|| vec![SemanticKind::FromParameter]);
+                }
+            }
+            // Put IRModule back for downstream passes.
+            ctx.store("ir_module", module.clone());
+        }
+
+        let srt_entry_count = srt_resolutions.len();
+        ctx.store("srt_resolutions", srt_resolutions);
 
         let mut result = PassResult::new(self.name())
             .with_nodes(raw_facts.len())
@@ -164,6 +279,7 @@ impl Pass for StructuralInferencePass {
         result.add_stat("refcount_inferences", refcount_count);
         result.add_stat("static_lifetime_inferences", static_lifetime_count);
         result.add_stat("behavior_override_count", behavior_override_count);
+        result.add_stat("srt_resolution_entries", srt_entry_count);
 
         Ok(result)
     }

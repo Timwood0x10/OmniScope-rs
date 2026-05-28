@@ -163,8 +163,10 @@ impl BorrowEscapePass {
         )
         .with_symbol(symbol);
 
-        ctx.emit_issue(issue.clone());
-        issues.push(issue);
+        let outcome = ctx.emit_issue(issue.clone());
+        if outcome.is_allowed() {
+            issues.push(issue);
+        }
     }
 
     /// Checks if a value has heap provenance.

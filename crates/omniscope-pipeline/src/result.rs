@@ -349,4 +349,139 @@ mod tests {
         assert_eq!(result.issues.len(), 2, "issues must be preserved");
         assert!(result.has_issues());
     }
+
+    /// Objective: Verify that from_pass_results with an empty vec produces a zero-count result.
+    /// Invariants: pass_count=0, issue_count=0, has_issues()=false.
+    #[test]
+    fn test_empty_pass_results() {
+        let result = PipelineResult::from_pass_results(vec![], Duration::ZERO);
+        assert_eq!(
+            result.pass_count(),
+            0,
+            "pass_count must be 0 for empty input"
+        );
+        assert_eq!(
+            result.issue_count(),
+            0,
+            "issue_count must be 0 for empty input"
+        );
+        assert!(
+            !result.has_issues(),
+            "has_issues must be false for empty input"
+        );
+    }
+
+    /// Objective: Verify that get_pass_result finds a pass by name.
+    /// Invariants: get_pass_result returns Some for an existing pass name.
+    #[test]
+    fn test_get_pass_result_found() {
+        let pass_results = vec![
+            PassResult::new("CFG").with_nodes(50),
+            PassResult::new("DFG").with_nodes(75),
+        ];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+
+        let cfg = result.get_pass_result("CFG");
+        assert!(cfg.is_some(), "get_pass_result must find 'CFG'");
+        assert_eq!(cfg.unwrap().name, "CFG", "found pass must have name 'CFG'");
+    }
+
+    /// Objective: Verify that get_pass_result returns None for a non-existent name.
+    /// Invariants: get_pass_result("nonexistent") returns None.
+    #[test]
+    fn test_get_pass_result_miss() {
+        let pass_results = vec![PassResult::new("CFG").with_nodes(50)];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+
+        assert!(
+            result.get_pass_result("nonexistent").is_none(),
+            "get_pass_result must return None for missing name"
+        );
+    }
+
+    /// Objective: Verify that duration_ms accurately converts the Duration.
+    /// Invariants: Duration::from_millis(42) yields duration_ms() == 42.
+    #[test]
+    fn test_duration_ms_accuracy() {
+        let result = PipelineResult::from_pass_results(vec![], Duration::from_millis(42));
+        assert_eq!(
+            result.duration_ms(),
+            42,
+            "duration_ms must equal 42 for 42ms Duration"
+        );
+    }
+
+    /// Objective: Verify pipeline stats for a single pass where avg, max, and min are all equal.
+    /// Invariants: One pass with duration=100 produces avg=100.0, max=100, min=100.
+    #[test]
+    fn test_pipeline_stats_single_pass() {
+        let pass_results = vec![PassResult::new("CFG").with_duration(100)];
+        let stats = PipelineStats::from_pass_results(&pass_results);
+
+        assert_eq!(
+            stats.avg_duration_ms, 100.0,
+            "avg must equal the single pass duration"
+        );
+        assert_eq!(
+            stats.max_duration_ms, 100,
+            "max must equal the single pass duration"
+        );
+        assert_eq!(
+            stats.min_duration_ms, 100,
+            "min must equal the single pass duration"
+        );
+    }
+
+    /// Objective: Verify that PipelineStats::default() initializes all fields to zero.
+    /// Invariants: All numeric fields are 0.
+    #[test]
+    fn test_pipeline_stats_default() {
+        let stats = PipelineStats::default();
+
+        assert_eq!(
+            stats.foundation_passes, 0,
+            "default foundation_passes must be 0"
+        );
+        assert_eq!(
+            stats.analysis_passes, 0,
+            "default analysis_passes must be 0"
+        );
+        assert_eq!(
+            stats.transformation_passes, 0,
+            "default transformation_passes must be 0"
+        );
+        assert_eq!(
+            stats.avg_duration_ms, 0.0,
+            "default avg_duration_ms must be 0.0"
+        );
+        assert_eq!(
+            stats.max_duration_ms, 0,
+            "default max_duration_ms must be 0"
+        );
+        assert_eq!(
+            stats.min_duration_ms, 0,
+            "default min_duration_ms must be 0"
+        );
+        assert_eq!(
+            stats.total_duration_ms, 0,
+            "default total_duration_ms must be 0"
+        );
+    }
+
+    /// Objective: Verify that high_issues and low_issues are empty when no issues exist.
+    /// Invariants: A result with no issues yields empty high_issues() and low_issues().
+    #[test]
+    fn test_high_low_issues_empty() {
+        let pass_results = vec![PassResult::new("CFG").with_nodes(100)];
+        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+
+        assert!(
+            result.high_issues().is_empty(),
+            "high_issues must be empty when no issues exist"
+        );
+        assert!(
+            result.low_issues().is_empty(),
+            "low_issues must be empty when no issues exist"
+        );
+    }
 }
