@@ -115,6 +115,14 @@ pub fn infer_summary_for_symbol(
                 family: inferred.family_id.unwrap_or(FamilyId::C_HEAP),
                 arg: 0,
             },
+            SymbolEffect::Escape => Effect::OwnershipEscape {
+                family: inferred.family_id.unwrap_or(FamilyId::RUST_RAW_OWNERSHIP),
+                result: 0,
+            },
+            SymbolEffect::Reclaim => Effect::OwnershipReclaim {
+                family: inferred.family_id.unwrap_or(FamilyId::RUST_RAW_OWNERSHIP),
+                result: 0,
+            },
         };
         summary.add_effect(effect);
         summary.confidence = inferred.confidence;
@@ -149,6 +157,14 @@ fn build_summary_from_entry(
         SymbolEffect::Retain => Effect::Retain {
             family: entry.family_id,
             arg: 0,
+        },
+        SymbolEffect::Escape => Effect::OwnershipEscape {
+            family: entry.family_id,
+            result: 0,
+        },
+        SymbolEffect::Reclaim => Effect::OwnershipReclaim {
+            family: entry.family_id,
+            result: 0,
         },
     };
 

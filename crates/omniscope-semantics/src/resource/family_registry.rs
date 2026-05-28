@@ -30,6 +30,12 @@ pub enum SymbolEffect {
     ConditionalRelease,
     /// Symbol retains (refcount increment).
     Retain,
+    /// Symbol escapes ownership (into_raw) — resource leaves Rust's
+    /// type system via raw pointer conversion. NOT a release.
+    Escape,
+    /// Symbol reclaims ownership from a raw pointer (from_raw) —
+    /// resource re-enters Rust's type system. This IS an acquire.
+    Reclaim,
 }
 
 /// Registry mapping symbol names to resource families.
@@ -159,6 +165,8 @@ impl FamilyRegistry {
         self.add_cpp_symbols();
         // Rust global allocator
         self.add_rust_symbols();
+        // Rust raw ownership transfer (Box/CString::into_raw/from_raw)
+        self.add_rust_raw_ownership_symbols();
         // Python C API
         self.add_python_symbols();
         // Java/JNI
@@ -247,6 +255,32 @@ impl FamilyRegistry {
             SymbolEffect::Release,
             zig_lang,
         );
+    }
+
+    /// Registers Rust raw ownership transfer symbols: Box/CString::into_raw
+    /// and Box/CString::from_raw, Vec::from_raw_parts.
+    ///
+    /// These symbols represent the safe/unsafe boundary where Rust ownership
+    /// crosses into or out of raw pointer territory. The RUST_RAW_OWNERSHIP
+    /// family is compatible with RUST_GLOBAL for release, since both use the
+    /// same underlying allocator.
+    fn add_rust_raw_ownership_symbols(&mut self) {
+        let f = FamilyId::RUST_RAW_OWNERSHIP;
+        let lang = LanguageHint::Rust;
+
+        // ── Box ──
+        // into_raw: ownership escapes to raw pointer
+        self.add_symbol("Box::into_raw", f, SymbolEffect::Escape, lang);
+        // from_raw: ownership reclaimed from raw pointer
+        self.add_symbol("Box::from_raw", f, SymbolEffect::Reclaim, lang);
+
+        // ── CString ──
+        self.add_symbol("CString::into_raw", f, SymbolEffect::Escape, lang);
+        self.add_symbol("CString::from_raw", f, SymbolEffect::Reclaim, lang);
+
+        // ── Vec ──
+        // Vec::from_raw_parts reclaims ownership from a raw pointer
+        self.add_symbol("Vec::from_raw_parts", f, SymbolEffect::Reclaim, lang);
     }
 
     fn add_python_symbols(&mut self) {
@@ -487,8 +521,8 @@ mod tests {
         );
         assert_eq!(
             registry.family_count(),
-            19,
-            "Must have 19 built-in families"
+            20,
+            "Must have 20 built-in families"
         );
     }
 

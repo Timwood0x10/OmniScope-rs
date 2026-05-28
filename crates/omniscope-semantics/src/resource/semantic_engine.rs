@@ -246,6 +246,42 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
                     evidence,
                 };
             }
+            SymbolEffect::Escape => {
+                // into_raw: ownership escapes to raw pointer, not a bug
+                evidence.push(IREvidence {
+                    instruction_kind: IRInstructionKind::Call,
+                    reasoning: format!(
+                        "Callee '{}' is an ownership escape (into_raw) for family {:?} — intentional transfer",
+                        callee, entry.family_id
+                    ),
+                });
+                return FFISafetyAssessment {
+                    callee: callee.to_string(),
+                    caller: caller.to_string(),
+                    caller_behavior,
+                    callee_behavior,
+                    verdict: FFIVerdict::SafeInternalBridge,
+                    evidence,
+                };
+            }
+            SymbolEffect::Reclaim => {
+                // from_raw: ownership reclaimed from raw pointer
+                evidence.push(IREvidence {
+                    instruction_kind: IRInstructionKind::Call,
+                    reasoning: format!(
+                        "Callee '{}' is an ownership reclaim (from_raw) for family {:?} — reacquiring ownership",
+                        callee, entry.family_id
+                    ),
+                });
+                return FFISafetyAssessment {
+                    callee: callee.to_string(),
+                    caller: caller.to_string(),
+                    caller_behavior,
+                    callee_behavior,
+                    verdict: FFIVerdict::ConcernOwnershipTransfer,
+                    evidence,
+                };
+            }
         }
     }
 

@@ -67,6 +67,12 @@ impl FamilyId {
     /// (bun_fp_reduction_plan §1.A.3: Swift excluded).
     pub const CSHARP_COM: FamilyId = FamilyId(19);
 
+    /// Rust raw ownership family: Box::into_raw/from_raw, CString::into_raw/from_raw,
+    /// Vec::from_raw_parts. These are Rust-managed resources whose lifecycle
+    /// crosses the safe/unsafe boundary via raw pointer conversion.
+    /// Compatible with RUST_GLOBAL because both use Rust's global allocator underneath.
+    pub const RUST_RAW_OWNERSHIP: FamilyId = FamilyId(20);
+
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 }
@@ -337,6 +343,18 @@ pub static FAMILY_CSHARP_COM: ResourceFamily = ResourceFamily {
     compatible_releases: &[FamilyId::C_HEAP],
 };
 
+/// Rust raw ownership family: Box::into_raw/from_raw, CString::into_raw/from_raw,
+/// Vec::from_raw_parts. Resources that cross the safe/unsafe boundary
+/// via raw pointer conversion. Underlying allocation uses Rust's global
+/// allocator, so this family is compatible with RUST_GLOBAL for release.
+pub static FAMILY_RUST_RAW_OWNERSHIP: ResourceFamily = ResourceFamily {
+    id: FamilyId::RUST_RAW_OWNERSHIP,
+    name: "rust_raw_ownership",
+    kind: FamilyKind::ManualHeap,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[FamilyId::RUST_GLOBAL],
+};
+
 /// Serializable form of `ResourceFamily` for serde round-tripping.
 /// `ResourceFamily` uses `&'static str` and `&'static [FamilyId]` which
 /// cannot derive `Deserialize`, so we convert to this owned form.
@@ -383,6 +401,7 @@ pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_GO_CGO,
     &FAMILY_MIMALLOC,
     &FAMILY_CSHARP_COM,
+    &FAMILY_RUST_RAW_OWNERSHIP,
 ];
 
 #[cfg(test)]
@@ -393,8 +412,8 @@ mod tests {
     fn test_builtin_families_count() {
         assert_eq!(
             BUILTIN_FAMILIES.len(),
-            19,
-            "Must have exactly 19 built-in families"
+            20,
+            "Must have exactly 20 built-in families"
         );
     }
 

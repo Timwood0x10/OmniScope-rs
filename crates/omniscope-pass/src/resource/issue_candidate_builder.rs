@@ -209,6 +209,140 @@ impl Pass for IssueCandidateBuilderPass {
                     }
                 }
             }
+
+            // ── DoubleReclaim: same raw pointer reclaimed multiple times ──
+            // Multiple OwnershipReclaim edges on the same instance mean
+            // from_raw was called more than once on the same raw pointer,
+            // which is undefined behavior (use-after-free / double-free).
+            for (instance_id, edges) in &instance_edges {
+                let reclaim_edges: Vec<_> = edges
+                    .iter()
+                    .filter(|e| matches!(e.effect, Effect::OwnershipReclaim { .. }))
+                    .collect();
+
+                if reclaim_edges.len() > 1 {
+                    for reclaim in reclaim_edges.iter().skip(1) {
+                        let family = reclaim.family.unwrap_or(FamilyId::RUST_RAW_OWNERSHIP);
+                        let id = next_id;
+                        next_id += 1;
+
+                        let mut candidate = IssueCandidate::new(
+                            id,
+                            IssueCandidateKind::DoubleReclaim,
+                            family,
+                            &reclaim.function_name,
+                        );
+                        candidate.add_evidence(
+                            Evidence::new(
+                                EvidenceKind::RawOwnershipReclaim,
+                                format!(
+                                    "instance {} reclaimed {} times via from_raw — double reclaim is undefined behavior",
+                                    instance_id,
+                                    reclaim_edges.len()
+                                ),
+                            )
+                            .with_confidence(0.9),
+                        );
+
+                        candidates.push(candidate);
+                    }
+                }
+            }
+
+            // ── OwnershipEscapeLeak: into_raw without matching from_raw ──
+            // If an instance has an OwnershipEscape edge but no matching
+            // OwnershipReclaim, the raw pointer was never reclaimed,
+            // potentially leaking the resource across the FFI boundary.
+            for (instance_id, edges) in &instance_edges {
+                let has_ownership_escape = edges
+                    .iter()
+                    .any(|e| matches!(e.effect, Effect::OwnershipEscape { .. }));
+                let has_reclaim = edges
+                    .iter()
+                    .any(|e| matches!(e.effect, Effect::OwnershipReclaim { .. }));
+
+                if has_ownership_escape && !has_reclaim {
+                    let escape_edge = edges
+                        .iter()
+                        .find(|e| matches!(e.effect, Effect::OwnershipEscape { .. }));
+                    let family = escape_edge
+                        .and_then(|e| e.family)
+                        .unwrap_or(FamilyId::RUST_RAW_OWNERSHIP);
+                    let escape_func = escape_edge
+                        .map(|e| e.function_name.as_str())
+                        .unwrap_or("unknown");
+
+                    let id = next_id;
+                    next_id += 1;
+
+                    let mut candidate = IssueCandidate::new(
+                        id,
+                        IssueCandidateKind::ConditionalLeak,
+                        family,
+                        escape_func,
+                    );
+                    candidate.add_evidence(
+                        Evidence::new(
+                            EvidenceKind::OwnershipEscapeLeak,
+                            format!(
+                                "instance {} escaped via into_raw ('{}') but never reclaimed via from_raw — potential leak",
+                                instance_id, escape_func
+                            ),
+                        )
+                        .with_confidence(0.7),
+                    );
+
+                    candidates.push(candidate);
+                }
+            }
+
+            // ── Cross-family reclaim: C family pointer reclaimed by Rust ──
+            // malloc'd pointer passed to Box::from_raw — cross-family mismatch.
+            for edges in instance_edges.values() {
+                let non_rust_acquires: Vec<_> = edges
+                    .iter()
+                    .filter(|e| {
+                        matches!(e.effect, Effect::Acquire { .. })
+                            && e.family.is_some_and(|f| {
+                                f != FamilyId::RUST_RAW_OWNERSHIP && f != FamilyId::RUST_GLOBAL
+                            })
+                    })
+                    .collect();
+                let reclaim_edges: Vec<_> = edges
+                    .iter()
+                    .filter(|e| matches!(e.effect, Effect::OwnershipReclaim { .. }))
+                    .collect();
+
+                for acquire in &non_rust_acquires {
+                    for reclaim in &reclaim_edges {
+                        let alloc_family = acquire.family.unwrap_or(FamilyId::C_HEAP);
+                        let reclaim_family = reclaim.family.unwrap_or(FamilyId::RUST_RAW_OWNERSHIP);
+
+                        if !registry.is_compatible_release(alloc_family, reclaim_family) {
+                            let id = next_id;
+                            next_id += 1;
+
+                            let candidate = IssueCandidate::new(
+                                id,
+                                IssueCandidateKind::CrossFamilyFree,
+                                alloc_family,
+                                &acquire.function_name,
+                            )
+                            .with_release_family(reclaim_family)
+                            .with_release_function(&reclaim.function_name)
+                            .with_description(format!(
+                                "cross-family reclaim: {} ({:?}) reclaimed by {} ({:?})",
+                                acquire.function_name,
+                                alloc_family,
+                                reclaim.function_name,
+                                reclaim_family
+                            ));
+
+                            candidates.push(candidate);
+                        }
+                    }
+                }
+            }
         }
 
         // ── ConditionalLeak: instances in Acquired/Retained/Unknown state ──
@@ -272,8 +406,16 @@ fn group_edges_by_instance(
             Effect::Acquire { result, .. } => {
                 groups.entry(result).or_default().push(edge.clone());
             }
+            // Reclaim: source=0 → target=instance_id (same as acquire)
+            Effect::OwnershipReclaim { result, .. } => {
+                groups.entry(result).or_default().push(edge.clone());
+            }
             // Release: source=instance_id → target=0
             Effect::Release { .. } | Effect::ConditionalRelease { .. } => {
+                groups.entry(edge.source).or_default().push(edge.clone());
+            }
+            // Escape: source=instance_id → target=0
+            Effect::OwnershipEscape { .. } => {
                 groups.entry(edge.source).or_default().push(edge.clone());
             }
             // Other effects: attach to source instance
@@ -807,6 +949,245 @@ mod tests {
         assert!(
             !double_release.is_empty(),
             "Double free MUST produce DoubleRelease candidate"
+        );
+    }
+
+    /// Objective: Verify that Box::into_raw + Box::from_raw (normal transfer)
+    /// does NOT produce a DoubleReclaim candidate — only one from_raw per pointer.
+    /// Invariants: Single escape + single reclaim = no double reclaim.
+    #[test]
+    fn test_e2e_box_into_raw_normal_no_false_positive() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // Box::into_raw (escape) + Box::from_raw (reclaim) — normal pattern
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::into_raw".to_string(),
+            caller: "safe_transfer".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::from_raw".to_string(),
+            caller: "safe_transfer".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let double_reclaim: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::DoubleReclaim)
+            .collect();
+        assert!(
+            double_reclaim.is_empty(),
+            "Box::into_raw + Box::from_raw (single reclaim) must NOT produce DoubleReclaim candidate, got {}",
+            double_reclaim.len()
+        );
+    }
+
+    /// Objective: Verify that Box::from_raw called twice on same pointer
+    /// produces a DoubleReclaim candidate.
+    /// Invariants: Two from_raw reclaims on same instance = DoubleReclaim.
+    #[test]
+    fn test_e2e_box_from_raw_double_reclaim_tp() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::from_raw".to_string(),
+            caller: "buggy_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::from_raw".to_string(),
+            caller: "buggy_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let double_reclaim: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::DoubleReclaim)
+            .collect();
+        assert!(
+            !double_reclaim.is_empty(),
+            "Double Box::from_raw on same pointer MUST produce DoubleReclaim candidate"
+        );
+    }
+
+    /// Objective: Verify that CString::from_raw called twice produces DoubleReclaim.
+    /// Invariants: Same as Box::from_raw double reclaim — CString variant.
+    #[test]
+    fn test_e2e_cstring_from_raw_double_reclaim_tp() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "CString::from_raw".to_string(),
+            caller: "buggy_cstring".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "CString::from_raw".to_string(),
+            caller: "buggy_cstring".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let double_reclaim: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::DoubleReclaim)
+            .collect();
+        assert!(
+            !double_reclaim.is_empty(),
+            "Double CString::from_raw on same pointer MUST produce DoubleReclaim candidate"
+        );
+    }
+
+    /// Objective: Verify that malloc pointer reclaimed by Rust (Box::from_raw)
+    /// produces a CrossFamilyFree candidate.
+    /// Invariants: C_HEAP acquire + RUST_RAW_OWNERSHIP reclaim = cross-family.
+    #[test]
+    fn test_e2e_malloc_reclaimed_by_rust_cross_family() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "cross_ffi".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::from_raw".to_string(),
+            caller: "cross_ffi".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let cross_family: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::CrossFamilyFree)
+            .collect();
+        assert!(
+            !cross_family.is_empty(),
+            "malloc reclaimed by Box::from_raw MUST produce CrossFamilyFree candidate"
+        );
+    }
+
+    /// Objective: Verify that into_raw without matching from_raw produces
+    /// a ConditionalLeak candidate with OwnershipEscapeLeak evidence.
+    /// Invariants: Escape edge without reclaim = ownership escape leak.
+    #[test]
+    fn test_e2e_into_raw_without_from_raw_escape_leak() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // Box::into_raw but no Box::from_raw — potential leak
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::into_raw".to_string(),
+            caller: "leaky_ffi".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let escape_leak: Vec<_> = candidates
+            .iter()
+            .filter(|c| {
+                c.kind == IssueCandidateKind::ConditionalLeak
+                    && c.evidence.iter().any(|e| e.kind == EvidenceKind::OwnershipEscapeLeak)
+            })
+            .collect();
+        assert!(
+            !escape_leak.is_empty(),
+            "Box::into_raw without Box::from_raw MUST produce ConditionalLeak with OwnershipEscapeLeak evidence"
         );
     }
 }

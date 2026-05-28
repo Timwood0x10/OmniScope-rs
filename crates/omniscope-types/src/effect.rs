@@ -60,6 +60,23 @@ pub enum Effect {
     InitializesOutParam { arg: ArgIndex, family: FamilyId },
     /// Argument escapes to a callback function.
     EscapesToCallback { arg: ArgIndex },
+    /// Ownership escapes via into_raw (Box::into_raw, CString::into_raw).
+    /// The resource is still allocated but ownership is now tracked by
+    /// a raw pointer outside Rust's type system. This is NOT a release —
+    /// the resource must eventually be reclaimed via from_raw.
+    OwnershipEscape {
+        family: FamilyId,
+        /// Value ID of the raw pointer that receives ownership.
+        result: u64,
+    },
+    /// Ownership reclaimed from a raw pointer via from_raw
+    /// (Box::from_raw, CString::from_raw). This is an Acquire from the
+    /// raw pointer perspective — the resource re-enters Rust's ownership.
+    OwnershipReclaim {
+        family: FamilyId,
+        /// Value ID that receives the reclaimed resource.
+        result: u64,
+    },
 }
 
 impl Effect {
@@ -73,6 +90,8 @@ impl Effect {
             Effect::ReturnsOwned { family } => Some(*family),
             Effect::ConsumesArg { family, .. } => *family,
             Effect::InitializesOutParam { family, .. } => Some(*family),
+            Effect::OwnershipEscape { family, .. } => Some(*family),
+            Effect::OwnershipReclaim { family, .. } => Some(*family),
             Effect::ReturnsBorrowed
             | Effect::StoresArgToOwner { .. }
             | Effect::StoresArgToGlobal { .. }
@@ -82,7 +101,10 @@ impl Effect {
 
     /// Returns true if this effect acquires a resource.
     pub fn is_acquire(&self) -> bool {
-        matches!(self, Effect::Acquire { .. } | Effect::ReturnsOwned { .. })
+        matches!(
+            self,
+            Effect::Acquire { .. } | Effect::ReturnsOwned { .. } | Effect::OwnershipReclaim { .. }
+        )
     }
 
     /// Returns true if this effect releases a resource (conditional or unconditional).
@@ -96,6 +118,11 @@ impl Effect {
     /// Returns true if this effect is a retain (refcount increment).
     pub fn is_retain(&self) -> bool {
         matches!(self, Effect::Retain { .. })
+    }
+
+    /// Returns true if this effect represents ownership escape (into_raw).
+    pub fn is_ownership_escape(&self) -> bool {
+        matches!(self, Effect::OwnershipEscape { .. })
     }
 
     /// Returns a human-readable label for diagnostics.
@@ -112,6 +139,8 @@ impl Effect {
             Effect::StoresArgToGlobal { .. } => "stores_arg_to_global",
             Effect::InitializesOutParam { .. } => "initializes_out_param",
             Effect::EscapesToCallback { .. } => "escapes_to_callback",
+            Effect::OwnershipEscape { .. } => "ownership_escape",
+            Effect::OwnershipReclaim { .. } => "ownership_reclaim",
         }
     }
 }

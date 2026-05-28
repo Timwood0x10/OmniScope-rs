@@ -60,9 +60,13 @@ impl RawFactCollectorPass {
                     entry.effect,
                     omniscope_semantics::SymbolEffect::Acquire
                         | omniscope_semantics::SymbolEffect::Retain
+                        | omniscope_semantics::SymbolEffect::Reclaim
                 );
+                let is_escape = matches!(entry.effect, omniscope_semantics::SymbolEffect::Escape);
                 let contract = if is_acquire {
                     PointerContract::Owned
+                } else if is_escape {
+                    PointerContract::Escaped
                 } else {
                     PointerContract::Unknown
                 };
@@ -95,6 +99,7 @@ impl RawFactCollectorPass {
                     entry.effect,
                     omniscope_semantics::SymbolEffect::Acquire
                         | omniscope_semantics::SymbolEffect::Retain
+                        | omniscope_semantics::SymbolEffect::Reclaim
                 );
                 facts.push(RawResourceFact {
                     function: func_id,
@@ -123,6 +128,7 @@ impl RawFactCollectorPass {
                     entry.effect,
                     omniscope_semantics::SymbolEffect::Acquire
                         | omniscope_semantics::SymbolEffect::Retain
+                        | omniscope_semantics::SymbolEffect::Reclaim
                 );
                 facts.push(RawResourceFact {
                     function: func_id,

@@ -58,6 +58,12 @@ pub enum EvidenceKind {
     /// RAII drop release (compiler-inserted cleanup, not user bug).
     /// Evidence: bun_fp R-3 — drop_in_place / tail dealloc.
     RaiiDropRelease,
+    /// Raw pointer ownership reclaimed via from_raw (Box::from_raw, CString::from_raw).
+    /// Indicates the resource re-entered Rust's ownership from a raw pointer.
+    RawOwnershipReclaim,
+    /// Ownership escaped via into_raw without matching from_raw reclaim.
+    /// Evidence: ownership_transfer_escape — resource leaked across FFI boundary.
+    OwnershipEscapeLeak,
     /// Unknown or insufficient evidence.
     Insufficient,
 }
@@ -151,6 +157,9 @@ pub enum IssueCandidateKind {
     CallbackEscape,
     /// Needs a model annotation — unknown family or cleanup.
     NeedsModel,
+    /// Same raw pointer reclaimed multiple times via from_raw (double reclaim).
+    /// This is a use-after-free/double-free pattern for raw pointer ownership.
+    DoubleReclaim,
 }
 
 #[cfg(test)]
@@ -196,11 +205,12 @@ mod tests {
             IssueCandidateKind::BorrowEscape,
             IssueCandidateKind::CallbackEscape,
             IssueCandidateKind::NeedsModel,
+            IssueCandidateKind::DoubleReclaim,
         ];
         assert_eq!(
             kinds.len(),
-            7,
-            "Must have 7 candidate kinds as specified in architecture doc"
+            8,
+            "Must have 8 candidate kinds as specified in architecture doc"
         );
     }
 }

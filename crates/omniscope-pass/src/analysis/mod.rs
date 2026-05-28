@@ -308,6 +308,12 @@ impl FFIBoundaryPass {
                             (IssueKind::CrossLanguageFree, Confidence::Medium)
                         }
                         SymbolEffect::Retain => (IssueKind::CrossLanguageFree, Confidence::Low),
+                        // Escape (into_raw) is intentional transfer, lower severity
+                        SymbolEffect::Escape => (IssueKind::OwnershipViolation, Confidence::Low),
+                        // Reclaim (from_raw) re-acquires ownership from raw pointer
+                        SymbolEffect::Reclaim => {
+                            (IssueKind::OwnershipViolation, Confidence::Medium)
+                        }
                     };
                     let family_name = registry
                         .family(entry.family_id)

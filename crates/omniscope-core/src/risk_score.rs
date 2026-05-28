@@ -128,6 +128,7 @@ fn kind_base_score(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::BorrowEscape => 0.5,
         IssueCandidateKind::CallbackEscape => 0.3,
         IssueCandidateKind::NeedsModel => 0.1,
+        IssueCandidateKind::DoubleReclaim => 0.9,
     }
 }
 

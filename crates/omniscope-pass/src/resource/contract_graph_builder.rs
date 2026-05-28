@@ -186,6 +186,8 @@ impl Pass for ContractGraphBuilderPass {
             for callees in calls_by_caller.values() {
                 let mut func_acquires: Vec<(u64, FamilyId, &str)> = Vec::new();
                 let mut func_releases: Vec<(FamilyId, &str)> = Vec::new();
+                let mut func_escapes: Vec<(u64, FamilyId, &str)> = Vec::new();
+                let mut func_reclaims: Vec<(u64, FamilyId, &str)> = Vec::new();
 
                 for &callee in callees {
                     if let Some(entry) = registry.lookup(callee) {
@@ -194,9 +196,19 @@ impl Pass for ContractGraphBuilderPass {
                                 let id = graph.alloc_instance();
                                 func_acquires.push((id, entry.family_id, callee));
                             }
+                            omniscope_semantics::SymbolEffect::Reclaim => {
+                                let id = graph.alloc_instance();
+                                func_reclaims.push((id, entry.family_id, callee));
+                            }
                             omniscope_semantics::SymbolEffect::Release
                             | omniscope_semantics::SymbolEffect::ConditionalRelease => {
                                 func_releases.push((entry.family_id, callee));
+                            }
+                            omniscope_semantics::SymbolEffect::Escape => {
+                                // into_raw: ownership escapes to raw pointer
+                                // Create an escape edge for the instance
+                                let id = graph.alloc_instance();
+                                func_escapes.push((id, entry.family_id, callee));
                             }
                             _ => {}
                         }
@@ -234,6 +246,84 @@ impl Pass for ContractGraphBuilderPass {
                         effect: Effect::Release {
                             family: *family,
                             arg: 0,
+                        },
+                        function: 0,
+                        function_name: callee_name.to_string(),
+                        family: Some(*family),
+                    });
+                }
+
+                // Create edges for each escape (into_raw)
+                for (instance_id, family, callee_name) in &func_escapes {
+                    graph.add_edge(ContractEdge {
+                        source: *instance_id,
+                        target: 0,
+                        effect: Effect::OwnershipEscape {
+                            family: *family,
+                            result: *instance_id,
+                        },
+                        function: 0,
+                        function_name: callee_name.to_string(),
+                        family: Some(*family),
+                    });
+                }
+
+                // Create edges for each reclaim (from_raw).
+                // Try to match reclaims to existing escape or acquire instances
+                // of the same family. This enables DoubleReclaim detection when
+                // multiple from_raw calls target the same escaped instance.
+                let mut escape_claimed: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                let mut reclaim_fallback_id: Option<u64> = None;
+                for (instance_id, family, callee_name) in &func_reclaims {
+                    // Priority 1: match an escape instance of the same family
+                    let target_id = func_escapes
+                        .iter()
+                        .find(|(eid, efam, _)| *efam == *family && !escape_claimed.contains(eid))
+                        .map(|(eid, _, _)| *eid)
+                        .or_else(|| {
+                            // Priority 2: match any unclaimed escape (cross-family reclaim)
+                            func_escapes
+                                .iter()
+                                .find(|(eid, _, _)| !escape_claimed.contains(eid))
+                                .map(|(eid, _, _)| *eid)
+                        })
+                        .or_else(|| {
+                            // Priority 3: match an acquire instance of the same family
+                            func_acquires
+                                .iter()
+                                .find(|(_, f, _)| *f == *family)
+                                .map(|(id, _, _)| *id)
+                        })
+                        .or_else(|| {
+                            // Priority 4: match any acquire instance (cross-family reclaim)
+                            // This enables CrossFamilyFree detection for malloc→Box::from_raw
+                            func_acquires
+                                .iter()
+                                .find(|(id, _, _)| !escape_claimed.contains(id))
+                                .map(|(id, _, _)| *id)
+                        })
+                        .or_else(|| {
+                            // Priority 4: reuse the same instance for multiple reclaims
+                            // without matching escape/acquire (enables DoubleReclaim)
+                            if let Some(fallback) = reclaim_fallback_id {
+                                Some(fallback)
+                            } else {
+                                reclaim_fallback_id = Some(*instance_id);
+                                Some(*instance_id)
+                            }
+                        })
+                        .unwrap_or(*instance_id);
+
+                    if target_id != *instance_id {
+                        escape_claimed.insert(target_id);
+                    }
+
+                    graph.add_edge(ContractEdge {
+                        source: 0,
+                        target: target_id,
+                        effect: Effect::OwnershipReclaim {
+                            family: *family,
+                            result: target_id,
                         },
                         function: 0,
                         function_name: callee_name.to_string(),

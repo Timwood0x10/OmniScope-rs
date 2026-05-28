@@ -159,6 +159,24 @@ impl Pass for OwnershipSolverPass {
                             });
                         }
                     }
+                    Effect::OwnershipEscape { .. } => {
+                        // into_raw: ownership escapes to raw pointer.
+                        // The instance is still allocated but ownership is now
+                        // tracked outside Rust's type system.
+                        if let Some(&idx) = instance_map.get(&edge.source) {
+                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                                kind: EscapeKind::ReturnToCaller,
+                            });
+                        }
+                    }
+                    Effect::OwnershipReclaim { family, result } => {
+                        // from_raw: ownership reclaimed from raw pointer.
+                        // Create a new ResourceInstance for the reclaimed resource.
+                        let instance =
+                            ResourceInstance::new(result, family, PointerContract::Owned);
+                        instance_map.insert(result, instances.len());
+                        instances.push(instance);
+                    }
                 }
             }
         }

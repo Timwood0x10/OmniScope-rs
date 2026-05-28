@@ -165,6 +165,9 @@ impl TerminalReporter {
             IssueCandidateKind::CallbackEscape => {
                 self.format_callback_escape(candidate, verdict, &badge)
             }
+            IssueCandidateKind::DoubleReclaim => {
+                self.format_double_reclaim(candidate, verdict, &badge)
+            }
         }
     }
 
@@ -273,6 +276,19 @@ impl TerminalReporter {
         format!(
             "{badge} callback escape: {} in '{}'",
             family, candidate.alloc_function
+        )
+    }
+
+    fn format_double_reclaim(
+        &self,
+        candidate: &IssueCandidate,
+        _verdict: VerifierVerdict,
+        badge: &str,
+    ) -> String {
+        let family = format_family_label(candidate.alloc_family, self.use_color);
+        format!(
+            "{badge} double reclaim: raw pointer reclaimed multiple times in '{}' ({})",
+            candidate.alloc_function, family
         )
     }
 

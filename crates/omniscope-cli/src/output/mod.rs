@@ -81,6 +81,7 @@ pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
         IssueKind::LockOrderViolation => "lock_order_violation",
         IssueKind::ThreadCrossing => "thread_crossing",
         IssueKind::WriteToImmutable => "write_to_immutable",
+        IssueKind::DoubleReclaim => "double_reclaim",
         IssueKind::Unknown => "unknown",
     }
 }

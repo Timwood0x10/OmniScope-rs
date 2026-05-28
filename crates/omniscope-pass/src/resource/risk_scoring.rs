@@ -83,6 +83,8 @@ fn base_severity(kind: IssueCandidateKind) -> f32 {
         // Low severity: informational
         IssueCandidateKind::CallbackEscape => 0.3,
         IssueCandidateKind::NeedsModel => 0.1,
+        // High severity: double reclaim is as severe as double release
+        IssueCandidateKind::DoubleReclaim => 0.85,
     }
 }
 

@@ -157,6 +157,11 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
             // Unknown family/cleanup — diagnostic, not a bug.
             VerifierVerdict::Diagnostic
         }
+        IssueCandidateKind::DoubleReclaim => {
+            // Double reclaim (from_raw called twice on same pointer)
+            // is always a real issue — same as double free.
+            VerifierVerdict::ConfirmedIssue
+        }
     }
 }
 
@@ -265,6 +270,7 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::BorrowEscape => "borrow escape",
         IssueCandidateKind::CallbackEscape => "callback escape",
         IssueCandidateKind::NeedsModel => "needs model",
+        IssueCandidateKind::DoubleReclaim => "double reclaim",
     };
 
     let verdict_label = match verdict {

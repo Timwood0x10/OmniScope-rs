@@ -70,6 +70,9 @@ pub enum IssueKind {
     NeedsModel,
     /// Write to immutable memory location.
     WriteToImmutable,
+    /// Same raw pointer reclaimed multiple times via from_raw (double reclaim).
+    /// This is a use-after-free/double-free pattern for raw pointer ownership.
+    DoubleReclaim,
 
     // === Concurrency Issues ===
     /// Data race across FFI boundary.

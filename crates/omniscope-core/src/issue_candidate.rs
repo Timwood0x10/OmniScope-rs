@@ -149,6 +149,7 @@ impl IssueCandidate {
             IssueCandidateKind::BorrowEscape => IssueKind::BorrowEscape,
             IssueCandidateKind::CallbackEscape => IssueKind::CallbackEscapeIssue,
             IssueCandidateKind::NeedsModel => IssueKind::NeedsModel,
+            IssueCandidateKind::DoubleReclaim => IssueKind::DoubleReclaim,
         }
     }
 
