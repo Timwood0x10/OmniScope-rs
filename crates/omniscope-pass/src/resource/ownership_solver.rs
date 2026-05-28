@@ -12,7 +12,7 @@
 
 use omniscope_core::Result;
 use omniscope_semantics::{OwnershipEvent, OwnershipState, ResourceInstance};
-use omniscope_types::{Effect, EscapeKind, PointerContract};
+use omniscope_types::{Effect, EscapeKind, FamilyId, PointerContract};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
@@ -157,6 +157,17 @@ impl Pass for OwnershipSolverPass {
                             let _ = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::Callback,
                             });
+                        } else {
+                            // Stack/borrowed userdata: no prior Acquire, so create a
+                            // Borrowed instance directly. This models the case where
+                            // a stack-allocated pointer escapes to a C callback.
+                            let instance = ResourceInstance::new(
+                                edge.source,
+                                edge.family.unwrap_or(FamilyId::C_HEAP),
+                                PointerContract::Borrowed,
+                            );
+                            instance_map.insert(edge.source, instances.len());
+                            instances.push(instance);
                         }
                     }
                     Effect::OwnershipEscape { .. } => {

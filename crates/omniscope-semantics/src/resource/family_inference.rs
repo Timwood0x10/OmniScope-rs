@@ -39,6 +39,11 @@ pub fn infer_family(symbol: &str, registry: &FamilyRegistry) -> InferredFamily {
         return entry;
     }
 
+    // Check for into_raw/from_raw ownership transfer patterns (R-6)
+    if let Some(entry) = try_raw_ownership_pattern(symbol) {
+        return entry;
+    }
+
     InferredFamily {
         family_id: None,
         effect: None,
@@ -84,6 +89,47 @@ fn try_release_pattern(symbol: &str, _registry: &FamilyRegistry) -> Option<Infer
             language_hint: infer_language_hint(symbol),
             confidence: 0.4,
             reason: format!("symbol ends with free/destroy/delete/deinit pattern: {symbol}"),
+        });
+    }
+
+    None
+}
+
+/// Try to infer an into_raw/from_raw ownership transfer pattern (R-6).
+///
+/// Handles both demangled names (e.g. `Box::into_raw`) and Rust v0
+/// mangled names (e.g. `_RNvXs_...8into_raw`). These are Rust-specific
+/// idioms for crossing the safe/unsafe boundary via raw pointer conversion.
+fn try_raw_ownership_pattern(symbol: &str) -> Option<InferredFamily> {
+    let language_hint = infer_language_hint(symbol);
+    if language_hint != LanguageHint::Rust && language_hint != LanguageHint::Unknown {
+        return None;
+    }
+
+    // into_raw: ownership escapes to raw pointer
+    // Demangled: "into_raw" substring, Mangled: "8into_raw" segment
+    if symbol.contains("into_raw") || symbol.contains("8into_raw") {
+        return Some(InferredFamily {
+            family_id: Some(FamilyId::RUST_RAW_OWNERSHIP),
+            effect: Some(SymbolEffect::Escape),
+            language_hint,
+            confidence: 0.85,
+            reason: format!("symbol matches into_raw ownership escape pattern: {symbol}"),
+        });
+    }
+
+    // from_raw: ownership reclaimed from raw pointer
+    // Demangled: "from_raw" substring, Mangled: "8from_raw" / "14from_raw_parts"
+    if symbol.contains("from_raw")
+        || symbol.contains("8from_raw")
+        || symbol.contains("14from_raw_parts")
+    {
+        return Some(InferredFamily {
+            family_id: Some(FamilyId::RUST_RAW_OWNERSHIP),
+            effect: Some(SymbolEffect::Reclaim),
+            language_hint,
+            confidence: 0.85,
+            reason: format!("symbol matches from_raw ownership reclaim pattern: {symbol}"),
         });
     }
 
@@ -146,5 +192,42 @@ mod tests {
         assert_eq!(infer_language_hint("_ZN3foo3barEv"), LanguageHint::Cpp);
         assert_eq!(infer_language_hint("__rust_alloc"), LanguageHint::Rust);
         assert_eq!(infer_language_hint("PyObject_New"), LanguageHint::Python);
+    }
+
+    /// Objective: Verify that into_raw pattern is inferred as Escape effect.
+    /// Invariants: Symbol containing "into_raw" → SymbolEffect::Escape.
+    #[test]
+    fn test_into_raw_pattern_inference() {
+        let registry = FamilyRegistry::new();
+        let result = infer_family("_RNvXs_NtC4alloc5boxed8Box8into_raw", &registry);
+        assert_eq!(
+            result.effect,
+            Some(SymbolEffect::Escape),
+            "Mangled into_raw must be inferred as Escape"
+        );
+        assert_eq!(
+            result.family_id,
+            Some(FamilyId::RUST_RAW_OWNERSHIP),
+            "into_raw must be RUST_RAW_OWNERSHIP family"
+        );
+    }
+
+    /// Objective: Verify that from_raw pattern is inferred as Reclaim effect.
+    /// Invariants: Symbol containing "from_raw" → SymbolEffect::Reclaim.
+    #[test]
+    fn test_from_raw_pattern_inference() {
+        let registry = FamilyRegistry::new();
+        // Use a mangled name that is NOT in the registry
+        let result = infer_family("_RNvXs_NtC4alloc5boxed8Box8from_raw", &registry);
+        assert_eq!(
+            result.effect,
+            Some(SymbolEffect::Reclaim),
+            "Mangled from_raw must be inferred as Reclaim"
+        );
+        assert_eq!(
+            result.family_id,
+            Some(FamilyId::RUST_RAW_OWNERSHIP),
+            "from_raw must be RUST_RAW_OWNERSHIP family"
+        );
     }
 }

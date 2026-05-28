@@ -82,9 +82,11 @@ pub fn infer_into_raw_summary(
     summary.origin = FunctionOrigin::UserCode;
     summary.confidence = confidence;
 
-    // The function returns an owned pointer (ownership transferred)
-    summary.add_effect(Effect::ReturnsOwned {
-        family: FamilyId::RUST_GLOBAL,
+    // The function escapes ownership to a raw pointer (into_raw transfer).
+    // This is NOT a normal ReturnsOwned — the pointer leaves Rust's type system.
+    summary.add_effect(Effect::OwnershipEscape {
+        family: FamilyId::RUST_RAW_OWNERSHIP,
+        result: 0,
     });
 
     // The function consumes its self argument

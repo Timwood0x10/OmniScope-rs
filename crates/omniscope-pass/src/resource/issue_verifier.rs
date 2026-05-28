@@ -243,7 +243,30 @@ fn verify_borrow_escape(candidate: &IssueCandidate) -> VerifierVerdict {
         return VerifierVerdict::ExplainedSafe;
     }
 
-    // Borrow escaped to a context requiring ownership — probable issue.
+    // Check if the escaped pointer has heap provenance (R-1).
+    // Heap pointers passed to callbacks are safe — the heap allocation
+    // outlives the callback registration.
+    if has_evidence(candidate, EvidenceKind::IrPattern) {
+        // IR pattern evidence may indicate heap/global provenance.
+        // Check if the evidence mentions heap or global provenance.
+        let has_heap = candidate.evidence.iter().any(|e| {
+            e.kind == EvidenceKind::IrPattern
+                && (e.description.contains("heap") || e.description.contains("global"))
+        });
+        if has_heap {
+            return VerifierVerdict::ExplainedSafe;
+        }
+    }
+
+    // Check if ownership was transferred via into_raw (R-6).
+    // If the pointer was intentionally moved to the C side via into_raw,
+    // the C callback using it is by-design.
+    if has_evidence(candidate, EvidenceKind::OwnershipTransfer) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Stack/borrowed userdata escaped to callback — real issue.
+    // The stack frame may be gone by the time the callback fires.
     VerifierVerdict::ProbableIssue
 }
 

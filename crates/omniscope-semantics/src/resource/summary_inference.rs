@@ -9,16 +9,17 @@
 //! 3. Structural inference — bridge/slice-to-pointer
 //! 4. Structural inference — refcount conditional release
 //! 5. Structural inference — static-lifetime sink
-//! 6. Family inference from naming patterns (lowest confidence)
+//! 6. Structural inference — into_raw/from_raw ownership transfer (R-6)
+//! 7. Family inference from naming patterns (lowest confidence)
 
 use omniscope_types::{
-    Effect, Evidence, EvidenceKind, FamilyId, FunctionId, FunctionOrigin, SymbolId,
+    Effect, Evidence, EvidenceKind, FamilyId, FunctionId, FunctionOrigin, LanguageHint, SymbolId,
 };
 
 use super::family_registry::{FamilyRegistry, SymbolEffect};
 use super::structural_inference::{
-    infer_bridge_summary, infer_destructor_summary, infer_refcount_release_summary,
-    infer_static_lifetime_summary,
+    infer_bridge_summary, infer_destructor_summary, infer_into_raw_summary,
+    infer_refcount_release_summary, infer_static_lifetime_summary,
 };
 use super::summary::{ResourceSummary, SummaryStore};
 
@@ -91,6 +92,35 @@ pub fn infer_summary_for_symbol(
     );
     if static_result.is_static_lifetime {
         return static_summary;
+    }
+
+    // Priority 5.5: Structural inference — into_raw/from_raw ownership transfer (R-6)
+    // This handles mangled Rust names like _RNvXs_NtC...4alloc5boxed8Box3i328into_raw
+    // that are NOT registered in FamilyRegistry (registry only has demangled names).
+    let (into_raw_summary, into_raw_result) =
+        infer_into_raw_summary(symbol, function, canonical_name, language_hint);
+    if into_raw_result.is_into_raw {
+        return into_raw_summary;
+    }
+
+    // Also check for from_raw pattern (ownership reclamation from raw pointer).
+    // from_raw is the inverse of into_raw — it re-acquires ownership.
+    if is_from_raw_pattern(symbol, language_hint) {
+        let mut summary = ResourceSummary::new(function, canonical_name, symbol);
+        summary.language_hint = language_hint;
+        summary.origin = FunctionOrigin::UserCode;
+        summary.confidence = 0.90;
+        summary.add_effect(Effect::OwnershipReclaim {
+            family: FamilyId::RUST_RAW_OWNERSHIP,
+            result: 0,
+        });
+        summary.add_evidence(Evidence::new(
+            EvidenceKind::OwnershipTransfer,
+            format!(
+                "function '{symbol}' inferred as from_raw — ownership reclaimed from raw pointer"
+            ),
+        ));
+        return summary;
     }
 
     // Priority 6: Family inference from naming patterns (lowest confidence)
@@ -176,6 +206,31 @@ fn build_summary_from_entry(
     ));
 
     summary
+}
+
+/// Checks whether a symbol name matches a from_raw ownership reclamation pattern.
+///
+/// Handles both demangled names (e.g. `Box::from_raw`) and Rust v0 mangled
+/// names (e.g. `_RNvXs_NtC...4alloc5boxed8Box3i328from_raw`).
+/// Only Rust has from_raw idioms — returns false for other languages.
+fn is_from_raw_pattern(name: &str, language_hint: LanguageHint) -> bool {
+    if language_hint != LanguageHint::Rust && language_hint != LanguageHint::Unknown {
+        return false;
+    }
+
+    // Demangled: Box::from_raw, CString::from_raw, Vec::from_raw_parts
+    if name.contains("from_raw") {
+        return true;
+    }
+
+    // Rust v0 mangled names contain length-prefixed segments:
+    // "8from_raw" (8 = strlen("from_raw"))
+    // "14from_raw_parts" (14 = strlen("from_raw_parts"))
+    if name.contains("8from_raw") || name.contains("14from_raw_parts") {
+        return true;
+    }
+
+    false
 }
 
 /// Converts a `FunctionBehavior` (derived from IR instruction patterns)

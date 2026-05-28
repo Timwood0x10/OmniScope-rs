@@ -343,9 +343,55 @@ impl Pass for IssueCandidateBuilderPass {
                     }
                 }
             }
-        }
 
-        // ── ConditionalLeak: instances in Acquired/Retained/Unknown state ──
+            // ── NeedsModel: Reclaim without matching Acquire or Escape ──
+            // When an instance has only OwnershipReclaim edges with no
+            // corresponding Acquire or OwnershipEscape, the raw pointer
+            // source is unknown. This is a NeedsModel candidate, not a
+            // high-severity issue — we cannot prove it's a bug without
+            // knowing where the pointer came from.
+            for (instance_id, edges) in &instance_edges {
+                let has_acquire = edges
+                    .iter()
+                    .any(|e| matches!(e.effect, Effect::Acquire { .. }));
+                let has_escape = edges
+                    .iter()
+                    .any(|e| matches!(e.effect, Effect::OwnershipEscape { .. }));
+                let reclaim_edges: Vec<_> = edges
+                    .iter()
+                    .filter(|e| matches!(e.effect, Effect::OwnershipReclaim { .. }))
+                    .collect();
+
+                // If there are reclaim edges but no acquire or escape,
+                // the pointer's provenance is unknown → NeedsModel
+                if !has_acquire && !has_escape && !reclaim_edges.is_empty() {
+                    for reclaim in &reclaim_edges {
+                        let family = reclaim.family.unwrap_or(FamilyId::RUST_RAW_OWNERSHIP);
+                        let id = next_id;
+                        next_id += 1;
+
+                        let mut candidate = IssueCandidate::new(
+                            id,
+                            IssueCandidateKind::NeedsModel,
+                            family,
+                            &reclaim.function_name,
+                        );
+                        candidate.add_evidence(
+                            Evidence::new(
+                                EvidenceKind::RawOwnershipReclaim,
+                                format!(
+                                    "instance {} reclaimed via '{}' with unknown provenance — needs model for raw pointer source",
+                                    instance_id, reclaim.function_name
+                                ),
+                            )
+                            .with_confidence(0.5),
+                        );
+
+                        candidates.push(candidate);
+                    }
+                }
+            }
+        }
         if let Some(ref states) = ownership_states {
             for instance in states {
                 if instance.is_leak_candidate() {
@@ -1182,12 +1228,213 @@ mod tests {
             .iter()
             .filter(|c| {
                 c.kind == IssueCandidateKind::ConditionalLeak
-                    && c.evidence.iter().any(|e| e.kind == EvidenceKind::OwnershipEscapeLeak)
+                    && c.evidence
+                        .iter()
+                        .any(|e| e.kind == EvidenceKind::OwnershipEscapeLeak)
             })
             .collect();
         assert!(
             !escape_leak.is_empty(),
             "Box::into_raw without Box::from_raw MUST produce ConditionalLeak with OwnershipEscapeLeak evidence"
+        );
+    }
+
+    /// Objective: Verify that Vec::from_raw_parts from unknown source produces
+    /// a NeedsModel candidate (not a high-severity issue).
+    /// Invariants: Reclaim without Acquire or Escape = NeedsModel.
+    #[test]
+    fn test_e2e_vec_from_raw_parts_unknown_source_needs_model() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // Vec::from_raw_parts with no matching acquire or escape — unknown source
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Vec::from_raw_parts".to_string(),
+            caller: "suspicious_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let needs_model: Vec<_> = candidates
+            .iter()
+            .filter(|c| {
+                c.kind == IssueCandidateKind::NeedsModel
+                    && c.evidence
+                        .iter()
+                        .any(|e| e.kind == EvidenceKind::RawOwnershipReclaim)
+            })
+            .collect();
+        assert!(
+            !needs_model.is_empty(),
+            "Vec::from_raw_parts with unknown source MUST produce NeedsModel with RawOwnershipReclaim evidence"
+        );
+    }
+
+    /// Objective: Verify that stack/borrowed userdata passed to a callback
+    /// registration API produces a BorrowEscape (or CallbackEscape) candidate.
+    /// Invariants: EscapesToCallback edge on a Borrowed instance = escape.
+    #[test]
+    fn test_e2e_stack_userdata_callback_escape_tp() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // Only a callback registration call — no heap acquire.
+        // The ContractGraphBuilder will create a virtual stack instance,
+        // and OwnershipSolver will mark it as Borrowed.
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "register_callback".to_string(),
+            caller: "async_handler".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let escape_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| {
+                c.kind == IssueCandidateKind::BorrowEscape
+                    || c.kind == IssueCandidateKind::CallbackEscape
+            })
+            .collect();
+        assert!(
+            !escape_candidates.is_empty(),
+            "Stack userdata passed to register_callback MUST produce BorrowEscape or CallbackEscape candidate, got {:?}",
+            candidates.iter().map(|c| c.kind).collect::<Vec<_>>()
+        );
+    }
+
+    /// Objective: Verify that Box::into_raw userdata passed to a callback
+    /// registration API does NOT produce a BorrowEscape candidate.
+    /// Invariants: Heap-escaped instance (OwnershipEscape) should be
+    /// suppressed by the issue verifier's heap/ownership transfer checks.
+    #[test]
+    fn test_e2e_box_into_raw_callback_no_false_positive() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // Box::into_raw (heap escape) + register_callback
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "Box::into_raw".to_string(),
+            caller: "safe_handler".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "register_callback".to_string(),
+            caller: "safe_handler".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        // Box::into_raw produces RUST_RAW_OWNERSHIP which is a heap family,
+        // so it should NOT be selected as userdata instance by the callback
+        // escape detection. If it is, the OwnershipEscape would be caught
+        // by verify_borrow_escape's OwnershipTransfer suppression.
+        let borrow_escape: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::BorrowEscape)
+            .collect();
+        assert!(
+            borrow_escape.is_empty(),
+            "Box::into_raw + register_callback must NOT produce BorrowEscape candidate, got {}",
+            borrow_escape.len()
+        );
+    }
+
+    /// Objective: Verify that a synchronous callback call (not a registration)
+    /// does NOT produce a BorrowEscape candidate.
+    /// Invariants: Non-registration API names should not trigger callback escape.
+    #[test]
+    fn test_e2e_synchronous_callback_no_false_positive() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let mut module = IRModule::new();
+        // "call_callback" is NOT a registration API — it's a synchronous call
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "call_callback".to_string(),
+            caller: "sync_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        crate::resource::raw_fact_collector::RawFactCollectorPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::contract_graph_builder::ContractGraphBuilderPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        crate::resource::ownership_solver::OwnershipSolverPass::new()
+            .run(&mut ctx)
+            .unwrap();
+        IssueCandidateBuilderPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
+
+        let escape_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| {
+                c.kind == IssueCandidateKind::BorrowEscape
+                    || c.kind == IssueCandidateKind::CallbackEscape
+            })
+            .collect();
+        assert!(
+            escape_candidates.is_empty(),
+            "Synchronous call_callback must NOT produce BorrowEscape/CallbackEscape candidate, got {:?}",
+            escape_candidates.iter().map(|c| c.kind).collect::<Vec<_>>()
         );
     }
 }

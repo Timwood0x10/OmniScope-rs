@@ -272,7 +272,8 @@ impl Pass for ContractGraphBuilderPass {
                 // Try to match reclaims to existing escape or acquire instances
                 // of the same family. This enables DoubleReclaim detection when
                 // multiple from_raw calls target the same escaped instance.
-                let mut escape_claimed: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                let mut escape_claimed: std::collections::HashSet<u64> =
+                    std::collections::HashSet::new();
                 let mut reclaim_fallback_id: Option<u64> = None;
                 for (instance_id, family, callee_name) in &func_reclaims {
                     // Priority 1: match an escape instance of the same family
@@ -330,6 +331,56 @@ impl Pass for ContractGraphBuilderPass {
                         family: Some(*family),
                     });
                 }
+
+                // ── Callback/userdata escape detection ──
+                // When a function calls an FFI API that registers a callback,
+                // any stack/borrowed userdata pointer passed to that API
+                // escapes to the C side, potentially outliving the stack frame.
+                // This generates EscapesToCallback edges for each userdata source.
+                //
+                // Suppression: if the function has into_raw (func_escapes) or
+                // heap-family acquires, the userdata is likely heap-allocated
+                // and safely managed — do NOT generate EscapesToCallback.
+                let has_heap_source = !func_escapes.is_empty()
+                    || func_acquires.iter().any(|(_, f, _)| {
+                        *f == FamilyId::C_HEAP
+                            || *f == FamilyId::RUST_GLOBAL
+                            || *f == FamilyId::RUST_RAW_OWNERSHIP
+                            || *f == FamilyId::CPP_NEW_SCALAR
+                            || *f == FamilyId::CPP_NEW_ARRAY
+                    });
+
+                for &callee in callees {
+                    if is_callback_registration_api(callee) && !has_heap_source {
+                        // Find a non-heap acquire instance in this function.
+                        let userdata_instance = func_acquires
+                            .iter()
+                            .find(|(_, family, _)| {
+                                // Only stack-like or borrowed origins: NOT heap families
+                                *family != FamilyId::C_HEAP
+                                    && *family != FamilyId::RUST_GLOBAL
+                                    && *family != FamilyId::RUST_RAW_OWNERSHIP
+                                    && *family != FamilyId::CPP_NEW_SCALAR
+                                    && *family != FamilyId::CPP_NEW_ARRAY
+                            })
+                            .map(|(id, _, _)| *id);
+
+                        // If no non-heap acquire found, create a new instance
+                        // representing the stack userdata. The OwnershipSolver
+                        // will mark it as Borrowed since it has no Acquire edge.
+                        let instance_id =
+                            userdata_instance.unwrap_or_else(|| graph.alloc_instance());
+
+                        graph.add_edge(ContractEdge {
+                            source: instance_id,
+                            target: 0,
+                            effect: Effect::EscapesToCallback { arg: 0 },
+                            function: 0,
+                            function_name: callee.to_string(),
+                            family: None,
+                        });
+                    }
+                }
             }
 
             // Keep the IRModule in context
@@ -351,6 +402,39 @@ impl Default for ContractGraphBuilderPass {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Checks whether a callee name matches a callback registration API pattern.
+///
+/// These are FFI functions that register a callback function pointer with
+/// an associated userdata/context pointer. The userdata pointer escapes
+/// to the C side and may be used after the Rust stack frame is gone.
+///
+/// Only matches high-confidence patterns — registering, setting, or
+/// connecting a callback/handler/listener.
+fn is_callback_registration_api(callee: &str) -> bool {
+    let lower = callee.to_lowercase();
+
+    // Pattern: *_register_callback, *_set_callback, *_on_event, etc.
+    // These are the most common FFI callback registration APIs.
+    if lower.contains("register_callback")
+        || lower.contains("set_callback")
+        || lower.contains("add_callback")
+        || lower.contains("on_event")
+        || lower.contains("set_handler")
+        || lower.contains("add_handler")
+        || lower.contains("set_listener")
+        || lower.contains("connect_callback")
+    {
+        return true;
+    }
+
+    // Common C library patterns: uv_*_start (libuv), sqlite3_*, etc.
+    if lower.starts_with("uv_") && lower.ends_with("_start") {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]
