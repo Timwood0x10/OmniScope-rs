@@ -73,6 +73,8 @@ pub enum IssueKind {
     /// Same raw pointer reclaimed multiple times via from_raw (double reclaim).
     /// This is a use-after-free/double-free pattern for raw pointer ownership.
     DoubleReclaim,
+    /// Ownership escaped via into_raw but never reclaimed via from_raw.
+    OwnershipEscapeLeak,
 
     // === Concurrency Issues ===
     /// Data race across FFI boundary.
@@ -128,20 +130,23 @@ impl IssueKind {
                 | IssueKind::BorrowEscape
                 | IssueKind::CallbackEscapeIssue
                 | IssueKind::NeedsModel
+                | IssueKind::WriteToImmutable
+                | IssueKind::DoubleReclaim
+                | IssueKind::OwnershipEscapeLeak
         )
     }
 
     /// Returns the CWE (Common Weakness Enumeration) ID if applicable.
     pub fn cwe_id(&self) -> Option<u32> {
         match self {
-            IssueKind::CrossLanguageFree => Some(415), // CWE-415: Double Free
+            IssueKind::CrossLanguageFree => Some(762), // CWE-762: Mismatched Memory Management Routines
             IssueKind::DoubleFree => Some(415),
             IssueKind::UseAfterFree => Some(416), // CWE-416: Use After Free
             IssueKind::BufferOverflow => Some(120), // CWE-120: Buffer Copy without Size Check
             IssueKind::NullDereference => Some(476), // CWE-476: NULL Pointer Dereference
             IssueKind::IntegerOverflow => Some(190), // CWE-190: Integer Overflow or Wraparound
             IssueKind::MemoryLeak => Some(401),   // CWE-401: Missing Release of Memory
-            IssueKind::FfiUnsafeCall => Some(782), // CWE-782: Exposed IL Access
+            IssueKind::FfiUnsafeCall => Some(119), // CWE-119: Improper Restriction of Memory Buffer Operations
             _ => None,
         }
     }
@@ -432,7 +437,7 @@ mod tests {
         );
         assert_eq!(
             issue.cwe_id,
-            Some(415),
+            Some(762),
             "CWE ID must be auto-populated from issue kind"
         );
     }

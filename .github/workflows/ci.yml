@@ -6,7 +6,8 @@ name: CI/CD
 on:
   push:
     branches:
-      - master
+      #  must change
+      - dev
       - dev
       - 'feature/**'
       - 'bugfix/**'

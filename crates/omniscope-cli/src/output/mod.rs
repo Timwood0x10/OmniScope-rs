@@ -82,6 +82,7 @@ pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
         IssueKind::ThreadCrossing => "thread_crossing",
         IssueKind::WriteToImmutable => "write_to_immutable",
         IssueKind::DoubleReclaim => "double_reclaim",
+        IssueKind::OwnershipEscapeLeak => "ownership_escape_leak",
         IssueKind::Unknown => "unknown",
     }
 }

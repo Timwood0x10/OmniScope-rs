@@ -162,6 +162,12 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
             // is always a real issue — same as double free.
             VerifierVerdict::ConfirmedIssue
         }
+        IssueCandidateKind::OwnershipEscapeLeak => {
+            // into_raw without from_raw — ownership leaked across FFI boundary.
+            // Always at least probable since the pointer may be reclaimed
+            // in a different compilation unit we don't see.
+            VerifierVerdict::ProbableIssue
+        }
     }
 }
 
@@ -204,6 +210,14 @@ fn verify_cross_family_free(
 
 /// Verifies a conditional leak candidate.
 fn verify_conditional_leak(candidate: &IssueCandidate) -> VerifierVerdict {
+    // OwnershipEscapeLeak: into_raw without from_raw — the raw pointer
+    // was explicitly leaked across the FFI boundary. This is a stronger
+    // signal than a generic conditional leak; the pointer may never be
+    // reclaimed. Skip the usual escape-based suppression checks.
+    if has_evidence(candidate, EvidenceKind::OwnershipEscapeLeak) {
+        return VerifierVerdict::ProbableIssue;
+    }
+
     // Check for valid escape that explains the "leak".
     if has_evidence(candidate, EvidenceKind::ReturnToCaller) {
         // Returned to caller — not a local leak.
@@ -294,6 +308,7 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::CallbackEscape => "callback escape",
         IssueCandidateKind::NeedsModel => "needs model",
         IssueCandidateKind::DoubleReclaim => "double reclaim",
+        IssueCandidateKind::OwnershipEscapeLeak => "ownership escape leak",
     };
 
     let verdict_label = match verdict {

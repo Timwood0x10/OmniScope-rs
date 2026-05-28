@@ -168,6 +168,9 @@ impl TerminalReporter {
             IssueCandidateKind::DoubleReclaim => {
                 self.format_double_reclaim(candidate, verdict, &badge)
             }
+            IssueCandidateKind::OwnershipEscapeLeak => {
+                self.format_ownership_escape_leak(candidate, verdict, &badge)
+            }
         }
     }
 
@@ -288,6 +291,19 @@ impl TerminalReporter {
         let family = format_family_label(candidate.alloc_family, self.use_color);
         format!(
             "{badge} double reclaim: raw pointer reclaimed multiple times in '{}' ({})",
+            candidate.alloc_function, family
+        )
+    }
+
+    fn format_ownership_escape_leak(
+        &self,
+        candidate: &IssueCandidate,
+        _verdict: VerifierVerdict,
+        badge: &str,
+    ) -> String {
+        let family = format_family_label(candidate.alloc_family, self.use_color);
+        format!(
+            "{badge} ownership escape leak: into_raw without from_raw in '{}' ({})",
             candidate.alloc_function, family
         )
     }

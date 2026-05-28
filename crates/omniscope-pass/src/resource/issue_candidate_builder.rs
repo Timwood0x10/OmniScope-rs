@@ -277,7 +277,7 @@ impl Pass for IssueCandidateBuilderPass {
 
                     let mut candidate = IssueCandidate::new(
                         id,
-                        IssueCandidateKind::ConditionalLeak,
+                        IssueCandidateKind::OwnershipEscapeLeak,
                         family,
                         escape_func,
                     );
@@ -1226,16 +1226,11 @@ mod tests {
 
         let escape_leak: Vec<_> = candidates
             .iter()
-            .filter(|c| {
-                c.kind == IssueCandidateKind::ConditionalLeak
-                    && c.evidence
-                        .iter()
-                        .any(|e| e.kind == EvidenceKind::OwnershipEscapeLeak)
-            })
+            .filter(|c| c.kind == IssueCandidateKind::OwnershipEscapeLeak)
             .collect();
         assert!(
             !escape_leak.is_empty(),
-            "Box::into_raw without Box::from_raw MUST produce ConditionalLeak with OwnershipEscapeLeak evidence"
+            "Box::into_raw without Box::from_raw MUST produce OwnershipEscapeLeak candidate"
         );
     }
 

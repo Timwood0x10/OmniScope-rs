@@ -494,11 +494,14 @@ impl FamilyRegistry {
 
     /// Register C# COM interop family symbols.
     /// Evidence: `csharp_ffi_bugs.ll` — COM interop memory management.
+    ///
+    /// Note: CoTaskMemAlloc/CoTaskMemFree are already registered in
+    /// add_csharp_symbols under CSHARP_COTASK. They must NOT be
+    /// re-registered here under CSHARP_COM or the HashMap will overwrite
+    /// the COTASK mapping, losing it entirely.
     fn add_csharp_com_symbols(&mut self) {
-        let f = FamilyId::CSHARP_COM;
-        let lang = LanguageHint::CSharp;
-        self.add_symbol("CoTaskMemAlloc", f, SymbolEffect::Acquire, lang);
-        self.add_symbol("CoTaskMemFree", f, SymbolEffect::Release, lang);
+        // No COM-specific symbols currently — CoTaskMem* are in CSHARP_COTASK.
+        // Future COM-specific allocators (e.g., CoCreateInstance) go here.
     }
 }
 

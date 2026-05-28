@@ -160,6 +160,9 @@ pub enum IssueCandidateKind {
     /// Same raw pointer reclaimed multiple times via from_raw (double reclaim).
     /// This is a use-after-free/double-free pattern for raw pointer ownership.
     DoubleReclaim,
+    /// Ownership escaped via into_raw but never reclaimed via from_raw.
+    /// The raw pointer was leaked across the FFI boundary.
+    OwnershipEscapeLeak,
 }
 
 #[cfg(test)]
@@ -206,11 +209,12 @@ mod tests {
             IssueCandidateKind::CallbackEscape,
             IssueCandidateKind::NeedsModel,
             IssueCandidateKind::DoubleReclaim,
+            IssueCandidateKind::OwnershipEscapeLeak,
         ];
         assert_eq!(
             kinds.len(),
-            8,
-            "Must have 8 candidate kinds as specified in architecture doc"
+            9,
+            "Must have 9 candidate kinds as specified in architecture doc"
         );
     }
 }

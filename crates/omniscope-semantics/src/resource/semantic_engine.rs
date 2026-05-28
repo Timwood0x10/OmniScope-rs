@@ -266,10 +266,12 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
             }
             SymbolEffect::Reclaim => {
                 // from_raw: ownership reclaimed from raw pointer
+                // This is the symmetric counterpart of into_raw (Escape).
+                // Both are intentional, safe ownership transfers — not concerns.
                 evidence.push(IREvidence {
                     instruction_kind: IRInstructionKind::Call,
                     reasoning: format!(
-                        "Callee '{}' is an ownership reclaim (from_raw) for family {:?} — reacquiring ownership",
+                        "Callee '{}' is an ownership reclaim (from_raw) for family {:?} — intentional reacquisition",
                         callee, entry.family_id
                     ),
                 });
@@ -278,7 +280,7 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
                     caller: caller.to_string(),
                     caller_behavior,
                     callee_behavior,
-                    verdict: FFIVerdict::ConcernOwnershipTransfer,
+                    verdict: FFIVerdict::SafeInternalBridge,
                     evidence,
                 };
             }

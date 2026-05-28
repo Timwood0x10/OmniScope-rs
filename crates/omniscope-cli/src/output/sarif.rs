@@ -162,6 +162,9 @@ impl SarifFormatter {
             IssueKind::DataRace,
             IssueKind::LockOrderViolation,
             IssueKind::ThreadCrossing,
+            IssueKind::WriteToImmutable,
+            IssueKind::DoubleReclaim,
+            IssueKind::OwnershipEscapeLeak,
             IssueKind::Unknown,
         ];
 
