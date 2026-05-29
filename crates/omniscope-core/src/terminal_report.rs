@@ -180,7 +180,7 @@ impl TerminalReporter {
         verdict: VerifierVerdict,
         badge: &str,
     ) -> String {
-        let _alloc_family = format_family_label(candidate.alloc_family, self.use_color);
+        let alloc_family = format_family_label(candidate.alloc_family, self.use_color);
         let release_family = candidate
             .release_family
             .map(|f| format_family_label(f, self.use_color))
@@ -196,8 +196,8 @@ impl TerminalReporter {
         let release_func = candidate.release_function.as_deref().unwrap_or("unknown");
 
         format!(
-            "{badge} cross-family free: {} ({}) released as {} in '{}'",
-            candidate.alloc_function, arrow, release_family, release_func
+            "{badge} cross-family free: {} ({}) ──{}──> {} ({})",
+            candidate.alloc_function, alloc_family, arrow, release_family, release_func
         )
     }
 

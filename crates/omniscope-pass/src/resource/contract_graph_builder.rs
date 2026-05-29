@@ -327,7 +327,7 @@ impl Pass for ContractGraphBuilderPass {
                     }
 
                     graph.add_edge(ContractEdge {
-                        source: 0,
+                        source: target_id,
                         target: target_id,
                         effect: Effect::OwnershipReclaim {
                             family: *family,

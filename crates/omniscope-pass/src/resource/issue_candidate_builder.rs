@@ -153,7 +153,7 @@ impl Pass for IssueCandidateBuilderPass {
                         );
                         candidate.add_evidence(
                             Evidence::new(
-                                EvidenceKind::CrossFamilyMismatch,
+                                EvidenceKind::MultipleRelease,
                                 format!(
                                     "instance {} released {} times",
                                     instance_id,
@@ -173,38 +173,41 @@ impl Pass for IssueCandidateBuilderPass {
                 let has_escape = edges
                     .iter()
                     .any(|e| matches!(e.effect, Effect::EscapesToCallback { .. }));
-                // Borrow detection: we check ownership_states below for
-                // instances with PointerContract::Borrowed that have escape edges.
-                let _has_borrowed = false;
+                // Check if this instance has a Borrowed contract in ownership states.
+                // Only generate BorrowEscape candidates when the pointer is actually
+                // borrowed (not owned) — owned pointers escaping is a different issue.
+                let has_borrowed = ownership_states
+                    .as_ref()
+                    .and_then(|states| states.iter().find(|s| s.id == *instance_id))
+                    .is_some_and(|inst| inst.contract == PointerContract::Borrowed);
 
-                // Use ownership_states for contract info if available
-                if has_escape {
+                // Generate BorrowEscape candidate only when both conditions hold:
+                // 1. The instance has an escape edge (EscapesToCallback)
+                // 2. The instance's contract is Borrowed (not Owned)
+                if has_escape && has_borrowed {
                     if let Some(ref states) = ownership_states {
-                        let instance = states.iter().find(|s| s.id == *instance_id);
-                        if let Some(inst) = instance {
-                            if inst.contract == PointerContract::Borrowed {
-                                let id = next_id;
-                                next_id += 1;
+                        if let Some(inst) = states.iter().find(|s| s.id == *instance_id) {
+                            let id = next_id;
+                            next_id += 1;
 
-                                let mut candidate = IssueCandidate::new(
-                                    id,
-                                    IssueCandidateKind::BorrowEscape,
-                                    inst.family,
-                                    "unknown",
-                                );
-                                candidate.add_evidence(
-                                    Evidence::new(
-                                        EvidenceKind::CallbackEscape,
-                                        format!(
-                                            "borrowed pointer (instance {}) escaped to callback",
-                                            instance_id
-                                        ),
-                                    )
-                                    .with_confidence(0.7),
-                                );
+                            let mut candidate = IssueCandidate::new(
+                                id,
+                                IssueCandidateKind::BorrowEscape,
+                                inst.family,
+                                "unknown",
+                            );
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::CallbackEscape,
+                                    format!(
+                                        "borrowed pointer (instance {}) escaped to callback",
+                                        instance_id
+                                    ),
+                                )
+                                .with_confidence(0.7),
+                            );
 
-                                candidates.push(candidate);
-                            }
+                            candidates.push(candidate);
                         }
                     }
                 }

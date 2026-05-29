@@ -270,6 +270,34 @@ impl PassContext {
     pub fn issue_count(&self) -> usize {
         self.issues.len()
     }
+
+    /// Merges another PassContext into this one.
+    ///
+    /// Used by the parallel pass manager to collect results from
+    /// per-pass local contexts back into the shared main context.
+    /// Issues, suppressed issues, diagnostics, facts, and shared data
+    /// are all appended/overwritten. The `next_issue_id` counter is
+    /// advanced past the highest ID in the merged context to avoid
+    /// collisions.
+    pub fn merge(&mut self, other: PassContext) {
+        // Append issues and suppressed issues
+        self.issues.extend(other.issues);
+        self.suppressed_issues.extend(other.suppressed_issues);
+
+        // Append diagnostics and facts
+        self.diagnostics.extend(other.diagnostics);
+        self.facts.extend(other.facts);
+
+        // Merge shared data (later writer wins for duplicate keys)
+        for (key, value) in other.shared {
+            self.shared.insert(key, value);
+        }
+
+        // Advance issue ID counter past the highest used ID
+        if other.next_issue_id > self.next_issue_id {
+            self.next_issue_id = other.next_issue_id;
+        }
+    }
 }
 
 impl Default for PassContext {

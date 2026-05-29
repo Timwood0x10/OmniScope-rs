@@ -64,6 +64,9 @@ pub enum EvidenceKind {
     /// Ownership escaped via into_raw without matching from_raw reclaim.
     /// Evidence: ownership_transfer_escape — resource leaked across FFI boundary.
     OwnershipEscapeLeak,
+    /// Double/multiple release on the same resource instance.
+    /// Evidence: instance released more than once — structural double-free.
+    MultipleRelease,
     /// Unknown or insufficient evidence.
     Insufficient,
 }

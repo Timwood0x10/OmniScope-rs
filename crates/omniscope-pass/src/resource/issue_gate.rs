@@ -118,6 +118,16 @@ where
             return GateVerdict::SuppressRaii;
         }
 
+        // ── WriteToImmutable: R-0 MutableParam + R-2 InteriorMutability ──
+        omniscope_core::IssueKind::WriteToImmutable => {
+            if has_kind(key, SemanticKind::MutableParam) {
+                return GateVerdict::SuppressMutableParam;
+            }
+            if has_kind(key, SemanticKind::InteriorMutability) {
+                return GateVerdict::SuppressInteriorMut;
+            }
+        }
+
         // ── CrossLanguageFree: R-4 + R-6 + R-7 ──
         omniscope_core::IssueKind::CrossLanguageFree => {
             if has_kind(key, SemanticKind::IntoRawTransfer) {

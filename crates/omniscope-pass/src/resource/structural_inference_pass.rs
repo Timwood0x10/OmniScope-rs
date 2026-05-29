@@ -194,9 +194,27 @@ impl Pass for StructuralInferencePass {
                     EvidenceKind::RaiiDropRelease => {
                         kinds.push(SemanticKind::RaiiDropRelease);
                     }
-                    // R-6: Ownership transfer via into_raw
+                    // R-6: Ownership transfer — distinguish subtypes by description.
+                    // Not all OwnershipTransfer is into_raw; box_leak and
+                    // manually_drop are also ownership escape patterns.
                     EvidenceKind::OwnershipTransfer => {
-                        kinds.push(SemanticKind::IntoRawTransfer);
+                        if evidence.description.contains("into_raw") {
+                            kinds.push(SemanticKind::IntoRawTransfer);
+                        }
+                        // box::leak and ManuallyDrop::new transfer ownership
+                        // but do NOT use into_raw — they are leak-style escapes.
+                        // Currently there is no separate SemanticKind for these,
+                        // so we still map to IntoRawTransfer but log a debug
+                        // note for future refinement.
+                        else {
+                            tracing::debug!(
+                                "OwnershipTransfer without into_raw pattern: \
+                                 '{}' — mapped to IntoRawTransfer (may need \
+                                 dedicated SemanticKind in the future)",
+                                evidence.description
+                            );
+                            kinds.push(SemanticKind::IntoRawTransfer);
+                        }
                     }
                     // R-4: POSIX syscall classification
                     EvidenceKind::PosixSyscallClass => {
@@ -351,12 +369,38 @@ fn is_ffi_boundary_function(name: &str) -> bool {
         return true;
     }
 
-    // C-style function names (no :: or _R prefix, typically from C code)
-    // These are likely FFI if they have underscores and no Rust path separators
+    // C-style function names that are known FFI library functions.
+    // Only match common C library prefixes to avoid annotating internal
+    // Rust functions that happen to have underscores.
+    // E.g. sqlite3_exec, uv_timer_start, curl_easy_setopt are FFI;
+    // but process_data, handle_request, compute_result are NOT.
     if !name.contains("::") && !name.starts_with('_') && name.contains('_') {
-        // Heuristic: C library functions like `sqlite3_exec`, `uv_timer_start`
-        // These are typically FFI callees, not Rust functions
-        return true;
+        let ffi_prefixes = [
+            "sqlite3_",
+            "uv_",
+            "curl_",
+            "png_",
+            "jpeg_",
+            "zlib_",
+            "ssl_",
+            "openssl_",
+            "crypto_",
+            "gtk_",
+            "gdk_",
+            "SDL_",
+            "lua_",
+            "py_",
+            "PyObject_",
+            "PyModule_",
+            "JNI_",
+            "cf_",
+            "CG",
+            "NS",
+            "CF",
+        ];
+        if ffi_prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+            return true;
+        }
     }
 
     false

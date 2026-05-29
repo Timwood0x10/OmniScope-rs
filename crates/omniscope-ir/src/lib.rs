@@ -22,6 +22,7 @@
 //! ```
 
 pub mod debug_info;
+pub mod instruction_parser;
 pub mod loader;
 pub mod location;
 pub mod parser;

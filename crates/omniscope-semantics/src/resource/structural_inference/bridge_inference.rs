@@ -167,6 +167,9 @@ fn classify_bridge_name(name: &str, language_hint: LanguageHint) -> Option<(Brid
             }
             // into_raw — this is actually a transfer, NOT a bridge.
             // Do not classify into_raw as ReturnsBorrowed.
+            if name.contains("into_raw") {
+                return None;
+            }
         }
         LanguageHint::Cpp => {
             // data(), c_str()

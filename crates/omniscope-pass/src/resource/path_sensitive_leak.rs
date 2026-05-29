@@ -12,7 +12,8 @@
 //! - Uses summary store to determine release families
 //! - Produces ConditionalLeak candidates for the IssueVerifier
 
-use omniscope_core::{IssueCandidate, Result};
+use omniscope_core::diagnostics::Severity;
+use omniscope_core::{Issue, IssueCandidate, IssueKind, Result};
 use omniscope_semantics::SummaryStore;
 use omniscope_types::{Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
 
@@ -142,6 +143,29 @@ impl Pass for PathSensitiveLeakPass {
         }
 
         let leak_count = leak_candidates.len();
+
+        // Emit each leak candidate as an Issue through the SRT gate.
+        // Previously, candidates were only stored in the context but
+        // never read by any downstream pass, causing silent data loss.
+        for candidate in &leak_candidates {
+            let issue_id = ctx.next_issue_id();
+            let issue = Issue::new(
+                issue_id,
+                IssueKind::ConditionalLeak,
+                Severity::Warning,
+                candidate.description.clone().unwrap_or_else(|| {
+                    format!(
+                        "potential memory leak: allocation of family {:?} in '{}' \
+                         has no same-family release on some paths",
+                        candidate.alloc_family, candidate.alloc_function
+                    )
+                }),
+            )
+            .with_symbol(candidate.alloc_function.clone());
+            ctx.emit_issue(issue);
+        }
+
+        // Still store candidates for downstream diagnostic consumers
         ctx.store("leak_candidates", leak_candidates);
 
         let mut result = PassResult::new(self.name())
@@ -165,12 +189,16 @@ impl Default for PathSensitiveLeakPass {
 
 /// Checks if there's a same-family release in the raw facts for
 /// the given allocation site.
+///
+/// A release matches if it targets the same family. It does NOT need
+/// to be in the same function — cleanup functions like `close()` or
+/// `free()` are typically in a different function from the allocation.
 fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) -> bool {
     let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
     facts
         .iter()
-        .any(|f| !f.is_acquire && f.function == alloc.function && (f.family == Some(alloc_family)))
+        .any(|f| !f.is_acquire && f.family == Some(alloc_family))
 }
 
 /// Checks if the summary store contains a function that releases

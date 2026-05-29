@@ -106,7 +106,11 @@ fn verdict_multiplier(verdict: Option<VerifierVerdict>) -> f32 {
 /// evidence reduces the multiplier.
 fn evidence_multiplier(candidate: &IssueCandidate) -> f32 {
     if candidate.evidence.is_empty() {
-        return 1.0; // No evidence — rely on verdict confidence
+        // ConfirmedIssue verdict is itself strong evidence — don't penalize heavily
+        if candidate.verdict == Some(VerifierVerdict::ConfirmedIssue) {
+            return 0.85;
+        }
+        return 0.7; // No evidence — reduced confidence: lack of corroboration lowers risk
     }
 
     // Average confidence across evidence items

@@ -164,11 +164,12 @@ impl WriteToImmutablePass {
         }
     }
 
-    /// Checks if a function parameter is mutable (lacks readonly attribute).
+    /// Checks if a function parameter is mutable (has &mut indicator).
     fn is_mutable_parameter(&self, caller: &str) -> bool {
-        // Heuristic: Rust functions with &mut parameters are typically mutable
-        // For now, we assume most Rust functions have mutable parameters unless marked readonly
-        caller.starts_with("_R") && !caller.contains("readonly")
+        // R-0: Rust mangled names with explicit mut reference pattern indicate mutable params.
+        // R-2: Interior mutability types also allow mutation through shared refs.
+        // Only suppress when we have high confidence the param IS mutable, not the reverse.
+        (caller.starts_with("_R") && caller.contains("mut")) || self.has_interior_mutability(caller)
     }
 
     /// Checks if a type has interior mutability (contains UnsafeCell).

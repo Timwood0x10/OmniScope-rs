@@ -148,27 +148,41 @@ impl PassManager {
         let mut results = Vec::new();
 
         if self.parallel {
-            // Group passes by dependency level for parallel execution
+            // Group passes by dependency level for parallel execution.
+            // Each pass gets its own local PassContext (parallel safety),
+            // then results are merged back into the shared main context.
             let levels = self.compute_levels();
 
             for level in levels {
-                let level_results: Vec<PassResult> = level
+                let level_results: Vec<(usize, PassContext, PassResult)> = level
                     .into_par_iter()
                     .map(|idx| {
                         let pass = &self.passes[idx];
                         let mut local_ctx = PassContext::new();
                         let start = Instant::now();
 
-                        let mut result = pass
-                            .run(&mut local_ctx)
-                            .unwrap_or_else(|_e| PassResult::new(pass.name()).with_issues(1));
+                        let mut result = match pass.run(&mut local_ctx) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Pass '{}' failed in parallel mode: {}",
+                                    pass.name(),
+                                    e
+                                );
+                                PassResult::new(pass.name()).with_issues(0)
+                            }
+                        };
 
                         result.duration_ms = start.elapsed().as_millis() as u64;
-                        result
+                        (idx, local_ctx, result)
                     })
                     .collect();
 
-                results.extend(level_results);
+                // Merge each local_ctx back into the shared main context
+                for (_idx, local_ctx, result) in level_results {
+                    ctx.merge(local_ctx);
+                    results.push(result);
+                }
             }
         } else {
             // Sequential execution

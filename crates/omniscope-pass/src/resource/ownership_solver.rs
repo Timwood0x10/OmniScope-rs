@@ -62,9 +62,18 @@ impl Pass for OwnershipSolverPass {
             // First pass: create ResourceInstance for each acquire edge.
             for edge in &graph.edges {
                 if let Effect::Acquire { family, result } = edge.effect {
-                    let instance = ResourceInstance::new(result, family, PointerContract::Owned);
-                    instance_map.insert(result, instances.len());
-                    instances.push(instance);
+                    if let std::collections::hash_map::Entry::Vacant(e) = instance_map.entry(result)
+                    {
+                        let instance =
+                            ResourceInstance::new(result, family, PointerContract::Owned);
+                        e.insert(instances.len());
+                        instances.push(instance);
+                    } else {
+                        tracing::warn!(
+                            instance_id = result,
+                            "duplicate instance_id in acquire edge — first instance kept"
+                        );
+                    }
                 }
             }
 
@@ -111,14 +120,29 @@ impl Pass for OwnershipSolverPass {
                     }
                     Effect::Retain { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Retain);
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Retain) {
+                                tracing::debug!(
+                                    "Retain transition error for instance {}: {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::ReturnsOwned { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::ReturnToCaller,
-                            });
+                            }) {
+                                tracing::debug!(
+                                    "Escape(ReturnToCaller) transition error for instance {}: \
+                                     {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::ReturnsBorrowed => {
@@ -128,35 +152,74 @@ impl Pass for OwnershipSolverPass {
                     }
                     Effect::ConsumesArg { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Transfer);
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Transfer) {
+                                tracing::debug!(
+                                    "Transfer transition error for instance {}: {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::StoresArgToOwner { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::FieldStore,
-                            });
+                            }) {
+                                tracing::debug!(
+                                    "Escape(FieldStore) transition error for instance {}: \
+                                     {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::StoresArgToGlobal { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::GlobalStore,
-                            });
+                            }) {
+                                tracing::debug!(
+                                    "Escape(GlobalStore) transition error for instance {}: \
+                                     {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::InitializesOutParam { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::OutParam,
-                            });
+                            }) {
+                                tracing::debug!(
+                                    "Escape(OutParam) transition error for instance {}: \
+                                     {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::EscapesToCallback { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::Callback,
-                            });
+                            }) {
+                                tracing::debug!(
+                                    "Escape(Callback) transition error for instance {}: \
+                                     {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         } else {
                             // Stack/borrowed userdata: no prior Acquire, so create a
                             // Borrowed instance directly. This models the case where
@@ -166,8 +229,18 @@ impl Pass for OwnershipSolverPass {
                                 edge.family.unwrap_or(FamilyId::C_HEAP),
                                 PointerContract::Borrowed,
                             );
-                            instance_map.insert(edge.source, instances.len());
-                            instances.push(instance);
+                            if let std::collections::hash_map::Entry::Vacant(entry) =
+                                instance_map.entry(edge.source)
+                            {
+                                entry.insert(instances.len());
+                                instances.push(instance);
+                            } else {
+                                tracing::warn!(
+                                    instance_id = edge.source,
+                                    "duplicate instance_id in callback escape edge — first instance kept"
+                                );
+                                instances.push(instance);
+                            }
                         }
                     }
                     Effect::OwnershipEscape { .. } => {
@@ -175,9 +248,17 @@ impl Pass for OwnershipSolverPass {
                         // The instance is still allocated but ownership is now
                         // tracked outside Rust's type system.
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            let _ = instances[idx].transition(OwnershipEvent::Escape {
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
                                 kind: EscapeKind::ReturnToCaller,
-                            });
+                            }) {
+                                tracing::debug!(
+                                    "Escape(ReturnToCaller) transition error for instance {}: \
+                                     {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::OwnershipReclaim { family, result } => {
@@ -185,8 +266,18 @@ impl Pass for OwnershipSolverPass {
                         // Create a new ResourceInstance for the reclaimed resource.
                         let instance =
                             ResourceInstance::new(result, family, PointerContract::Owned);
-                        instance_map.insert(result, instances.len());
-                        instances.push(instance);
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            instance_map.entry(result)
+                        {
+                            entry.insert(instances.len());
+                            instances.push(instance);
+                        } else {
+                            tracing::warn!(
+                                instance_id = result,
+                                "duplicate instance_id in reclaim edge — first instance kept"
+                            );
+                            instances.push(instance);
+                        }
                     }
                 }
             }
