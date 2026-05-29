@@ -149,7 +149,7 @@ impl Pass for PathSensitiveLeakPass {
         // never read by any downstream pass, causing silent data loss.
         for candidate in &leak_candidates {
             let issue_id = ctx.next_issue_id();
-            let issue = Issue::new(
+            let mut issue = Issue::new(
                 issue_id,
                 IssueKind::ConditionalLeak,
                 Severity::Warning,
@@ -162,6 +162,15 @@ impl Pass for PathSensitiveLeakPass {
                 }),
             )
             .with_symbol(candidate.alloc_function.clone());
+
+            // Set the issue location with the function name from the candidate.
+            if !candidate.alloc_function.is_empty() && candidate.alloc_function != "unknown" {
+                let location =
+                    omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
+                        .with_function(&candidate.alloc_function);
+                issue = issue.with_location(location);
+            }
+
             ctx.emit_issue(issue);
         }
 
@@ -222,28 +231,26 @@ fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) ->
 }
 
 /// Checks if the summary store contains a function that releases
-/// the same family as the allocation, scoped to the allocation's function
-/// or its likely cleanup callees.
+/// the same family as the allocation, scoped to the allocation's function.
 ///
 /// Previously this searched ALL summaries globally, which caused false
 /// suppression: any function with a same-family Release would suppress
 /// the leak, even if the release was in a completely unrelated function.
 ///
-/// Now we restrict the search to:
-/// 1. The summary whose `function` ID matches the alloc's function ID, OR
-/// 2. Summaries whose name matches the alloc's function_name (handles
-///    the case where the alloc's callee itself has a release summary).
+/// Now we restrict the search to summaries whose `function` ID matches
+/// the alloc's function ID (the function containing the alloc also releases).
+///
+/// NOTE: Cross-function release detection (e.g. a callee that frees memory
+/// allocated by its caller) requires call graph data to connect the alloc
+/// site to the release site. This function does not attempt that; matching
+/// by callee name would be unsound because an alloc callee like "malloc"
+/// would have Acquire effects, not Release effects.
 fn check_release_in_summaries(store: &SummaryStore, alloc: &RawResourceFact) -> bool {
     let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
     for (_, summary) in store.iter() {
-        // Scope: only consider summaries related to the allocation's function.
-        // 1. Same function ID (the function containing the alloc also releases)
-        // 2. Summary name matches the alloc's callee name (the called function
-        //    itself is a known release, e.g. free, fclose, etc.)
-        let same_function = summary.function == alloc.function;
-        let named_like_alloc_callee = summary.name == alloc.function_name;
-        if !same_function && !named_like_alloc_callee {
+        // Only consider summaries in the same function as the allocation.
+        if summary.function != alloc.function {
             continue;
         }
 

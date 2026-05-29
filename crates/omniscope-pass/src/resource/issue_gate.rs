@@ -168,6 +168,15 @@ where
             }
         }
 
+        // ── FfiUnsafeCall: suppress for non-memory syscalls and safe patterns ──
+        omniscope_core::IssueKind::FfiUnsafeCall
+            if has_kind(key, SemanticKind::FileOperation)
+                || has_kind(key, SemanticKind::NetworkOperation)
+                || has_kind(key, SemanticKind::ProcessOperation) =>
+        {
+            return GateVerdict::SuppressNonMemorySyscall;
+        }
+
         // Other issue kinds have no SRT-based suppression yet.
         _ => {}
     }

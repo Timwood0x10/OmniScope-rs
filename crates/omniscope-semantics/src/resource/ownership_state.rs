@@ -39,10 +39,13 @@ pub struct ResourceInstance {
     pub state: OwnershipState,
     /// Pointer contract at the point of acquisition.
     pub contract: PointerContract,
-    /// The function that acquired this resource.
+    /// The function ID that acquired this resource.
     pub acquired_in: Option<u64>,
-    /// The function that released this resource (if any).
+    /// The function ID that released this resource (if any).
     pub released_in: Option<u64>,
+    /// The enclosing function name where this resource was created.
+    /// Used for issue location reporting.
+    pub function_name: String,
 }
 
 impl ResourceInstance {
@@ -55,6 +58,7 @@ impl ResourceInstance {
             contract,
             acquired_in: None,
             released_in: None,
+            function_name: String::new(),
         }
     }
 

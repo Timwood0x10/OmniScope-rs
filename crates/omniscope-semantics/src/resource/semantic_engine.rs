@@ -528,14 +528,23 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
 /// unregistered release functions (e.g. project-specific deallocators)
 /// would slip through without this guard.
 fn callee_name_suggests_release(callee: &str) -> bool {
-    callee.contains("free")
-        || callee.contains("dealloc")
-        || callee.contains("drop")
-        || callee.contains("destroy")
-        || callee.contains("release")
-        || callee.contains("unref")
-        || callee.contains("cleanup")
-        || callee.contains("dispose")
+    let lower = callee.to_lowercase();
+    lower.contains("_free")
+        || lower.ends_with("free")
+        || lower.contains("_drop")
+        || lower.ends_with("drop")
+        || lower.contains("_dealloc")
+        || lower.ends_with("dealloc")
+        || lower.contains("_destroy")
+        || lower.ends_with("destroy")
+        || lower.contains("_release")
+        || lower.ends_with("release")
+        || lower.contains("_unref")
+        || lower.ends_with("unref")
+        || lower.contains("_cleanup")
+        || lower.ends_with("cleanup")
+        || lower.contains("_dispose")
+        || lower.ends_with("dispose")
 }
 
 /// Derive FFI safety from the caller's instruction context.
@@ -588,7 +597,8 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // length-prefixed identifiers (e.g. `_RNvNt...4drop...`). Using
     // `contains("4drop")` alone could match unrelated substrings like
     // "x4dropbox".
-    if (callee.contains("drop_in_place") || callee.contains("_4drop")) && callee.starts_with("_R") {
+    if (callee.contains("drop_in_place") || callee.contains("_4drop_")) && callee.starts_with("_R")
+    {
         return FFIVerdict::SafeConditionalRelease;
     }
     if callee == "__rust_dealloc" || callee == "__rdl_dealloc" || callee == "__rg_dealloc" {
@@ -1463,6 +1473,89 @@ mod tests {
         assert!(
             assessment.is_safe(),
             "SafeInternalBridge must report is_safe() == true"
+        );
+    }
+
+    // ── Tests for callee_name_suggests_release word-boundary matching ──
+
+    #[test]
+    fn test_release_suggest_true_positives() {
+        assert!(
+            callee_name_suggests_release("c_free"),
+            "c_free must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("my_dealloc"),
+            "my_dealloc must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("obj_drop"),
+            "obj_drop must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("resource_destroy"),
+            "resource_destroy must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("handle_release"),
+            "handle_release must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("ref_unref"),
+            "ref_unref must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("buffer_cleanup"),
+            "buffer_cleanup must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("widget_dispose"),
+            "widget_dispose must be recognized as a release function"
+        );
+        // Bare keyword at end of name (no delimiter)
+        assert!(
+            callee_name_suggests_release("free"),
+            "bare 'free' must be recognized as a release function"
+        );
+        assert!(
+            callee_name_suggests_release("dealloc"),
+            "bare 'dealloc' must be recognized as a release function"
+        );
+    }
+
+    #[test]
+    fn test_release_suggest_false_positives_rejected() {
+        assert!(
+            !callee_name_suggests_release("freeze"),
+            "'freeze' must NOT match as release (false positive on 'free')"
+        );
+        assert!(
+            !callee_name_suggests_release("dropdown"),
+            "'dropdown' must NOT match as release (false positive on 'drop')"
+        );
+        assert!(
+            !callee_name_suggests_release("destroyed_already"),
+            "'destroyed_already' must NOT match as release (substring 'destroy' mid-word)"
+        );
+        assert!(
+            !callee_name_suggests_release("freezing_point"),
+            "'freezing_point' must NOT match as release"
+        );
+        assert!(
+            !callee_name_suggests_release("drops_handler"),
+            "'drops_handler' must NOT match as release (no delimiter before 'drop')"
+        );
+    }
+
+    #[test]
+    fn test_release_suggest_case_insensitive() {
+        assert!(
+            callee_name_suggests_release("C_FREE"),
+            "C_FREE must match case-insensitively"
+        );
+        assert!(
+            callee_name_suggests_release("My_Dealloc"),
+            "My_Dealloc must match case-insensitively"
         );
     }
 }

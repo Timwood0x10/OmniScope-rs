@@ -64,8 +64,9 @@ impl Pass for OwnershipSolverPass {
                 if let Effect::Acquire { family, result } = edge.effect {
                     if let std::collections::hash_map::Entry::Vacant(e) = instance_map.entry(result)
                     {
-                        let instance =
+                        let mut instance =
                             ResourceInstance::new(result, family, PointerContract::Owned);
+                        instance.function_name = edge.caller_name.clone();
                         e.insert(instances.len());
                         instances.push(instance);
                     } else {
@@ -253,6 +254,7 @@ impl Pass for OwnershipSolverPass {
                                 PointerContract::Borrowed,
                             );
                             instance.state = OwnershipState::Borrowed;
+                            instance.function_name = edge.caller_name.clone();
                             if let std::collections::hash_map::Entry::Vacant(entry) =
                                 instance_map.entry(edge.source)
                             {
@@ -286,9 +288,40 @@ impl Pass for OwnershipSolverPass {
                     }
                     Effect::OwnershipReclaim { family, result } => {
                         // from_raw: ownership reclaimed from raw pointer.
+                        // Transition the escaped instance out of Escaped state so that
+                        // subsequent reclaim edges targeting the same escape do not
+                        // produce a false DoubleReclaim, and the reclaimed instance
+                        // does not start orphaned (false ConditionalLeak).
+                        if let Some(&idx) = instance_map.get(&edge.source) {
+                            match instances[idx].transition(OwnershipEvent::Release {
+                                function: edge.function,
+                            }) {
+                                Ok(()) => {}
+                                Err(omniscope_semantics::OwnershipError::DoubleRelease {
+                                    ..
+                                }) => {
+                                    tracing::debug!(
+                                        "DoubleRelease detected for escaped instance {} \
+                                         during reclaim in function {}",
+                                        edge.source,
+                                        edge.function_name
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        "Release transition error for escaped instance {} \
+                                         during reclaim in function {}: {:?}",
+                                        edge.source,
+                                        edge.function_name,
+                                        e
+                                    );
+                                }
+                            }
+                        }
                         // Create a new ResourceInstance for the reclaimed resource.
-                        let instance =
+                        let mut instance =
                             ResourceInstance::new(result, family, PointerContract::Owned);
+                        instance.function_name = edge.caller_name.clone();
                         if let std::collections::hash_map::Entry::Vacant(entry) =
                             instance_map.entry(result)
                         {
@@ -299,7 +332,6 @@ impl Pass for OwnershipSolverPass {
                                 instance_id = result,
                                 "duplicate instance_id in reclaim edge — first instance kept"
                             );
-                            instances.push(instance);
                         }
                     }
                 }
@@ -375,6 +407,7 @@ mod tests {
             },
             function: 0,
             function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
         });
 
@@ -387,6 +420,7 @@ mod tests {
             },
             function: 1,
             function_name: "free".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
         });
 
@@ -441,6 +475,7 @@ mod tests {
             },
             function: 0,
             function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
         });
 
@@ -470,5 +505,96 @@ mod tests {
             .unwrap();
         let result = instance.transition(OwnershipEvent::Release { function: 43 });
         assert!(result.is_err(), "Double release must be an error");
+    }
+
+    #[test]
+    fn test_solver_reclaim_transitions_escaped_instance_to_released() {
+        // Objective: Verify that an escape+reclaim cycle transitions the
+        // escaped instance to Released state. Without the fix, the escaped
+        // instance stays in Escaped(RawPointer) forever, which can cause
+        // false DoubleReclaim and false ConditionalLeak.
+        let mut ctx = PassContext::new();
+
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+        let reclaimed_id = graph.alloc_instance();
+
+        // Acquire: create the original resource instance.
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::C_HEAP,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        // Escape: ownership escapes to a raw pointer (into_raw).
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::OwnershipEscape {
+                family: FamilyId::C_HEAP,
+                result: instance_id,
+            },
+            function: 1,
+            function_name: "into_raw".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        // Reclaim: ownership reclaimed from the raw pointer (from_raw).
+        // edge.source is the escaped instance ID; result is the new instance.
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: reclaimed_id,
+            effect: Effect::OwnershipReclaim {
+                family: FamilyId::C_HEAP,
+                result: reclaimed_id,
+            },
+            function: 2,
+            function_name: "from_raw".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        let result = pass.run(&mut ctx).unwrap();
+
+        assert_eq!(
+            result.nodes_analyzed, 2,
+            "Solver must create exactly 2 instances (original + reclaimed)"
+        );
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = states.expect("ownership_states must be stored in context");
+        assert_eq!(states.len(), 2, "Must have 2 resource instances");
+
+        // Find the original (escaped) instance and the reclaimed instance.
+        let original = states
+            .iter()
+            .find(|i| i.id == instance_id)
+            .expect("Original instance must exist");
+        let reclaimed = states
+            .iter()
+            .find(|i| i.id == reclaimed_id)
+            .expect("Reclaimed instance must exist");
+
+        assert_eq!(
+            original.state,
+            OwnershipState::Released,
+            "Escaped instance must be transitioned to Released after reclaim"
+        );
+        assert_eq!(
+            reclaimed.state,
+            OwnershipState::Acquired,
+            "Reclaimed instance must start in Acquired state"
+        );
     }
 }

@@ -147,6 +147,8 @@ impl WriteToImmutablePass {
 
         // If none of the suppression patterns match, emit the issue
         let issue_id = ctx.next_issue_id();
+        let location = omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ffi>"), 0)
+            .with_function(caller);
         let issue = Issue::new(
             issue_id,
             IssueKind::WriteToImmutable,
@@ -156,7 +158,8 @@ impl WriteToImmutablePass {
                 caller, callee, symbol
             ),
         )
-        .with_symbol(symbol);
+        .with_symbol(symbol)
+        .with_location(location);
 
         let outcome = ctx.emit_issue(issue.clone());
         if outcome.is_allowed() {
@@ -167,21 +170,25 @@ impl WriteToImmutablePass {
     /// Checks if a function parameter is mutable (has &mut indicator).
     fn is_mutable_parameter(&self, caller: &str) -> bool {
         // R-0: Rust mangled names with explicit mut reference pattern indicate mutable params.
-        // R-2: Interior mutability types also allow mutation through shared refs.
-        // Only suppress when we have high confidence the param IS mutable, not the reverse.
-        (caller.starts_with("_R") && caller.contains("mut")) || self.has_interior_mutability(caller)
+        // Interior mutability (R-2) is a separate concept and is checked independently.
+        caller.starts_with("_R") && caller.contains("mut")
     }
 
     /// Checks if a type has interior mutability (contains UnsafeCell).
     fn has_interior_mutability(&self, caller: &str) -> bool {
-        // Check for interior mutability patterns in mangled names
+        // Check for interior mutability patterns in mangled names.
+        // Use specific prefixes to avoid false matches (e.g. "Cell" matching "Cancel",
+        // "sync" matching "async").
         caller.contains("UnsafeCell")
-            || caller.contains("Cell")
             || caller.contains("RefCell")
+            || caller.contains("_Cell")
+            || caller.contains("4Cell")
             || caller.contains("Mutex")
             || caller.contains("RwLock")
-            || caller.contains("sync")
-            || caller.contains("atomic")
+            || caller.contains("_sync")
+            || caller.contains("4sync")
+            || caller.contains("_atomic")
+            || caller.contains("7atomic")
     }
 
     /// Checks if a symbol represents a function parameter.
@@ -211,17 +218,45 @@ mod tests {
     #[test]
     fn test_is_mutable_parameter() {
         let pass = WriteToImmutablePass::new();
-        assert!(pass.is_mutable_parameter("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell4Cell"));
-        assert!(!pass.is_mutable_parameter("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic_readonly"));
+        // A Rust mangled name with "mut" and _R prefix is a mutable parameter
+        assert!(
+            pass.is_mutable_parameter("_RNvMNtCsg1bLsEOY8ZL_3foo3mut"),
+            "Rust mangled name with mut must be mutable parameter"
+        );
+        // Cell type has interior mutability but is NOT a mutable parameter
+        assert!(
+            !pass.is_mutable_parameter("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell4Cell"),
+            "Cell type is not a mutable parameter"
+        );
+        assert!(
+            !pass.is_mutable_parameter("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic_readonly"),
+            "Readonly parameter must not be mutable"
+        );
     }
 
     #[test]
     fn test_has_interior_mutability() {
         let pass = WriteToImmutablePass::new();
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell10UnsafeCell"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync5mutex"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync7atomic"));
-        assert!(!pass.has_interior_mutability("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic"));
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell10UnsafeCell"),
+            "UnsafeCell must have interior mutability"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell4Cell"),
+            "std::cell::Cell must have interior mutability"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync5mutex"),
+            "std::sync::Mutex must have interior mutability"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync7atomic"),
+            "std::sync::atomic must have interior mutability"
+        );
+        assert!(
+            !pass.has_interior_mutability("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic"),
+            "panicking must not have interior mutability"
+        );
     }
 
     #[test]

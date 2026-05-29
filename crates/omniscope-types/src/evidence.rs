@@ -67,6 +67,11 @@ pub enum EvidenceKind {
     /// Double/multiple release on the same resource instance.
     /// Evidence: instance released more than once — structural double-free.
     MultipleRelease,
+    /// Use-after-free: a released resource was subsequently used
+    /// (e.g. passed to an FFI function or borrowed).
+    /// Distinct from BorrowEscape — this requires the resource to
+    /// have been freed before the use.
+    UseAfterFree,
     /// Unknown or insufficient evidence.
     Insufficient,
 }
@@ -166,6 +171,13 @@ pub enum IssueCandidateKind {
     /// Ownership escaped via into_raw but never reclaimed via from_raw.
     /// The raw pointer was leaked across the FFI boundary.
     OwnershipEscapeLeak,
+    /// Use-after-free: a released resource was subsequently used
+    /// (e.g. passed to an FFI function after being freed).
+    /// Distinct from BorrowEscape (borrowed reference escaping scope)
+    /// and UseAfterRelease (released allocation used again) — this
+    /// specifically covers the FFI boundary case where a freed
+    /// pointer is passed across the language boundary.
+    UseAfterFree,
 }
 
 #[cfg(test)]
@@ -213,11 +225,12 @@ mod tests {
             IssueCandidateKind::NeedsModel,
             IssueCandidateKind::DoubleReclaim,
             IssueCandidateKind::OwnershipEscapeLeak,
+            IssueCandidateKind::UseAfterFree,
         ];
         assert_eq!(
             kinds.len(),
-            9,
-            "Must have 9 candidate kinds as specified in architecture doc"
+            10,
+            "Must have 10 candidate kinds as specified in architecture doc"
         );
     }
 }

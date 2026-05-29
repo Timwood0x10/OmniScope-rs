@@ -130,6 +130,7 @@ fn kind_base_score(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::NeedsModel => 0.1,
         IssueCandidateKind::DoubleReclaim => 0.9,
         IssueCandidateKind::OwnershipEscapeLeak => 0.7,
+        IssueCandidateKind::UseAfterFree => 0.95,
     }
 }
 

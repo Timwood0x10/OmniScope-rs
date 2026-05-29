@@ -16,15 +16,18 @@
 //!    or escaped).
 //! 4. **BorrowEscape** — For each instance with a `Borrowed` contract
 //!    that has an escape edge (excluding bridge helpers).
+//! 5. **UseAfterFree** — For each instance in `Released` state that
+//!    has a subsequent use edge (e.g. EscapesToCallback). Distinct
+//!    from BorrowEscape: the resource was explicitly freed before use.
 
 use omniscope_core::{IssueCandidate, Result};
-use omniscope_semantics::{FamilyRegistry, ResourceInstance};
+use omniscope_semantics::{FamilyRegistry, OwnershipState, ResourceInstance};
 use omniscope_types::{
     Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
 };
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
-use crate::resource::contract_graph_builder::ContractGraph;
+use crate::resource::contract_graph_builder::{ContractEdge, ContractGraph};
 
 /// Issue candidate builder pass.
 ///
@@ -168,6 +171,52 @@ impl Pass for IssueCandidateBuilderPass {
                 }
             }
 
+            // ── DoubleRelease via target: same resource released by different instances ──
+            // After the FIFO fix, two frees of the same resource get different source
+            // instances (first pairs with acquire, second is orphan). Detect this by
+            // tracking which target IDs have been released.
+            {
+                let mut released_targets: std::collections::HashMap<u64, &ContractEdge> =
+                    std::collections::HashMap::new();
+                for edges in instance_edges.values() {
+                    for edge in edges {
+                        if !matches!(
+                            edge.effect,
+                            Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                        ) {
+                            continue;
+                        }
+                        if edge.target == 0 {
+                            continue;
+                        }
+                        if let Some(first_release) = released_targets.get(&edge.target) {
+                            let family = edge.family.unwrap_or(FamilyId::C_HEAP);
+                            let id = next_id;
+                            next_id += 1;
+                            let mut candidate = IssueCandidate::new(
+                                id,
+                                IssueCandidateKind::DoubleRelease,
+                                family,
+                                &edge.function_name,
+                            );
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::MultipleRelease,
+                                    format!(
+                                        "target {} first released by instance {}, then by instance {}",
+                                        edge.target, first_release.source, edge.source
+                                    ),
+                                )
+                                .with_confidence(0.9),
+                            );
+                            candidates.push(candidate);
+                        } else {
+                            released_targets.insert(edge.target, edge);
+                        }
+                    }
+                }
+            }
+
             // ── BorrowEscape: borrowed pointer that has an escape edge ──
             for (instance_id, edges) in &instance_edges {
                 let has_escape = edges
@@ -190,11 +239,16 @@ impl Pass for IssueCandidateBuilderPass {
                             let id = next_id;
                             next_id += 1;
 
+                            let func_name = if inst.function_name.is_empty() {
+                                "unknown"
+                            } else {
+                                &inst.function_name
+                            };
                             let mut candidate = IssueCandidate::new(
                                 id,
                                 IssueCandidateKind::BorrowEscape,
                                 inst.family,
-                                "unknown",
+                                func_name,
                             );
                             candidate.add_evidence(
                                 Evidence::new(
@@ -209,6 +263,106 @@ impl Pass for IssueCandidateBuilderPass {
 
                             candidates.push(candidate);
                         }
+                    }
+                }
+            }
+
+            // ── UseAfterFree: released resource then used (borrowed or escaped to FFI) ──
+            // Detection: instance in Released state that has EscapesToCallback or
+            // other use edges. This is distinct from BorrowEscape because the
+            // resource was explicitly freed before being used.
+            // Patterns:
+            //   - Acquired → Released → (used): straightforward UAF
+            //   - Acquired → Escaped → Released → (used): escaped then freed then used
+            for (instance_id, edges) in &instance_edges {
+                let has_release = edges.iter().any(|e| {
+                    matches!(
+                        e.effect,
+                        Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                    )
+                });
+
+                if !has_release {
+                    continue;
+                }
+
+                // Find the index of the latest release edge for temporal ordering.
+                // A use edge is only a UAF if it appears AFTER the release.
+                let release_idx = edges
+                    .iter()
+                    .rposition(|e| {
+                        matches!(
+                            e.effect,
+                            Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                        )
+                    })
+                    .unwrap_or(0);
+
+                // Check for use-after-free: EscapesToCallback or other use edges
+                // that appear AFTER the release edge in the edge list.
+                let use_edges: Vec<_> = edges
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, e)| {
+                        *idx > release_idx
+                            && matches!(
+                                e.effect,
+                                Effect::EscapesToCallback { .. } | Effect::ReturnsBorrowed
+                            )
+                    })
+                    .map(|(_, e)| e)
+                    .collect();
+
+                if use_edges.is_empty() {
+                    continue;
+                }
+
+                // Verify the instance is in Released state (the release happened
+                // and the subsequent use transition failed in the ownership solver)
+                if let Some(ref states) = ownership_states {
+                    if let Some(inst) = states.iter().find(|s| s.id == *instance_id) {
+                        if inst.state != OwnershipState::Released {
+                            continue;
+                        }
+
+                        // Skip instances with Borrowed contract — those are
+                        // BorrowEscape, not UseAfterFree
+                        if inst.contract == PointerContract::Borrowed {
+                            continue;
+                        }
+
+                        let id = next_id;
+                        next_id += 1;
+
+                        let func_name = if inst.function_name.is_empty() {
+                            "unknown"
+                        } else {
+                            &inst.function_name
+                        };
+                        let mut candidate = IssueCandidate::new(
+                            id,
+                            IssueCandidateKind::UseAfterFree,
+                            inst.family,
+                            func_name,
+                        );
+
+                        let use_desc = use_edges
+                            .iter()
+                            .map(|e| e.function_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        candidate.add_evidence(
+                            Evidence::new(
+                                EvidenceKind::UseAfterFree,
+                                format!(
+                                    "instance {} released then used in '{}' — use-after-free (CWE-416)",
+                                    instance_id, use_desc
+                                ),
+                            )
+                            .with_confidence(0.85),
+                        );
+
+                        candidates.push(candidate);
                     }
                 }
             }
@@ -401,11 +555,16 @@ impl Pass for IssueCandidateBuilderPass {
                     let id = next_id;
                     next_id += 1;
 
+                    let func_name = if instance.function_name.is_empty() {
+                        "unknown"
+                    } else {
+                        &instance.function_name
+                    };
                     let mut candidate = IssueCandidate::new(
                         id,
                         IssueCandidateKind::ConditionalLeak,
                         instance.family,
-                        "unknown",
+                        func_name,
                     )
                     .with_alloc_contract(instance.contract);
 
@@ -455,9 +614,17 @@ fn group_edges_by_instance(
             Effect::Acquire { result, .. } => {
                 groups.entry(result).or_default().push(edge.clone());
             }
-            // Reclaim: source=0 → target=instance_id (same as acquire)
+            // Reclaim: source=escaped_instance → target=reclaimed_instance.
+            // Always group by `result` (the fresh reclaim instance ID).
+            // Also group by `edge.source` (the escaped instance ID) so the
+            // OwnershipEscapeLeak check can find the reclaim in the same group
+            // as the escape edge — otherwise escape and reclaim end up in
+            // separate groups, causing false positives.
             Effect::OwnershipReclaim { result, .. } => {
                 groups.entry(result).or_default().push(edge.clone());
+                if edge.source != 0 && edge.source != result {
+                    groups.entry(edge.source).or_default().push(edge.clone());
+                }
             }
             // Release: source=instance_id → target=0
             Effect::Release { .. } | Effect::ConditionalRelease { .. } => {
@@ -466,6 +633,27 @@ fn group_edges_by_instance(
             // Escape: source=instance_id → target=0
             Effect::OwnershipEscape { .. } => {
                 groups.entry(edge.source).or_default().push(edge.clone());
+            }
+            // EscapesToCallback: may have source=0 when the callback context
+            // does not carry an explicit source instance. Use a synthetic key
+            // so the edge is not silently dropped.
+            Effect::EscapesToCallback { .. } => {
+                let key = if edge.source != 0 {
+                    edge.source
+                } else {
+                    u64::MAX
+                };
+                groups.entry(key).or_default().push(edge.clone());
+            }
+            // ReturnsBorrowed: may have source=0 when the return context
+            // does not carry an explicit source instance. Use a synthetic key.
+            Effect::ReturnsBorrowed => {
+                let key = if edge.source != 0 {
+                    edge.source
+                } else {
+                    u64::MAX
+                };
+                groups.entry(key).or_default().push(edge.clone());
             }
             // Other effects: attach to source instance
             _ => {
@@ -534,6 +722,7 @@ mod tests {
             },
             function: 0,
             function_name: alloc_func.to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(alloc_family),
         });
 
@@ -546,6 +735,7 @@ mod tests {
             },
             function: 1,
             function_name: release_func.to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(release_family),
         });
 
@@ -677,6 +867,7 @@ mod tests {
             },
             function: 0,
             function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
         });
 
@@ -690,6 +881,7 @@ mod tests {
             },
             function: 1,
             function_name: "free".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
         });
 
@@ -703,6 +895,7 @@ mod tests {
             },
             function: 2,
             function_name: "free_again".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
         });
 

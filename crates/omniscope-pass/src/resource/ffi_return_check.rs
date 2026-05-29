@@ -133,6 +133,11 @@ fn scan_function_body(
                                     && !null_checked.contains(op)
                                 {
                                     let issue_id = ctx.next_issue_id();
+                                    let location = omniscope_core::IssueLocation::new(
+                                        std::path::PathBuf::from("<ffi>"),
+                                        0,
+                                    )
+                                    .with_function(func_name);
                                     let issue = Issue::new(
                                         issue_id,
                                         omniscope_core::IssueKind::NullDereference,
@@ -142,7 +147,8 @@ fn scan_function_body(
                                             op, callee, func_name
                                         ),
                                     )
-                                    .with_symbol(op.to_string());
+                                    .with_symbol(op.to_string())
+                                    .with_location(location);
 
                                     issues.push(issue);
                                     null_checked.insert(op.to_string());
@@ -180,6 +186,11 @@ fn scan_function_body(
                     {
                         // Found an unchecked use! Emit an issue.
                         let issue_id = ctx.next_issue_id();
+                        let location = omniscope_core::IssueLocation::new(
+                            std::path::PathBuf::from("<ffi>"),
+                            0,
+                        )
+                        .with_function(func_name);
                         let issue = Issue::new(
                             issue_id,
                             omniscope_core::IssueKind::UncheckedReturn,
@@ -189,7 +200,8 @@ fn scan_function_body(
                                 op, func_name, inst.kind
                             ),
                         )
-                        .with_symbol(op.to_string());
+                        .with_symbol(op.to_string())
+                        .with_location(location);
 
                         issues.push(issue);
 

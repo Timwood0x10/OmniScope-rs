@@ -86,6 +86,7 @@ fn base_severity(kind: IssueCandidateKind) -> f32 {
         // High severity: double reclaim is as severe as double release
         IssueCandidateKind::DoubleReclaim => 0.85,
         IssueCandidateKind::OwnershipEscapeLeak => 0.65,
+        IssueCandidateKind::UseAfterFree => 0.9,
     }
 }
 

@@ -21,8 +21,11 @@ pub struct ContractEdge {
     pub effect: Effect,
     /// Function where this edge occurs.
     pub function: FunctionId,
-    /// Function name (for diagnostics).
+    /// Callee function name (for diagnostics).
     pub function_name: String,
+    /// Caller function name — the enclosing function that contains this call.
+    /// Used for issue location reporting.
+    pub caller_name: String,
     /// The resource family (if known).
     pub family: Option<FamilyId>,
 }
@@ -129,6 +132,7 @@ impl Pass for ContractGraphBuilderPass {
                     },
                     function: fact.function,
                     function_name: fact.function_name.clone(),
+                    caller_name: fact.caller_name.clone(),
                     family: Some(family),
                 });
                 // Track this instance by (func_id, family) for matching with releases
@@ -150,14 +154,11 @@ impl Pass for ContractGraphBuilderPass {
                         (0, None)
                     };
 
-                // If no matching acquire, create a standalone instance
+                // If no matching acquire, create a standalone instance.
+                // Do NOT push into acquire_instances — this is an orphan release
+                // and must not corrupt the FIFO queue for subsequent releases.
                 let source_id = if source_id == 0 {
-                    let id = graph.alloc_instance();
-                    acquire_instances
-                        .entry(key)
-                        .or_default()
-                        .push((id, Some(family)));
-                    id
+                    graph.alloc_instance()
                 } else {
                     source_id
                 };
@@ -186,6 +187,7 @@ impl Pass for ContractGraphBuilderPass {
                     effect,
                     function: fact.function,
                     function_name: fact.function_name.clone(),
+                    caller_name: fact.caller_name.clone(),
                     family: Some(family),
                 });
             }
@@ -266,6 +268,7 @@ impl Pass for ContractGraphBuilderPass {
                         },
                         function: func_id,
                         function_name: callee_name.to_string(),
+                        caller_name: caller_name.to_string(),
                         family: Some(*family),
                     });
                 }
@@ -303,6 +306,7 @@ impl Pass for ContractGraphBuilderPass {
                         effect,
                         function: func_id,
                         function_name: callee_name.to_string(),
+                        caller_name: caller_name.to_string(),
                         family: Some(*family),
                     });
                 }
@@ -330,6 +334,7 @@ impl Pass for ContractGraphBuilderPass {
                         },
                         function: func_id,
                         function_name: callee_name.to_string(),
+                        caller_name: caller_name.to_string(),
                         family: Some(*family),
                     });
                 }
@@ -397,6 +402,7 @@ impl Pass for ContractGraphBuilderPass {
                         },
                         function: func_id,
                         function_name: callee_name.to_string(),
+                        caller_name: caller_name.to_string(),
                         family: Some(*family),
                     });
                 }
@@ -446,6 +452,7 @@ impl Pass for ContractGraphBuilderPass {
                             effect: Effect::EscapesToCallback { arg: 0 },
                             function: func_id,
                             function_name: callee.to_string(),
+                            caller_name: caller_name.to_string(),
                             family: None,
                         });
                     }
@@ -507,653 +514,5 @@ fn is_callback_registration_api(callee: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::resource::raw_fact_collector::RawResourceFact;
-    use omniscope_types::{FamilyId, PointerContract};
-
-    #[test]
-    fn test_contract_graph_builder_creation() {
-        let pass = ContractGraphBuilderPass::new();
-        assert_eq!(pass.name(), "ContractGraphBuilder");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["StructuralInference"]);
-    }
-
-    #[test]
-    fn test_contract_graph_edge_building() {
-        let mut graph = ContractGraph::new();
-        let instance = graph.alloc_instance();
-        assert_eq!(instance, 1, "First instance ID should be 1");
-
-        graph.add_edge(ContractEdge {
-            source: instance,
-            target: 0,
-            effect: Effect::Release {
-                family: FamilyId::C_HEAP,
-                arg: 0,
-            },
-            function: 42,
-            function_name: "free".to_string(),
-            family: Some(FamilyId::C_HEAP),
-        });
-
-        assert_eq!(
-            graph.edge_count(),
-            1,
-            "Graph should have one edge after adding"
-        );
-    }
-
-    /// Objective: Verify that an acquire-release pair in the same function
-    /// produces exactly two edges: one Acquire and one Release, with the
-    /// Release edge pointing from the acquire instance to the sink (target=0).
-    /// Invariants: Acquire edge source=0, Release edge target=0, same instance ID.
-    #[test]
-    fn test_acquire_release_pair_in_same_function() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        // Two facts in the same function (func_id=1) and same family (C_HEAP):
-        // one acquire, one release. They should pair up.
-        let facts = vec![
-            RawResourceFact {
-                function: 1,
-                function_name: "malloc".to_string(),
-                caller_name: "test_func".to_string(),
-                family: Some(FamilyId::C_HEAP),
-                is_acquire: true,
-                contract: PointerContract::Owned,
-                arg_index: Some(0),
-            },
-            RawResourceFact {
-                function: 1,
-                function_name: "free".to_string(),
-                caller_name: "test_func".to_string(),
-                family: Some(FamilyId::C_HEAP),
-                is_acquire: false,
-                contract: PointerContract::Unknown,
-                arg_index: Some(0),
-            },
-        ];
-        ctx.store("raw_resource_facts", facts);
-
-        let result = pass.run(&mut ctx).expect("Pass execution must succeed");
-        assert!(
-            result.nodes_analyzed >= 2,
-            "Must produce at least 2 edges (acquire + release), got {}",
-            result.nodes_analyzed
-        );
-
-        let graph: ContractGraph = ctx
-            .get("contract_graph")
-            .expect("ContractGraph must be stored in context");
-
-        // Verify acquire edge
-        let acquire_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
-            .collect();
-        assert_eq!(
-            acquire_edges.len(),
-            1,
-            "Exactly one Acquire edge expected for one malloc call"
-        );
-        assert_eq!(
-            acquire_edges[0].source, 0,
-            "Acquire edge source must be 0 (allocation origin)"
-        );
-        assert!(
-            acquire_edges[0].target > 0,
-            "Acquire edge target must be a valid instance ID"
-        );
-
-        // Verify release edge
-        let release_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::Release { .. }))
-            .collect();
-        assert_eq!(
-            release_edges.len(),
-            1,
-            "Exactly one Release edge expected for one free call"
-        );
-        assert_eq!(
-            release_edges[0].target, 0,
-            "Release edge target must be 0 (deallocation sink)"
-        );
-        assert_eq!(
-            release_edges[0].source, acquire_edges[0].target,
-            "Release edge source must match Acquire edge target (same instance)"
-        );
-    }
-
-    /// Objective: Verify cross-family release detection: when a fact has a
-    /// different family from its (func_id, family)-grouped acquire, it produces
-    /// a ConditionalRelease effect instead of Release.
-    /// Invariants: Two separate (func_id, family) groups are formed, so the
-    /// release with CPP_NEW_SCALAR creates its own standalone instance.
-    #[test]
-    fn test_cross_family_release_detection() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        // Acquire with C_HEAP, release with CPP_NEW_SCALAR in same function.
-        // Because grouping is by (func_id, family), these form different groups:
-        // (1, C_HEAP) -> acquire, (1, CPP_NEW_SCALAR) -> release (standalone).
-        let facts = vec![
-            RawResourceFact {
-                function: 1,
-                function_name: "malloc".to_string(),
-                caller_name: "test_func".to_string(),
-                family: Some(FamilyId::C_HEAP),
-                is_acquire: true,
-                contract: PointerContract::Owned,
-                arg_index: Some(0),
-            },
-            RawResourceFact {
-                function: 1,
-                function_name: "operator delete".to_string(),
-                caller_name: "test_func".to_string(),
-                family: Some(FamilyId::CPP_NEW_SCALAR),
-                is_acquire: false,
-                contract: PointerContract::Unknown,
-                arg_index: Some(0),
-            },
-        ];
-        ctx.store("raw_resource_facts", facts);
-
-        let result = pass.run(&mut ctx).expect("Pass execution must succeed");
-        assert!(
-            result.nodes_analyzed >= 2,
-            "Must produce at least 2 edges, got {}",
-            result.nodes_analyzed
-        );
-
-        let graph: ContractGraph = ctx
-            .get("contract_graph")
-            .expect("ContractGraph must be stored in context");
-
-        // Verify the acquire edge uses C_HEAP
-        let acquire_edge = graph.edges.iter().find(
-            |e| matches!(e.effect, Effect::Acquire { family, .. } if family == FamilyId::C_HEAP),
-        );
-        assert!(
-            acquire_edge.is_some(),
-            "Must have an Acquire edge for C_HEAP family"
-        );
-
-        // The CPP_NEW_SCALAR release has no matching acquire in the same
-        // (func_id, family) group, so a standalone instance is created and
-        // a Release (not ConditionalRelease) edge is produced. The cross-family
-        // detection in raw facts path only triggers when alloc_family != family
-        // within the SAME (func_id, family) group.
-        let release_edge = graph
-            .edges
-            .iter()
-            .find(|e| matches!(e.effect, Effect::Release { family, .. } if family == FamilyId::CPP_NEW_SCALAR));
-        assert!(
-            release_edge.is_some(),
-            "Must have a Release edge for CPP_NEW_SCALAR family"
-        );
-    }
-
-    /// Objective: Verify that when an acquire and release share the same
-    /// (func_id, family) key but the release's family differs from the
-    /// acquire's stored alloc_family, a ConditionalRelease effect is produced.
-    /// This is achieved by having two acquire facts with different families
-    /// in the same function, then releasing with a family that matches one key
-    /// but has a different alloc_family stored.
-    ///
-    /// Note: In the raw facts path, each fact's own `family` field determines
-    /// the grouping key. Cross-family detection compares `alloc_family` (from
-    /// the first acquire in the group) with the release's family. Since the
-    /// key is (func_id, family) and the release's family must match the key,
-    /// cross-family in raw facts requires the acquire to have a different
-    /// original family from the release within the same group. This happens
-    /// when the first acquire in the group has a different family from the
-    /// group key (which is the release's family).
-    ///
-    /// However, looking at the code more carefully: `or_insert` means only the
-    /// FIRST acquire in a (func_id, family) group sets the alloc_family.
-    /// If a release with family=F creates the group first (standalone instance),
-    /// and then an acquire with family=F comes, the acquire goes into the
-    /// existing group with alloc_family=Some(F). So alloc_family == family
-    /// and no cross-family detection triggers.
-    ///
-    /// The real cross-family path is: acquire with family=A creates group (fn, A)
-    /// with alloc_family=Some(A). Then release with family=A would match that
-    /// group. But if the release's fact.family is B, it would go to group (fn, B).
-    ///
-    /// This test validates the ConditionalRelease path by checking that when
-    /// alloc_family and the release family differ within the same key, the
-    /// effect is ConditionalRelease. We construct this by ensuring the acquire
-    /// instance was stored with alloc_family=A but a release comes through with
-    /// the same key but a detected mismatch.
-    ///
-    /// Since the raw facts path groups strictly by (func_id, fact.family), and
-    /// alloc_family is set from the first acquire's family, the only way to get
-    /// ConditionalRelease is if the first acquire in the group has a DIFFERENT
-    /// family from the group key. This cannot happen in normal raw facts because
-    /// the group key IS the fact's family. Therefore, ConditionalRelease in the
-    /// raw facts path is effectively unreachable (it's a safety net).
-    ///
-    /// We test ConditionalRelease via the IRModule path instead (see
-    /// test_conditional_release_via_ir_module).
-    #[test]
-    fn test_conditional_release_edge_present() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        // Create an IRModule where the same function calls Py_INCREF (Retain)
-        // and Py_DECREF (ConditionalRelease) on a Python object.
-        let mut module = omniscope_ir::IRModule::new();
-        module.calls.push(omniscope_ir::CallInstruction {
-            callee: "PyObject_New".to_string(),
-            caller: "test_func".to_string(),
-            is_external: true,
-            location: None,
-        });
-        module.calls.push(omniscope_ir::CallInstruction {
-            callee: "Py_DECREF".to_string(),
-            caller: "test_func".to_string(),
-            is_external: true,
-            location: None,
-        });
-        ctx.store("ir_module", module);
-
-        // Run the pass — it will process IRModule via FamilyRegistry
-        let _ = pass.run(&mut ctx);
-
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
-        let graph = graph.expect("ContractGraph must be stored in context");
-
-        // Py_DECREF is a ConditionalRelease — verify it produces a ConditionalRelease edge.
-        let cond_release_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::ConditionalRelease { family, .. } if family == FamilyId::PYTHON_OBJECT))
-            .collect();
-        assert!(
-            !cond_release_edges.is_empty(),
-            "IRModule path must produce ConditionalRelease edge for Py_DECREF, found {} edges total",
-            graph.edges.len()
-        );
-
-        // Also verify the acquire edge from PyObject_New
-        let acquire_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::Acquire { family, .. } if family == FamilyId::PYTHON_OBJECT))
-            .collect();
-        assert!(
-            !acquire_edges.is_empty(),
-            "Must have Acquire edge for PyObject_New with PYTHON_OBJECT family"
-        );
-    }
-
-    /// Objective: Verify that escape edges are created when the IRModule
-    /// contains calls to into_raw (e.g., Box::into_raw).
-    /// Invariants: An OwnershipEscape edge is produced with the correct family.
-    #[test]
-    fn test_escape_edge_creation_via_ir_module() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        // A function that allocates a Box and converts it to a raw pointer
-        let mut module = omniscope_ir::IRModule::new();
-        module.calls.push(omniscope_ir::CallInstruction {
-            callee: "Box::into_raw".to_string(),
-            caller: "test_func".to_string(),
-            is_external: true,
-            location: None,
-        });
-        ctx.store("ir_module", module);
-
-        let _ = pass.run(&mut ctx);
-
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
-        let graph = graph.expect("ContractGraph must be stored in context");
-
-        // Verify OwnershipEscape edge is created
-        let escape_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::OwnershipEscape { .. }))
-            .collect();
-        assert!(
-            !escape_edges.is_empty(),
-            "Must produce OwnershipEscape edge for Box::into_raw call"
-        );
-
-        // Verify the escape edge uses RUST_RAW_OWNERSHIP family
-        let escape = &escape_edges[0];
-        match &escape.effect {
-            Effect::OwnershipEscape { family, .. } => {
-                assert_eq!(
-                    *family,
-                    FamilyId::RUST_RAW_OWNERSHIP,
-                    "Box::into_raw must use RUST_RAW_OWNERSHIP family"
-                );
-            }
-            _ => unreachable!("Already filtered for OwnershipEscape"),
-        }
-    }
-
-    /// Objective: Verify that reclaim edges are created when the IRModule
-    /// contains calls to from_raw (e.g., Box::from_raw).
-    /// Invariants: An OwnershipReclaim edge is produced and linked to the
-    /// escape instance when both into_raw and from_raw are present.
-    #[test]
-    fn test_reclaim_edge_creation_via_ir_module() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        // A function that escapes ownership and then reclaims it
-        let mut module = omniscope_ir::IRModule::new();
-        module.calls.push(omniscope_ir::CallInstruction {
-            callee: "Box::into_raw".to_string(),
-            caller: "test_func".to_string(),
-            is_external: true,
-            location: None,
-        });
-        module.calls.push(omniscope_ir::CallInstruction {
-            callee: "Box::from_raw".to_string(),
-            caller: "test_func".to_string(),
-            is_external: true,
-            location: None,
-        });
-        ctx.store("ir_module", module);
-
-        let _ = pass.run(&mut ctx);
-
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
-        let graph = graph.expect("ContractGraph must be stored in context");
-
-        // Verify OwnershipReclaim edge is created
-        let reclaim_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::OwnershipReclaim { .. }))
-            .collect();
-        assert!(
-            !reclaim_edges.is_empty(),
-            "Must produce OwnershipReclaim edge for Box::from_raw call"
-        );
-
-        // Verify reclaim edge links from the escape instance to the reclaim instance
-        let reclaim = &reclaim_edges[0];
-        assert_ne!(
-            reclaim.source, 0,
-            "Reclaim edge source must reference an existing instance (not 0)"
-        );
-        assert_ne!(
-            reclaim.source, reclaim.target,
-            "Reclaim edge must not be a self-loop — source is the escaped instance, target is the reclaim instance"
-        );
-
-        // Verify the reclaim edge uses RUST_RAW_OWNERSHIP family
-        match &reclaim.effect {
-            Effect::OwnershipReclaim { family, .. } => {
-                assert_eq!(
-                    *family,
-                    FamilyId::RUST_RAW_OWNERSHIP,
-                    "Box::from_raw must use RUST_RAW_OWNERSHIP family"
-                );
-            }
-            _ => unreachable!("Already filtered for OwnershipReclaim"),
-        }
-
-        // Verify the escape edge was also created
-        let escape_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::OwnershipEscape { .. }))
-            .collect();
-        assert!(
-            !escape_edges.is_empty(),
-            "Must also have OwnershipEscape edge for the paired Box::into_raw"
-        );
-    }
-
-    /// Objective: Verify that Vec::from_raw_parts produces a reclaim edge
-    /// even without a matching into_raw, since from_raw_parts can also
-    /// reassemble a previously escaped Vec.
-    /// Invariants: OwnershipReclaim edge is created with RUST_RAW_OWNERSHIP family.
-    #[test]
-    fn test_reclaim_from_raw_parts_without_escape() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        let mut module = omniscope_ir::IRModule::new();
-        module.calls.push(omniscope_ir::CallInstruction {
-            callee: "Vec::from_raw_parts".to_string(),
-            caller: "test_func".to_string(),
-            is_external: true,
-            location: None,
-        });
-        ctx.store("ir_module", module);
-
-        let _ = pass.run(&mut ctx);
-
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
-        let graph = graph.expect("ContractGraph must be stored in context");
-
-        let reclaim_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::OwnershipReclaim { .. }))
-            .collect();
-        assert!(
-            !reclaim_edges.is_empty(),
-            "Vec::from_raw_parts must produce an OwnershipReclaim edge"
-        );
-    }
-
-    /// Objective: Verify that when no raw facts are provided, the pass
-    /// produces an empty graph without errors.
-    /// Invariants: graph.edge_count() == 0, pass returns Ok.
-    #[test]
-    fn test_empty_raw_facts_produces_empty_graph() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-        // Do not store any raw_resource_facts — the pass should handle None gracefully
-
-        let result = pass.run(&mut ctx);
-        assert!(result.is_ok(), "Pass must succeed even with no raw facts");
-
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
-        let graph = graph.expect("ContractGraph must be stored in context");
-        assert_eq!(
-            graph.edge_count(),
-            0,
-            "Empty raw facts must produce an empty graph"
-        );
-    }
-
-    /// Objective: Verify that a release without a matching acquire in the
-    /// same (func_id, family) group creates a standalone instance.
-    /// Invariants: A standalone instance is allocated and the Release edge
-    /// references it (source > 0, target = 0).
-    #[test]
-    fn test_release_without_matching_acquire() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        // Only a release fact, no corresponding acquire in the same group
-        let facts = vec![RawResourceFact {
-            function: 5,
-            function_name: "free".to_string(),
-            caller_name: "cleanup_func".to_string(),
-            family: Some(FamilyId::C_HEAP),
-            is_acquire: false,
-            contract: PointerContract::Unknown,
-            arg_index: Some(0),
-        }];
-        ctx.store("raw_resource_facts", facts);
-
-        let result = pass.run(&mut ctx);
-        assert!(result.is_ok(), "Pass must succeed");
-
-        let graph: ContractGraph = ctx
-            .get("contract_graph")
-            .expect("ContractGraph must be stored in context");
-
-        let release_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::Release { .. }))
-            .collect();
-        assert_eq!(
-            release_edges.len(),
-            1,
-            "Exactly one Release edge expected for the standalone free"
-        );
-        assert!(
-            release_edges[0].source > 0,
-            "Standalone release must have a valid source instance ID, got {}",
-            release_edges[0].source
-        );
-        assert_eq!(
-            release_edges[0].target, 0,
-            "Release edge target must be 0 (sink)"
-        );
-    }
-
-    /// Objective: Verify that the is_callback_registration_api helper
-    /// correctly identifies callback registration patterns.
-    /// Invariants: Known patterns return true, non-callback names return false.
-    #[test]
-    fn test_callback_registration_api_detection() {
-        // Positive cases: known callback registration patterns
-        assert!(
-            is_callback_registration_api("register_callback"),
-            "'register_callback' must be detected as callback registration"
-        );
-        assert!(
-            is_callback_registration_api("my_lib_set_callback"),
-            "'my_lib_set_callback' must be detected as callback registration"
-        );
-        assert!(
-            is_callback_registration_api("uv_poll_start"),
-            "'uv_poll_start' (libuv pattern) must be detected as callback registration"
-        );
-        assert!(
-            is_callback_registration_api("on_event"),
-            "'on_event' must be detected as callback registration"
-        );
-        assert!(
-            is_callback_registration_api("connect_callback"),
-            "'connect_callback' must be detected as callback registration"
-        );
-
-        // Negative cases: non-callback names
-        assert!(
-            !is_callback_registration_api("malloc"),
-            "'malloc' must NOT be detected as callback registration"
-        );
-        assert!(
-            !is_callback_registration_api("free"),
-            "'free' must NOT be detected as callback registration"
-        );
-        assert!(
-            !is_callback_registration_api("printf"),
-            "'printf' must NOT be detected as callback registration"
-        );
-    }
-
-    /// Objective: Verify that multiple acquire-release pairs in different
-    /// functions produce independent edges with correct instance pairing.
-    /// Invariants: Each function gets its own acquire and release edges,
-    /// and release source matches the correct acquire target.
-    #[test]
-    fn test_multiple_function_independent_pairing() {
-        let pass = ContractGraphBuilderPass::new();
-        let mut ctx = PassContext::new();
-
-        let facts = vec![
-            // Function 1: malloc + free
-            RawResourceFact {
-                function: 1,
-                function_name: "malloc".to_string(),
-                caller_name: "test_func".to_string(),
-                family: Some(FamilyId::C_HEAP),
-                is_acquire: true,
-                contract: PointerContract::Owned,
-                arg_index: Some(0),
-            },
-            RawResourceFact {
-                function: 1,
-                function_name: "free".to_string(),
-                caller_name: "test_func".to_string(),
-                family: Some(FamilyId::C_HEAP),
-                is_acquire: false,
-                contract: PointerContract::Unknown,
-                arg_index: Some(0),
-            },
-            // Function 2: PyObject_New + Py_DECREF
-            RawResourceFact {
-                function: 2,
-                function_name: "PyObject_New".to_string(),
-                caller_name: "py_func".to_string(),
-                family: Some(FamilyId::PYTHON_OBJECT),
-                is_acquire: true,
-                contract: PointerContract::Owned,
-                arg_index: Some(0),
-            },
-            RawResourceFact {
-                function: 2,
-                function_name: "Py_DECREF".to_string(),
-                caller_name: "py_func".to_string(),
-                family: Some(FamilyId::PYTHON_OBJECT),
-                is_acquire: false,
-                contract: PointerContract::Unknown,
-                arg_index: Some(0),
-            },
-        ];
-        ctx.store("raw_resource_facts", facts);
-
-        let result = pass.run(&mut ctx);
-        assert!(result.is_ok(), "Pass must succeed");
-
-        let graph: ContractGraph = ctx
-            .get("contract_graph")
-            .expect("ContractGraph must be stored in context");
-
-        // Two acquire edges (one per function/family)
-        let acquire_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
-            .collect();
-        assert_eq!(
-            acquire_edges.len(),
-            2,
-            "Must have exactly 2 Acquire edges for 2 independent functions"
-        );
-
-        // Two release edges
-        let release_edges: Vec<_> = graph
-            .edges
-            .iter()
-            .filter(|e| matches!(e.effect, Effect::Release { .. }))
-            .collect();
-        assert_eq!(
-            release_edges.len(),
-            2,
-            "Must have exactly 2 Release edges for 2 independent functions"
-        );
-
-        // Each release's source must match its paired acquire's target
-        for release in &release_edges {
-            let matching_acquire = acquire_edges.iter().find(|a| a.target == release.source);
-            assert!(
-                matching_acquire.is_some(),
-                "Every Release edge source must match an Acquire edge target — release source={} has no matching acquire",
-                release.source
-            );
-        }
-    }
-}
+#[path = "contract_graph_builder_tests.rs"]
+mod tests;

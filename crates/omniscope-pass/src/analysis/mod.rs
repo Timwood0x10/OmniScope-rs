@@ -86,9 +86,17 @@ impl Pass for FFIBoundaryPass {
         let mut issues: Vec<Issue> = Vec::new();
         let mut boundary_count: usize = 0;
 
+        // Track seen boundaries to avoid duplicate issues
+        let mut seen_boundaries: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
         // Process CallGraph-derived edges
         for edge in &cross_lang_edges {
             if !edge.is_ffi_boundary {
+                continue;
+            }
+            let boundary_key = (edge.caller_name.clone(), edge.callee_name.clone());
+            if !seen_boundaries.insert(boundary_key) {
                 continue;
             }
             boundary_count += 1;
@@ -110,10 +118,6 @@ impl Pass for FFIBoundaryPass {
             if let Some(ref module) = ir_module {
                 // Use language detector to identify function languages
                 let detector = omniscope_semantics::LanguageDetector::new();
-
-                // Track seen boundaries to avoid duplicates
-                let mut seen_boundaries: std::collections::HashSet<(String, String)> =
-                    std::collections::HashSet::new();
 
                 for call in &module.calls {
                     let callee_name = call.callee.trim_start_matches('@');
@@ -363,18 +367,16 @@ impl FFIBoundaryPass {
                         ),
                     )
                 }
-                None => (
-                    IssueKind::FfiUnsafeCall,
-                    Severity::Note,
-                    Confidence::Low,
-                    format!(
-                        "FFI boundary: {} ({:?}) -> {} ({:?}) [verdict=Unknown]",
-                        boundary.caller_name,
-                        boundary.caller_lang,
-                        boundary.callee_name,
-                        boundary.callee_lang
-                    ),
-                ),
+                // Unknown verdict with no family entry is low-signal noise.
+                // Suppress: these are FFI calls to unknown external functions
+                // with no evidence of ownership implications.
+                None => {
+                    debug!(
+                        "FFI suppressed: {} -> {} (Unknown verdict, no family entry)",
+                        boundary.caller_name, boundary.callee_name
+                    );
+                    return;
+                }
             },
             // Safe patterns are already filtered out above
             _ => unreachable!(),
@@ -383,9 +385,12 @@ impl FFIBoundaryPass {
         let boundary_kind = classify_boundary(&boundary.caller_lang, &boundary.callee_lang);
 
         let issue_id = ctx.next_issue_id();
+        let location = omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ffi>"), 0)
+            .with_function(&boundary.caller_name);
         let issue = Issue::new(issue_id, kind, severity, description)
             .with_confidence(confidence)
             .with_symbol(&boundary.callee_name)
+            .with_location(location)
             .with_ffi_boundary(FFIBoundary {
                 caller_name: boundary.caller_name.clone(),
                 callee_name: boundary.callee_name.clone(),
@@ -411,23 +416,6 @@ impl FFIBoundaryPass {
         if outcome.is_allowed() {
             issues.push(issue);
         }
-    }
-}
-
-/// Convert a LanguageHint to a Language for boundary classification.
-fn _lang_hint_to_language(
-    hint: omniscope_types::LanguageHint,
-) -> omniscope_types::config::Language {
-    use omniscope_types::config::Language;
-    match hint {
-        omniscope_types::LanguageHint::C => Language::C,
-        omniscope_types::LanguageHint::Cpp => Language::Cpp,
-        omniscope_types::LanguageHint::Rust => Language::Rust,
-        omniscope_types::LanguageHint::Python => Language::Python,
-        omniscope_types::LanguageHint::Java => Language::Java,
-        omniscope_types::LanguageHint::Go => Language::Go,
-        omniscope_types::LanguageHint::Zig => Language::Zig,
-        _ => Language::Unknown,
     }
 }
 

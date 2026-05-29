@@ -123,6 +123,14 @@ impl NoiseReduction {
                         | SemanticKind::LibraryRelease
                 )
             }),
+            "ffi_unsafe_call" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    SemanticKind::FileOperation
+                        | SemanticKind::NetworkOperation
+                        | SemanticKind::ProcessOperation
+                )
+            }),
             _ => false,
         };
 

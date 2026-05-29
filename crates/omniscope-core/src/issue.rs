@@ -136,6 +136,16 @@ impl IssueKind {
         )
     }
 
+    /// Returns true if this is a use-after-free issue.
+    ///
+    /// UAF issues involve using a resource after it has been freed.
+    /// This is distinct from `BorrowEscape` (borrowed reference
+    /// escaping scope) and `DoubleFree` (freeing the same allocation
+    /// twice).
+    pub fn is_uaf(&self) -> bool {
+        matches!(self, IssueKind::UseAfterFree)
+    }
+
     /// Returns the CWE (Common Weakness Enumeration) ID if applicable.
     pub fn cwe_id(&self) -> Option<u32> {
         match self {

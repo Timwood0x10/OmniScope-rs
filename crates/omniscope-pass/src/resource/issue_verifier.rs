@@ -87,6 +87,16 @@ impl Pass for IssueVerifierPass {
                     .unwrap_or(&candidate.alloc_function);
                 issue = issue.with_symbol(symbol);
 
+                // Set the issue location with the function name from the candidate.
+                // Use alloc_function as the primary location (where the resource
+                // was acquired), which is the most relevant for diagnostics.
+                if !candidate.alloc_function.is_empty() && candidate.alloc_function != "unknown" {
+                    let location =
+                        omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
+                            .with_function(&candidate.alloc_function);
+                    issue = issue.with_location(location);
+                }
+
                 // emit_issue is the SRT gate choke point — only add to
                 // PassResult.issues if the gate allows it.
                 let outcome = ctx.emit_issue(issue.clone());
@@ -167,6 +177,11 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
             // Always at least probable since the pointer may be reclaimed
             // in a different compilation unit we don't see.
             VerifierVerdict::ProbableIssue
+        }
+        IssueCandidateKind::UseAfterFree => {
+            // Use-after-free through FFI boundary is almost always confirmed.
+            // The resource was freed and then used — this is undefined behavior.
+            VerifierVerdict::ConfirmedIssue
         }
     }
 }
@@ -309,6 +324,7 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::NeedsModel => "needs model",
         IssueCandidateKind::DoubleReclaim => "double reclaim",
         IssueCandidateKind::OwnershipEscapeLeak => "ownership escape leak",
+        IssueCandidateKind::UseAfterFree => "use-after-free",
     };
 
     let verdict_label = match verdict {

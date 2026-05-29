@@ -8,7 +8,9 @@
       "Bash(rtk find *)",
       "WebSearch",
       "Bash(rtk read *)",
-      "Bash(rtk git *)"
+      "Bash(rtk git *)",
+      "Bash(rtk proxy *)",
+      "Bash(awk '{sum += $4} END {print \"Total tests passed:\", sum}')"
     ]
   }
 }

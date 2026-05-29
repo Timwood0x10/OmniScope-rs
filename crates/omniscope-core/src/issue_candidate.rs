@@ -151,6 +151,7 @@ impl IssueCandidate {
             IssueCandidateKind::NeedsModel => IssueKind::NeedsModel,
             IssueCandidateKind::DoubleReclaim => IssueKind::DoubleReclaim,
             IssueCandidateKind::OwnershipEscapeLeak => IssueKind::OwnershipEscapeLeak,
+            IssueCandidateKind::UseAfterFree => IssueKind::UseAfterFree,
         }
     }
 
@@ -275,6 +276,11 @@ mod tests {
             IssueCandidate::new(7, IssueCandidateKind::NeedsModel, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
             IssueKind::NeedsModel
+        );
+        assert_eq!(
+            IssueCandidate::new(8, IssueCandidateKind::UseAfterFree, FamilyId::C_HEAP, "f")
+                .to_issue_kind(),
+            IssueKind::UseAfterFree
         );
     }
 }

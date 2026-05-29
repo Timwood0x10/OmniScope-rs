@@ -152,6 +152,8 @@ impl BorrowEscapePass {
 
         // If none of the suppression patterns match, emit the issue
         let issue_id = ctx.next_issue_id();
+        let location = omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ffi>"), 0)
+            .with_function(caller);
         let issue = Issue::new(
             issue_id,
             IssueKind::BorrowEscape,
@@ -161,7 +163,8 @@ impl BorrowEscapePass {
                 caller, callee, symbol
             ),
         )
-        .with_symbol(symbol);
+        .with_symbol(symbol)
+        .with_location(location);
 
         let outcome = ctx.emit_issue(issue.clone());
         if outcome.is_allowed() {
@@ -172,11 +175,13 @@ impl BorrowEscapePass {
     /// Checks if a value has heap provenance.
     fn has_heap_provenance(&self, caller: &str) -> bool {
         // Heuristic: heap-allocated values typically come from Box, Vec, malloc, etc.
+        // Avoid bare "new" to prevent false matches against "renew", "knew", etc.
         caller.contains("alloc")
             || caller.contains("Box")
             || caller.contains("Vec")
             || caller.contains("malloc")
-            || caller.contains("new")
+            || caller.contains("_new")
+            || caller.ends_with("new")
     }
 
     /// Checks if a value has global provenance.
