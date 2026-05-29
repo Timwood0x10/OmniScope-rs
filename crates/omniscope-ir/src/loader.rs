@@ -94,21 +94,32 @@ impl Default for IRLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omniscope_core::OmniScopeError;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_loader_creation() {
         let loader = IRLoader::new();
-        assert!(loader.module().is_none());
-        assert!(loader.path().is_none());
+        assert!(
+            loader.module().is_none(),
+            "newly created loader must have no module loaded"
+        );
+        assert!(
+            loader.path().is_none(),
+            "newly created loader must have no path set"
+        );
     }
 
     #[test]
     fn test_load_nonexistent_file() {
         let mut loader = IRLoader::new();
         let result = loader.load_from_file(Path::new("nonexistent.ll"));
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, OmniScopeError::IRLoad(IRLoadError::FileOpen { .. })),
+            "loading nonexistent file must return FileOpen error variant"
+        );
     }
 
     #[test]
@@ -118,7 +129,14 @@ mod tests {
         writeln!(temp_file, "test").unwrap();
 
         let result = loader.load_from_file(temp_file.path());
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                OmniScopeError::IRLoad(IRLoadError::InvalidFormat { .. })
+            ),
+            "loading file with .txt extension must return InvalidFormat error variant"
+        );
     }
 
     #[test]
@@ -127,7 +145,16 @@ mod tests {
         let temp_file = NamedTempFile::with_suffix(".ll").unwrap();
 
         let result = loader.load_from_file(temp_file.path());
-        assert!(result.is_ok());
-        assert!(loader.path().is_some());
+        assert!(result.is_ok(), "loading a valid .ll file must succeed");
+
+        // Verify the loader records the correct path after loading
+        let loaded_path = loader
+            .path()
+            .expect("path must be set after successful load");
+        assert_eq!(
+            loaded_path,
+            temp_file.path(),
+            "loader must store the exact path of the loaded file"
+        );
     }
 }

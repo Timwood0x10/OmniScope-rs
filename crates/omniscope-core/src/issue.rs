@@ -136,6 +136,14 @@ impl IssueKind {
         )
     }
 
+    /// Returns true if this is a concurrency issue.
+    pub fn is_concurrency(&self) -> bool {
+        matches!(
+            self,
+            IssueKind::DataRace | IssueKind::LockOrderViolation | IssueKind::ThreadCrossing
+        )
+    }
+
     /// Returns the CWE (Common Weakness Enumeration) ID if applicable.
     pub fn cwe_id(&self) -> Option<u32> {
         match self {

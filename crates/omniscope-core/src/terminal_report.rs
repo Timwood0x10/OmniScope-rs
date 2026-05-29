@@ -79,7 +79,7 @@ pub fn format_language_arrow(
         if use_color {
             format!("{GREEN}──✓──>{RESET}")
         } else {
-            "--✓-->".to_string()
+            "--OK-->".to_string()
         }
     };
 
@@ -343,25 +343,8 @@ fn infer_lang_from_family(family: omniscope_types::FamilyId) -> LanguageHint {
 
 /// Checks if stdout is a TTY (terminal).
 fn atty_is_terminal() -> bool {
-    // Use atty crate if available, otherwise default to true.
-    // In practice, this should be replaced with `atty::is(atty::Stream::Stdout)`.
-    #[cfg(target_os = "macos")]
-    {
-        unsafe { libc_isatty() }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn libc_isatty() -> bool {
-    // Use libc::isatty to check if stdout is a terminal.
-    extern "C" {
-        fn isatty(fd: i32) -> i32;
-    }
-    unsafe { isatty(1) != 0 }
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
 }
 
 #[cfg(test)]
@@ -395,8 +378,8 @@ mod tests {
     fn test_language_arrow_safe() {
         let arrow = format_language_arrow(LanguageHint::C, LanguageHint::C, false, false);
         assert!(
-            arrow.contains("--✓-->"),
-            "Safe arrow must contain --✓-->, got: {arrow}"
+            arrow.contains("--OK-->"),
+            "Safe arrow must contain --OK-->, got: {arrow}"
         );
     }
 

@@ -224,28 +224,60 @@ impl IRModule {
             }
             // Parse instructions inside function body
             else if !current_function.is_empty() && !line.is_empty() {
-                // Skip labels, comments, and metadata-only lines
-                if line.starts_with(';') || line.starts_with('!') || line.ends_with(':') {
+                // Skip labels (including labels with trailing metadata like "entry: !dbg !123"),
+                // comments, and metadata-only lines
+                if line.starts_with(';') || line.starts_with('!') || is_label_line(line) {
                     continue;
                 }
 
                 // Parse instruction-level detail
                 if let Some(inst) = crate::instruction_parser::parse_instruction(line) {
-                    // Also extract call instruction for backward compatibility
-                    if inst.kind == IRInstructionKind::Call {
-                        if let Some(call) = parse_call(line, &current_function) {
-                            module.calls.push(call);
+                    // Extract call instructions for backward compatibility
+                    // Both direct and indirect calls are recorded to module.calls.
+                    match inst.kind {
+                        IRInstructionKind::Call => {
+                            if let Some(call) = parse_call(line, &current_function) {
+                                module.calls.push(call);
+                            }
                         }
+                        IRInstructionKind::IndirectCall => {
+                            // Indirect calls: use callee register name or "indirect"
+                            // as the callee identifier so downstream analysis can
+                            // discover them.
+                            let callee_name = inst
+                                .callee
+                                .clone()
+                                .unwrap_or_else(|| "indirect".to_string());
+                            module.calls.push(CallInstruction {
+                                callee: callee_name,
+                                caller: current_function.clone(),
+                                is_external: false,
+                                location: extract_location(line),
+                            });
+                        }
+                        _ => {}
                     }
                     current_instructions.push(inst);
                 }
             }
-            // Top-level call (shouldn't happen in valid IR, but handle gracefully)
-            else if line.contains("call") {
-                if let Some(call) = parse_call(line, &current_function) {
+            // Top-level call (outside any function body — malformed/truncated IR)
+            // Record with a sentinel caller name so downstream analysis can
+            // discover these calls rather than silently dropping them.
+            else if line.contains("call") && current_function.is_empty() {
+                let caller_tag = "<top-level>";
+                if let Some(call) = parse_call(line, caller_tag) {
                     module.calls.push(call);
                 }
             }
+        }
+
+        // Flush any remaining function body when file is truncated (no closing '}')
+        if !current_function.is_empty() && !current_instructions.is_empty() {
+            let body = FunctionBody {
+                name: current_function.clone(),
+                instructions: std::mem::take(&mut current_instructions),
+            };
+            module.function_bodies.insert(current_function, body);
         }
 
         // Mark external calls
@@ -354,6 +386,17 @@ impl Default for IRModule {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Check if a line is a label (basic block entry point).
+///
+/// In LLVM IR, a label line has a first token ending with ':'.
+/// Trailing metadata like `!dbg !123` should not prevent label detection.
+/// Examples: "entry:", "loop_header:", "bb1: !dbg !123"
+fn is_label_line(line: &str) -> bool {
+    // Get the first token (before any whitespace)
+    let first_token = line.split_whitespace().next().unwrap_or("");
+    first_token.ends_with(':') && !first_token.starts_with(';') && !first_token.starts_with('!')
 }
 
 /// Parse a function declaration
@@ -477,11 +520,20 @@ fn extract_datalayout(line: &str) -> Option<String> {
 
 /// Extract calling convention from function definition.
 ///
-/// Examples:
-/// - "define void @foo()" -> None (default ccc)
-/// - "define fastcc void @foo()" -> Some("fastcc")
-/// - "define webkit_jscc void @foo()" -> Some("webkit_jscc")
+/// Calling conventions appear between `define` and the return type:
+/// - "define void @foo()"        → None (default ccc)
+/// - "define fastcc void @foo()" → Some("fastcc")
+/// - "define webkit_jscc void @foo()" → Some("webkit_jscc")
+///
+/// We only check tokens between `define` and the return type / `@` to avoid
+/// false positives from function names containing convention substrings
+/// (e.g., `@fastcc_helper` would be missed without positional validation).
 fn extract_calling_convention(line: &str) -> Option<String> {
+    // Must be a define line
+    if !line.starts_with("define") {
+        return None;
+    }
+
     // Common calling conventions
     let conventions = [
         "fastcc",
@@ -497,9 +549,24 @@ fn extract_calling_convention(line: &str) -> Option<String> {
         "spir_kernel",
     ];
 
+    // Extract the region between "define" and "@" — this is where calling
+    // conventions legally appear. Avoids matching inside function names.
+    let after_define = &line["define".len()..];
+    let region = if let Some(at_pos) = after_define.find('@') {
+        &after_define[..at_pos]
+    } else {
+        // No function name found — nothing to extract
+        return None;
+    };
+
+    // Check each convention as a whole word within the valid region
     for conv in &conventions {
-        if line.contains(conv) {
-            return Some(conv.to_string());
+        // Use word-boundary check: the convention must appear as a standalone
+        // token, not as a substring of another word.
+        for token in region.split_whitespace() {
+            if token == *conv {
+                return Some(conv.to_string());
+            }
         }
     }
 
@@ -563,6 +630,144 @@ mod tests {
         assert_eq!(body.instructions.len(), 3); // call + zext + ret
         assert_eq!(body.count_kind(IRInstructionKind::Call), 1);
         assert_eq!(body.count_kind(IRInstructionKind::Ret), 1);
+    }
+
+    /// Objective: Verify that parsing an empty string produces a valid empty module.
+    /// Invariants: All collections (functions, declarations, calls, bodies) must be empty.
+    #[test]
+    fn test_parse_empty_string() {
+        let module = IRModule::parse_from_text("");
+        assert!(
+            module.functions.is_empty(),
+            "Empty input should produce no functions"
+        );
+        assert!(
+            module.declarations.is_empty(),
+            "Empty input should produce no declarations"
+        );
+        assert!(
+            module.calls.is_empty(),
+            "Empty input should produce no calls"
+        );
+        assert!(
+            module.function_bodies.is_empty(),
+            "Empty input should produce no function bodies"
+        );
+    }
+
+    /// Objective: Verify that parsing whitespace-only input produces a valid empty module.
+    /// Invariants: Whitespace lines are trimmed to empty and must not trigger any parsing logic.
+    #[test]
+    fn test_parse_whitespace_only() {
+        let module = IRModule::parse_from_text("   \n  \n  ");
+        assert!(
+            module.functions.is_empty(),
+            "Whitespace input should produce no functions"
+        );
+        assert!(
+            module.declarations.is_empty(),
+            "Whitespace input should produce no declarations"
+        );
+        assert!(
+            module.calls.is_empty(),
+            "Whitespace input should produce no calls"
+        );
+        assert!(
+            module.function_bodies.is_empty(),
+            "Whitespace input should produce no function bodies"
+        );
+    }
+
+    /// Objective: Verify that an incomplete "declare" keyword without a function signature
+    ///            is handled gracefully without adding any declaration.
+    /// Invariants: parse_declaration requires '@' and '(' to extract a name;
+    ///            missing both means no declaration is inserted.
+    #[test]
+    fn test_parse_incomplete_declaration() {
+        let module = IRModule::parse_from_text("declare");
+        assert!(
+            module.declarations.is_empty(),
+            "Incomplete declare should not produce a declaration"
+        );
+        assert!(
+            module.functions.is_empty(),
+            "Incomplete declare should not produce a function definition"
+        );
+    }
+
+    /// Objective: Verify that a define line without a function body (no braces)
+    ///            registers the function but produces no function body.
+    /// Invariants: The function is added to `functions` (definition header parsed),
+    ///            but without '{' and '}' no instructions are captured in `function_bodies`.
+    #[test]
+    fn test_parse_definition_without_body() {
+        let module = IRModule::parse_from_text("define void @foo()");
+        assert_eq!(
+            module.functions.len(),
+            1,
+            "Definition header should register function 'foo'"
+        );
+        assert!(
+            module.functions.contains_key("foo"),
+            "Function 'foo' should be present in functions map"
+        );
+        assert!(
+            module.function_bodies.is_empty(),
+            "Definition without body braces should produce no function body"
+        );
+    }
+
+    /// Objective: Verify that arbitrary non-LLVM IR text does not cause panics
+    ///            and produces an empty module.
+    /// Invariants: None of the parser branches match random text,
+    ///            so all collections remain empty.
+    #[test]
+    fn test_parse_garbage_text() {
+        let module = IRModule::parse_from_text("random garbage text");
+        assert!(
+            module.functions.is_empty(),
+            "Garbage text should produce no functions"
+        );
+        assert!(
+            module.declarations.is_empty(),
+            "Garbage text should produce no declarations"
+        );
+        assert!(
+            module.calls.is_empty(),
+            "Garbage text should produce no calls"
+        );
+        assert!(
+            module.function_bodies.is_empty(),
+            "Garbage text should produce no function bodies"
+        );
+    }
+
+    /// Objective: Verify that a function definition with an unclosed body
+    ///            registers the function and saves the partial body (truncated file).
+    /// Invariants: Instructions parsed inside the unclosed body are saved
+    ///            because we flush remaining function body after the loop ends.
+    #[test]
+    fn test_parse_unclosed_function_body() {
+        let module = IRModule::parse_from_text("define void @foo() {\n  ret void");
+        assert_eq!(
+            module.functions.len(),
+            1,
+            "Unclosed body should still register function 'foo'"
+        );
+        assert!(
+            module.functions.contains_key("foo"),
+            "Function 'foo' should be present in functions map"
+        );
+        assert!(
+            module.function_bodies.contains_key("foo"),
+            "Unclosed function body should be flushed to function_bodies on truncation"
+        );
+        let body = &module.function_bodies["foo"];
+        assert_eq!(
+            body.instructions.len(),
+            1,
+            "Unclosed body should contain the parsed instruction"
+        );
     }
 
     #[test]

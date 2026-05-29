@@ -114,6 +114,20 @@ impl Pass for OwnershipSolverPass {
                                         edge.function_name
                                     );
                                 }
+                                Err(omniscope_semantics::OwnershipError::InvalidTransition {
+                                    from_state,
+                                    event,
+                                    ..
+                                }) => {
+                                    tracing::debug!(
+                                        "Invalid Release transition for instance {} from {:?} \
+                                         in function {} (event: {})",
+                                        edge.source,
+                                        from_state,
+                                        edge.function_name,
+                                        event
+                                    );
+                                }
                             }
                         }
                         let _ = arg; // suppress unused warning

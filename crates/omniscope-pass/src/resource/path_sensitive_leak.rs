@@ -188,17 +188,25 @@ impl Default for PathSensitiveLeakPass {
 }
 
 /// Checks if there's a same-family release in the raw facts for
-/// the given allocation site.
+/// the given allocation site, scoped to the allocation's function
+/// or its likely cleanup callees.
 ///
-/// A release matches if it targets the same family. It does NOT need
-/// to be in the same function — cleanup functions like `close()` or
-/// `free()` are typically in a different function from the allocation.
+/// Previously this searched ALL facts globally, which caused false
+/// suppression: any release in any function with the same family
+/// would suppress the leak, even if the release was in a completely
+/// unrelated function.
+///
+/// Now we restrict the search to:
+/// 1. Facts whose `function` ID matches the alloc's function ID (same scope), OR
+/// 2. Facts whose `function_name` matches the alloc's `function_name` (the
+///    alloc's callee itself is a cleanup like `free`/`close`).
 fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) -> bool {
     let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
     facts
         .iter()
-        .any(|f| !f.is_acquire && f.family == Some(alloc_family))
+        .filter(|f| !f.is_acquire && f.family == Some(alloc_family))
+        .any(|f| f.function == alloc.function || f.function_name == alloc.function_name)
 }
 
 /// Checks if the summary store contains a function that releases

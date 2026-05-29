@@ -92,20 +92,28 @@ struct InfoCommand {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logging with configurable level
+    // Parse CLI first so we can determine the desired log level.
+    // CLI parsing is lightweight and does not need tracing.
+    let cli = Cli::parse();
+
+    // Determine default log level from --debug / --verbose flags.
+    // RUST_LOG env var always takes precedence when set.
+    let default_level = match &cli.command {
+        Commands::Analyze(cmd) if cmd.debug => "omniscope=trace",
+        Commands::Analyze(cmd) if cmd.verbose => "omniscope=debug",
+        _ => "omniscope=warn",
+    };
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("omniscope=warn"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
         .init();
 
-    let cli = Cli::parse();
     let start = Instant::now();
 
     match cli.command {
         Commands::Analyze(cmd) => {
-            init_debug_logging(&cmd);
             run_analyze(cmd, start)?;
         }
         Commands::Audit(cmd) => {
@@ -117,30 +125,6 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Upgrades log level to debug/trace when --debug or --verbose flags
-/// are passed on the analyze subcommand.
-fn init_debug_logging(cmd: &AnalyzeCommand) {
-    if cmd.debug {
-        // Re-init with trace level — only effective if default level
-        // was not overridden by RUST_LOG env var
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("omniscope=trace")),
-            )
-            .with_target(false)
-            .try_init();
-    } else if cmd.verbose {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("omniscope=debug")),
-            )
-            .with_target(false)
-            .try_init();
-    }
 }
 
 /// Runs the analyze command — the primary analysis entry point.
@@ -241,9 +225,14 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
     println!("{} {}", "Language:".green(), cmd.language);
     println!("{} {}", "Audit type:".green(), cmd.audit_type);
 
-    // Create pipeline
+    // Parse the IR file — same as run_analyze
+    tracing::info!("Parsing LLVM IR from {:?}", cmd.input);
+    let module = omniscope_ir::IRModule::load_from_file(&cmd.input)?;
+
+    // Create pipeline and load IR
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();
+    pipeline.set_ir_module(module);
 
     // Run analysis
     let result = pipeline.run()?;

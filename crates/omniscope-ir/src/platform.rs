@@ -57,7 +57,7 @@ impl PlatformInfo {
     /// use omniscope_ir::platform::{PlatformInfo, Platform};
     ///
     /// let info = PlatformInfo::from_target_triple("x86_64-apple-darwin");
-    /// assert_eq!(info.platform, Platform::MacOS);
+    /// assert_eq!(info.platform, Platform::MacOS, "x86_64-apple-darwin should detect as macOS");
     /// ```
     pub fn from_target_triple(target_triple: &str) -> Self {
         let platform = Self::detect_platform(target_triple);
@@ -114,19 +114,43 @@ impl PlatformInfo {
 
     /// Returns the default platform info for the current host.
     pub fn current() -> Self {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
             Self::from_target_triple("x86_64-apple-darwin")
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            Self::from_target_triple("aarch64-apple-darwin")
+        }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
             Self::from_target_triple("x86_64-unknown-linux-gnu")
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        {
+            Self::from_target_triple("aarch64-unknown-linux-gnu")
+        }
+        #[cfg(all(target_os = "linux", target_arch = "arm"))]
+        {
+            Self::from_target_triple("arm-unknown-linux-gnueabi")
+        }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         {
             Self::from_target_triple("x86_64-pc-windows-msvc")
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+        {
+            Self::from_target_triple("aarch64-pc-windows-msvc")
+        }
+        #[cfg(not(any(
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+            all(target_os = "linux", target_arch = "arm"),
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "windows", target_arch = "aarch64"),
+        )))]
         {
             Self::from_target_triple("unknown")
         }
@@ -353,93 +377,190 @@ mod tests {
     #[test]
     fn test_platform_detection_macos() {
         let info = PlatformInfo::from_target_triple("x86_64-apple-darwin");
-        assert_eq!(info.platform, Platform::MacOS);
-        assert_eq!(info.arch, Architecture::X86_64);
+        assert_eq!(
+            info.platform,
+            Platform::MacOS,
+            "Target triple 'x86_64-apple-darwin' should be detected as macOS platform"
+        );
+        assert_eq!(
+            info.arch,
+            Architecture::X86_64,
+            "Target triple 'x86_64-apple-darwin' should be detected as x86_64 architecture"
+        );
     }
 
     #[test]
     fn test_platform_detection_linux() {
         let info = PlatformInfo::from_target_triple("x86_64-unknown-linux-gnu");
-        assert_eq!(info.platform, Platform::Linux);
-        assert_eq!(info.arch, Architecture::X86_64);
+        assert_eq!(
+            info.platform,
+            Platform::Linux,
+            "Target triple 'x86_64-unknown-linux-gnu' should be detected as Linux platform"
+        );
+        assert_eq!(
+            info.arch,
+            Architecture::X86_64,
+            "Target triple 'x86_64-unknown-linux-gnu' should be detected as x86_64 architecture"
+        );
     }
 
     #[test]
     fn test_platform_detection_windows_one() {
         let info = PlatformInfo::from_target_triple("x86_64-pc-windows-msvc");
-        assert_eq!(info.platform, Platform::Windows);
-        assert_eq!(info.arch, Architecture::X86_64);
+        assert_eq!(
+            info.platform,
+            Platform::Windows,
+            "Target triple 'x86_64-pc-windows-msvc' should be detected as Windows platform"
+        );
+        assert_eq!(
+            info.arch,
+            Architecture::X86_64,
+            "Target triple 'x86_64-pc-windows-msvc' should be detected as x86_64 architecture"
+        );
     }
 
     #[test]
     fn test_platform_detection_windows() {
         let info = PlatformInfo::from_target_triple("x86_64-pc-windows-msvc");
-        assert_eq!(info.platform, Platform::Windows);
-        assert_eq!(info.arch, Architecture::X86_64);
+        assert_eq!(
+            info.platform,
+            Platform::Windows,
+            "MSVC target triple should be detected as Windows platform"
+        );
+        assert_eq!(
+            info.arch,
+            Architecture::X86_64,
+            "MSVC target triple should be detected as x86_64 architecture"
+        );
 
         // MinGW variant
         let info2 = PlatformInfo::from_target_triple("x86_64-w64-windows-gnu");
-        assert_eq!(info2.platform, Platform::Windows);
+        assert_eq!(
+            info2.platform,
+            Platform::Windows,
+            "MinGW target triple 'x86_64-w64-windows-gnu' should also be detected as Windows platform"
+        );
     }
 
     #[test]
     fn test_platform_detection_aarch64() {
         let info = PlatformInfo::from_target_triple("aarch64-apple-darwin");
-        assert_eq!(info.platform, Platform::MacOS);
-        assert_eq!(info.arch, Architecture::AArch64);
+        assert_eq!(
+            info.platform,
+            Platform::MacOS,
+            "Target triple 'aarch64-apple-darwin' should be detected as macOS platform"
+        );
+        assert_eq!(
+            info.arch,
+            Architecture::AArch64,
+            "Target triple 'aarch64-apple-darwin' should be detected as AArch64 architecture"
+        );
     }
 
     #[test]
     fn test_platform_detection_linux_gnu() {
         let info = PlatformInfo::from_target_triple("x86_64-unknown-linux-gnu");
-        assert_eq!(info.platform, Platform::Linux);
+        assert_eq!(
+            info.platform,
+            Platform::Linux,
+            "GNU libc target triple should be detected as Linux platform"
+        );
 
         // musl variant
         let info2 = PlatformInfo::from_target_triple("x86_64-unknown-linux-musl");
-        assert_eq!(info2.platform, Platform::Linux);
+        assert_eq!(
+            info2.platform,
+            Platform::Linux,
+            "musl libc target triple should also be detected as Linux platform"
+        );
     }
 
     #[test]
     fn test_macos_zone_allocator_safe() {
         let registry = PlatformFilterRegistry::new();
-        assert!(registry.is_platform_safe("malloc_zone_malloc", Platform::MacOS));
-        assert!(registry.is_platform_safe("malloc_zone_free", Platform::MacOS));
-        assert!(registry.is_platform_safe("malloc_default_zone", Platform::MacOS));
+        assert!(
+            registry.is_platform_safe("malloc_zone_malloc", Platform::MacOS),
+            "malloc_zone_malloc should be recognized as a safe macOS zone allocator API"
+        );
+        assert!(
+            registry.is_platform_safe("malloc_zone_free", Platform::MacOS),
+            "malloc_zone_free should be recognized as a safe macOS zone allocator API"
+        );
+        assert!(
+            registry.is_platform_safe("malloc_default_zone", Platform::MacOS),
+            "malloc_default_zone should be recognized as a safe macOS zone allocator API"
+        );
     }
 
     #[test]
     fn test_linux_glibc_safe() {
         let registry = PlatformFilterRegistry::new();
-        assert!(registry.is_platform_safe("__libc_malloc", Platform::Linux));
-        assert!(registry.is_platform_safe("__libc_free", Platform::Linux));
+        assert!(
+            registry.is_platform_safe("__libc_malloc", Platform::Linux),
+            "__libc_malloc should be recognized as a safe Linux glibc internal API"
+        );
+        assert!(
+            registry.is_platform_safe("__libc_free", Platform::Linux),
+            "__libc_free should be recognized as a safe Linux glibc internal API"
+        );
     }
 
     #[test]
     fn test_windows_heap_safe() {
         let registry = PlatformFilterRegistry::new();
-        assert!(registry.is_platform_safe("HeapAlloc", Platform::Windows));
-        assert!(registry.is_platform_safe("HeapFree", Platform::Windows));
+        assert!(
+            registry.is_platform_safe("HeapAlloc", Platform::Windows),
+            "HeapAlloc should be recognized as a safe Windows heap management API"
+        );
+        assert!(
+            registry.is_platform_safe("HeapFree", Platform::Windows),
+            "HeapFree should be recognized as a safe Windows heap management API"
+        );
     }
 
     #[test]
     fn test_cross_platform_safe() {
         let registry = PlatformFilterRegistry::new();
         // LLVM intrinsics are safe on all platforms
-        assert!(registry.is_platform_safe("llvm.memcpy", Platform::MacOS));
-        assert!(registry.is_platform_safe("llvm.memcpy", Platform::Linux));
-        assert!(registry.is_platform_safe("llvm.memcpy", Platform::Windows));
+        assert!(
+            registry.is_platform_safe("llvm.memcpy", Platform::MacOS),
+            "LLVM intrinsic llvm.memcpy should be safe on macOS"
+        );
+        assert!(
+            registry.is_platform_safe("llvm.memcpy", Platform::Linux),
+            "LLVM intrinsic llvm.memcpy should be safe on Linux"
+        );
+        assert!(
+            registry.is_platform_safe("llvm.memcpy", Platform::Windows),
+            "LLVM intrinsic llvm.memcpy should be safe on Windows"
+        );
 
         // Bounds-checked variants are safe
-        assert!(registry.is_platform_safe("__memcpy_chk", Platform::MacOS));
-        assert!(registry.is_platform_safe("__memcpy_chk", Platform::Linux));
+        assert!(
+            registry.is_platform_safe("__memcpy_chk", Platform::MacOS),
+            "Bounds-checked variant __memcpy_chk should be safe on macOS"
+        );
+        assert!(
+            registry.is_platform_safe("__memcpy_chk", Platform::Linux),
+            "Bounds-checked variant __memcpy_chk should be safe on Linux"
+        );
     }
 
     #[test]
     fn test_dangerous_ffi_not_safe() {
         let registry = PlatformFilterRegistry::new();
         // malloc/free should NOT be marked as safe
-        assert!(!registry.is_platform_safe("malloc", Platform::MacOS));
-        assert!(!registry.is_platform_safe("free", Platform::Linux));
-        assert!(!registry.is_platform_safe("malloc", Platform::Windows));
+        assert!(
+            !registry.is_platform_safe("malloc", Platform::MacOS),
+            "malloc should not be marked as a safe platform API on macOS"
+        );
+        assert!(
+            !registry.is_platform_safe("free", Platform::Linux),
+            "free should not be marked as a safe platform API on Linux"
+        );
+        assert!(
+            !registry.is_platform_safe("malloc", Platform::Windows),
+            "malloc should not be marked as a safe platform API on Windows"
+        );
     }
 }

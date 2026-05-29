@@ -126,10 +126,24 @@ mod tests {
             .with_column(5)
             .with_function("main".to_string());
 
-        assert_eq!(loc.line, 10);
-        assert_eq!(loc.column, Some(5));
-        assert_eq!(loc.function, Some("main".to_string()));
-        assert!(loc.is_valid());
+        assert_eq!(
+            loc.line, 10,
+            "Line number should be 10 as set during construction"
+        );
+        assert_eq!(
+            loc.column,
+            Some(5),
+            "Column should be Some(5) after with_column(5)"
+        );
+        assert_eq!(
+            loc.function,
+            Some("main".to_string()),
+            "Function should be Some(\"main\") after with_function(\"main\")"
+        );
+        assert!(
+            loc.is_valid(),
+            "Location with non-zero line and non-empty file should be valid"
+        );
     }
 
     #[test]
@@ -139,19 +153,37 @@ mod tests {
             .with_function("main".to_string());
 
         let display = loc.display();
-        assert!(display.contains("test.rs"));
-        assert!(display.contains("10"));
-        assert!(display.contains("5"));
-        assert!(display.contains("main"));
+        assert!(
+            display.contains("test.rs"),
+            "Display string should contain the file path \"test.rs\""
+        );
+        assert!(
+            display.contains("10"),
+            "Display string should contain the line number \"10\""
+        );
+        assert!(
+            display.contains("5"),
+            "Display string should contain the column number \"5\""
+        );
+        assert!(
+            display.contains("main"),
+            "Display string should contain the function name \"main\""
+        );
     }
 
     #[test]
     fn test_source_location_validity() {
         let valid = SourceLocation::new(PathBuf::from("test.rs"), 10);
-        assert!(valid.is_valid());
+        assert!(
+            valid.is_valid(),
+            "Location with non-empty file and line > 0 should be valid"
+        );
 
         let invalid = SourceLocation::default();
-        assert!(!invalid.is_valid());
+        assert!(
+            !invalid.is_valid(),
+            "Default location with line 0 should be invalid"
+        );
     }
 
     #[test]
@@ -164,11 +196,18 @@ mod tests {
         let idx1 = manager.add(loc1);
         let idx2 = manager.add(loc2);
 
-        assert_eq!(idx1, 0);
-        assert_eq!(idx2, 1);
-        assert_eq!(manager.count(), 2);
+        assert_eq!(idx1, 0, "First added location should have index 0");
+        assert_eq!(idx2, 1, "Second added location should have index 1");
+        assert_eq!(
+            manager.count(),
+            2,
+            "Manager should contain exactly 2 locations after adding two"
+        );
 
         let retrieved = manager.get(0).unwrap();
-        assert_eq!(retrieved.line, 10);
+        assert_eq!(
+            retrieved.line, 10,
+            "Retrieved location at index 0 should have line 10"
+        );
     }
 }

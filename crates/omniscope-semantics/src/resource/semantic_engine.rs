@@ -882,9 +882,563 @@ mod tests {
 
     #[test]
     fn test_verdict_safety_scores() {
-        assert!(FFIVerdict::SafeNoOwnership.safety_score() > 0.9);
-        assert!(FFIVerdict::SafeConditionalRelease.safety_score() > 0.8);
-        assert!(FFIVerdict::ConcernOwnershipTransfer.safety_score() < 0.5);
-        assert_eq!(FFIVerdict::Unknown.safety_score(), 0.5);
+        assert_eq!(
+            FFIVerdict::SafeNoOwnership.safety_score(),
+            0.95,
+            "SafeNoOwnership should have exact score 0.95"
+        );
+        assert_eq!(
+            FFIVerdict::SafeConditionalRelease.safety_score(),
+            0.9,
+            "SafeConditionalRelease should have exact score 0.9"
+        );
+        assert_eq!(
+            FFIVerdict::SafeInternalBridge.safety_score(),
+            0.85,
+            "SafeInternalBridge should have exact score 0.85"
+        );
+        assert_eq!(
+            FFIVerdict::SafePointerProjection.safety_score(),
+            0.9,
+            "SafePointerProjection should have exact score 0.9"
+        );
+        assert_eq!(
+            FFIVerdict::SafeInitialization.safety_score(),
+            0.85,
+            "SafeInitialization should have exact score 0.85"
+        );
+        assert_eq!(
+            FFIVerdict::ConcernOwnershipTransfer.safety_score(),
+            0.3,
+            "ConcernOwnershipTransfer should have exact score 0.3"
+        );
+        assert_eq!(
+            FFIVerdict::Unknown.safety_score(),
+            0.5,
+            "Unknown should have exact score 0.5"
+        );
+    }
+
+    /// Objective: Verify that assess_ffi_safety returns SafeInternalBridge
+    /// when the callee body only calls project-internal functions (Bun__* prefix).
+    /// Invariants: The callee must have InternalBridge pattern (all calls to
+    /// same-project functions), and no higher-priority pattern (like
+    /// OwnershipTransfer or PureComputation) must override it.
+    #[test]
+    fn test_assess_safe_internal_bridge() {
+        let ir = r#"
+            declare ptr @Bun__get_string(ptr)
+
+            define void @bridge_wrapper(ptr %out, ptr %input) {
+            entry:
+                %s = call ptr @Bun__get_string(ptr %input)
+                store ptr %s, ptr %out
+                ret void
+            }
+
+            define void @caller_fn(ptr %out, ptr %input) {
+            entry:
+                call void @bridge_wrapper(ptr %out, ptr %input)
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("bridge_wrapper", "caller_fn", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeInternalBridge,
+            "Callee that only calls project-internal Bun__* functions should be SafeInternalBridge"
+        );
+        assert!(
+            assessment.is_safe(),
+            "SafeInternalBridge verdict must report is_safe() == true"
+        );
+        assert!(
+            assessment.should_suppress_issue(),
+            "SafeInternalBridge must suppress issue emission"
+        );
+        assert!(
+            !assessment.evidence.is_empty(),
+            "Assessment must include evidence for SafeInternalBridge verdict"
+        );
+    }
+
+    /// Objective: Verify that assess_ffi_safety returns SafeInitialization
+    /// when the callee body stores values into struct fields and returns void.
+    /// Invariants: The callee must have >= 2 stores, ret void, and no calls to
+    /// memory management functions. No higher-priority pattern must override.
+    #[test]
+    fn test_assess_safe_initialization() {
+        let ir = r#"
+            define void @init_struct(ptr %obj, i32 %val) {
+            entry:
+                %f1 = getelementptr i8, ptr %obj, i64 0
+                store i32 %val, ptr %f1
+                %f2 = getelementptr i8, ptr %obj, i64 4
+                store i32 0, ptr %f2
+                ret void
+            }
+
+            define void @caller_init(ptr %obj) {
+            entry:
+                call void @init_struct(ptr %obj, i32 42)
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("init_struct", "caller_init", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeInitialization,
+            "Callee with stores to struct fields and ret void should be SafeInitialization"
+        );
+        assert!(
+            assessment.is_safe(),
+            "SafeInitialization verdict must report is_safe() == true"
+        );
+        assert!(
+            assessment.should_suppress_issue(),
+            "SafeInitialization must suppress issue emission"
+        );
+    }
+
+    /// Objective: Verify is_safe() returns the correct boolean for every verdict variant.
+    /// Invariants: All Safe* variants return true; Concern* and Unknown return false.
+    #[test]
+    fn test_is_safe_all_verdicts() {
+        assert!(
+            FFIVerdict::SafeNoOwnership.is_safe(),
+            "SafeNoOwnership must be safe"
+        );
+        assert!(
+            FFIVerdict::SafeConditionalRelease.is_safe(),
+            "SafeConditionalRelease must be safe"
+        );
+        assert!(
+            FFIVerdict::SafeInternalBridge.is_safe(),
+            "SafeInternalBridge must be safe"
+        );
+        assert!(
+            FFIVerdict::SafePointerProjection.is_safe(),
+            "SafePointerProjection must be safe"
+        );
+        assert!(
+            FFIVerdict::SafeInitialization.is_safe(),
+            "SafeInitialization must be safe"
+        );
+        assert!(
+            !FFIVerdict::ConcernOwnershipTransfer.is_safe(),
+            "ConcernOwnershipTransfer must NOT be safe"
+        );
+        assert!(!FFIVerdict::Unknown.is_safe(), "Unknown must NOT be safe");
+    }
+
+    /// Objective: Verify should_suppress_issue() correctly identifies which
+    /// verdicts should suppress issue emission. Currently delegates to is_safe().
+    /// Invariants: All Safe* verdicts suppress issues; Concern* and Unknown do not.
+    #[test]
+    fn test_should_suppress_issue_all_verdicts() {
+        // Safe variants should suppress issue emission
+        assert!(
+            FFIVerdict::SafeNoOwnership.should_suppress_issue(),
+            "SafeNoOwnership should suppress issues"
+        );
+        assert!(
+            FFIVerdict::SafeConditionalRelease.should_suppress_issue(),
+            "SafeConditionalRelease should suppress issues"
+        );
+        assert!(
+            FFIVerdict::SafeInternalBridge.should_suppress_issue(),
+            "SafeInternalBridge should suppress issues"
+        );
+        assert!(
+            FFIVerdict::SafePointerProjection.should_suppress_issue(),
+            "SafePointerProjection should suppress issues"
+        );
+        assert!(
+            FFIVerdict::SafeInitialization.should_suppress_issue(),
+            "SafeInitialization should suppress issues"
+        );
+        // Concern and Unknown variants must NOT suppress
+        assert!(
+            !FFIVerdict::ConcernOwnershipTransfer.should_suppress_issue(),
+            "ConcernOwnershipTransfer must NOT suppress issues"
+        );
+        assert!(
+            !FFIVerdict::Unknown.should_suppress_issue(),
+            "Unknown must NOT suppress issues"
+        );
+    }
+
+    /// Objective: Verify FFISafetyAssessment::summary() produces the correct
+    /// format string when callee behavior is available and when it is absent.
+    /// Invariants: Summary must contain caller, callee, verdict, score, and
+    /// either callee behavior patterns or "external (no body)" indicator.
+    #[test]
+    fn test_assessment_summary_with_callee_body() {
+        let ir = r#"
+            define i64 @my_strlen(ptr %s) {
+            entry:
+                %len = call i32 @strlen(ptr %s)
+                %result = zext i32 %len to i64
+                ret i64 %result
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("strlen", "my_strlen", &module);
+        let summary = assessment.summary();
+
+        // Verify the summary contains the caller and callee names
+        assert!(
+            summary.contains("my_strlen"),
+            "Summary must contain caller name 'my_strlen', got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("strlen"),
+            "Summary must contain callee name 'strlen', got: {}",
+            summary
+        );
+        // Verify verdict and score are present
+        assert!(
+            summary.contains("verdict="),
+            "Summary must contain 'verdict=', got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("score="),
+            "Summary must contain 'score=', got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_assessment_summary_without_callee_body() {
+        // External callee with no body — summary should indicate external
+        let ir = r#"
+            declare i32 @external_func(ptr)
+
+            define i32 @my_caller(ptr %p) {
+            entry:
+                %r = call i32 @external_func(ptr %p)
+                ret i32 %r
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("external_func", "my_caller", &module);
+        let summary = assessment.summary();
+
+        assert!(
+            summary.contains("external (no body)"),
+            "Summary for external callee must contain 'external (no body)', got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("FFI my_caller -> external_func"),
+            "Summary must start with 'FFI caller -> callee' format, got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_assessment_summary_format_with_known_verdict() {
+        // Construct assessment directly to verify exact format
+        let assessment = FFISafetyAssessment {
+            callee: "strlen".to_string(),
+            caller: "wrapper".to_string(),
+            caller_behavior: None,
+            callee_behavior: None,
+            verdict: FFIVerdict::SafeNoOwnership,
+            evidence: vec![],
+        };
+        let summary = assessment.summary();
+
+        assert_eq!(
+            summary,
+            "FFI wrapper -> strlen: verdict=SafeNoOwnership score=0.95 [callee: external (no body)]",
+            "Summary format must match exactly for known verdict with no callee body"
+        );
+    }
+
+    // ── FFIVerdict variant coverage tests ──
+
+    /// Objective: Verify that assess_ffi_safety returns Unknown when no function
+    ///            body is available and no heuristics match.
+    /// Invariants: Unknown verdict must have is_safe() == false and
+    ///            should_suppress_issue() == false.
+    #[test]
+    fn test_verdict_unknown() {
+        // Use a callee that returns a ptr which is stored to non-local memory —
+        // this prevents PureComputation from triggering (void calls bypass the
+        // call_dests store check, but a non-void call stored to non-alloca
+        // memory is detected as ownership-relevant).
+        let ir = r#"
+            declare ptr @custom_callee(ptr)
+
+            define ptr @caller_fn(ptr %p) {
+            entry:
+                %r = call ptr @custom_callee(ptr %p)
+                store ptr %r, ptr %p
+                ret ptr %r
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("custom_callee", "caller_fn", &module);
+
+        // "custom_callee" doesn't match any FamilyRegistry entry, any POSIX/libc
+        // heuristic, any project-internal prefix, or any Rust/C++ pattern.
+        // The caller stores the call result to non-local memory, so PureComputation
+        // is rejected. No ConditionalRelease or OwnershipTransfer either.
+        // The result should be Unknown.
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::Unknown,
+            "Unresolvable external callee with no matching heuristic must produce Unknown, got {:?}",
+            assessment.verdict
+        );
+        assert!(
+            !assessment.is_safe(),
+            "Unknown verdict must report is_safe() == false"
+        );
+        assert!(
+            !assessment.should_suppress_issue(),
+            "Unknown verdict must NOT suppress issue emission"
+        );
+        assert!(
+            !assessment.evidence.is_empty(),
+            "Unknown verdict must still have evidence explaining why"
+        );
+    }
+
+    /// Objective: Verify that ConcernOwnershipTransfer is returned for a known
+    ///            memory allocation function (malloc) even with an empty caller body.
+    /// Invariants: malloc is in the FamilyRegistry as an Acquire symbol; the
+    ///            verdict must be ConcernOwnershipTransfer.
+    #[test]
+    fn test_verdict_concern_ownership_transfer_malloc() {
+        let ir = r#"
+            declare ptr @malloc(i64)
+
+            define ptr @alloc_buf(i64 %n) {
+            entry:
+                %p = call ptr @malloc(i64 %n)
+                ret ptr %p
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("malloc", "alloc_buf", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::ConcernOwnershipTransfer,
+            "malloc must produce ConcernOwnershipTransfer"
+        );
+        assert!(
+            !assessment.is_safe(),
+            "ConcernOwnershipTransfer must report is_safe() == false"
+        );
+        assert!(
+            assessment.safety_score() < 0.5,
+            "ConcernOwnershipTransfer safety score must be < 0.5, got {}",
+            assessment.safety_score()
+        );
+    }
+
+    /// Objective: Verify that SafeNoOwnership is returned for a callee that
+    ///            matches a POSIX file operation heuristic (external, no body).
+    /// Invariants: POSIX file operations produce SafeNoOwnership.
+    #[test]
+    fn test_verdict_safe_no_ownership_posix() {
+        let ir = r#"
+            declare i32 @open(ptr, i32)
+
+            define i32 @my_open(ptr %path, i32 %flags) {
+            entry:
+                %fd = call i32 @open(ptr %path, i32 %flags)
+                ret i32 %fd
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("open", "my_open", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "POSIX 'open' must produce SafeNoOwnership"
+        );
+        assert!(
+            assessment.is_safe(),
+            "SafeNoOwnership must report is_safe() == true"
+        );
+    }
+
+    /// Objective: Verify that SafeConditionalRelease is returned for a known
+    ///            library-managed release function (zlib deflateEnd).
+    /// Invariants: Library-managed families produce SafeConditionalRelease.
+    #[test]
+    fn test_verdict_safe_conditional_release_library() {
+        let ir = r#"
+            declare i32 @deflateEnd(ptr)
+
+            define i32 @cleanup(ptr %s) {
+            entry:
+                %r = call i32 @deflateEnd(ptr %s)
+                ret i32 %r
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("deflateEnd", "cleanup", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeConditionalRelease,
+            "Library-managed release (deflateEnd) must produce SafeConditionalRelease"
+        );
+        assert!(
+            assessment.is_safe(),
+            "SafeConditionalRelease must report is_safe() == true"
+        );
+    }
+
+    /// Objective: Verify that SafeInternalBridge is returned for into_raw
+    ///            via heuristic (Rust mangled name with _R prefix + into_raw).
+    /// Invariants: The into_raw heuristic in derive_from_caller_context checks
+    ///            for `_R` prefix + `into_raw` substring, or `::into_raw`.
+    #[test]
+    fn test_verdict_safe_internal_bridge_into_raw() {
+        // Use a Rust mangled name that starts with _R and contains into_raw
+        let ir = r#"
+            declare ptr @_RINvNtC4core6option15Option9into_raw(ptr)
+
+            define ptr @extract_raw(ptr %opt) {
+            entry:
+                %raw = call ptr @_RINvNtC4core6option15Option9into_raw(ptr %opt)
+                store ptr %raw, ptr %opt
+                ret ptr %raw
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety(
+            "_RINvNtC4core6option15Option9into_raw",
+            "extract_raw",
+            &module,
+        );
+
+        // The Rust mangled name starts with "_R" and contains "into_raw",
+        // which should trigger the R-6 heuristic in derive_from_caller_context.
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeInternalBridge,
+            "into_raw callee with _R prefix must produce SafeInternalBridge, got {:?}",
+            assessment.verdict
+        );
+    }
+
+    /// Objective: Verify that FFISafetyAssessment correctly propagates the
+    ///            verdict's safety_score when constructed directly.
+    /// Invariants: assessment.safety_score() must equal verdict.safety_score().
+    #[test]
+    fn test_assessment_safety_score_propagation() {
+        let verdicts = [
+            FFIVerdict::SafeNoOwnership,
+            FFIVerdict::SafeConditionalRelease,
+            FFIVerdict::SafeInternalBridge,
+            FFIVerdict::SafePointerProjection,
+            FFIVerdict::SafeInitialization,
+            FFIVerdict::ConcernOwnershipTransfer,
+            FFIVerdict::Unknown,
+        ];
+
+        for verdict in verdicts {
+            let assessment = FFISafetyAssessment {
+                callee: "test".to_string(),
+                caller: "caller".to_string(),
+                caller_behavior: None,
+                callee_behavior: None,
+                verdict: verdict.clone(),
+                evidence: vec![],
+            };
+            assert!(
+                (assessment.safety_score() - verdict.safety_score()).abs() < f32::EPSILON,
+                "Assessment safety_score must match verdict safety_score for {:?}",
+                verdict
+            );
+        }
+    }
+
+    /// Objective: Verify that ConcernOwnershipTransfer is returned for free()
+    ///            (external memory deallocation function).
+    /// Invariants: free must produce ConcernOwnershipTransfer, not a safe verdict.
+    #[test]
+    fn test_verdict_concern_for_free() {
+        let ir = r#"
+            declare void @free(ptr)
+
+            define void @my_free(ptr %p) {
+            entry:
+                call void @free(ptr %p)
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("free", "my_free", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::ConcernOwnershipTransfer,
+            "free() must produce ConcernOwnershipTransfer"
+        );
+        assert!(
+            !assessment.should_suppress_issue(),
+            "ConcernOwnershipTransfer must NOT suppress issue emission"
+        );
+    }
+
+    /// Objective: Verify that SafeInternalBridge is returned for project-internal
+    ///            Bun__ prefixed functions (by-design FFI boundary) via the
+    ///            callee-name heuristic in derive_from_caller_context.
+    /// Invariants: Bun__* prefix heuristic must produce SafeInternalBridge.
+    #[test]
+    fn test_verdict_safe_internal_bridge_bun_prefix() {
+        // The callee returns a non-void value which is stored — this prevents
+        // PureComputation detection (void calls have no dest register, causing
+        // call_dests to be empty and bypassing the store-to-non-local check).
+        let ir = r#"
+            declare ptr @Bun__resolve(ptr, i32)
+
+            define ptr @my_resolve(ptr %ctx, i32 %val) {
+            entry:
+                store i32 %val, ptr %ctx
+                %r = call ptr @Bun__resolve(ptr %ctx, i32 %val)
+                store ptr %r, ptr %ctx
+                ret ptr %r
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("Bun__resolve", "my_resolve", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeInternalBridge,
+            "Bun__* prefix heuristic must produce SafeInternalBridge, got {:?}",
+            assessment.verdict
+        );
+        assert!(
+            assessment.is_safe(),
+            "SafeInternalBridge must report is_safe() == true"
+        );
     }
 }

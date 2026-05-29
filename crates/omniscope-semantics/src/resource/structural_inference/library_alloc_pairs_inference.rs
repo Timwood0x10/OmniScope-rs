@@ -440,63 +440,131 @@ mod tests {
     #[test]
     fn test_lookup_mimalloc() {
         let entry = lookup_library_alloc("mi_malloc").expect("mi_malloc must be in table");
-        assert_eq!(entry.effect, LibraryAllocEffect::Acquire);
-        assert_eq!(entry.language, LanguageHint::C);
+        assert_eq!(
+            entry.effect,
+            LibraryAllocEffect::Acquire,
+            "mi_malloc should be classified as Acquire effect"
+        );
+        assert_eq!(
+            entry.language,
+            LanguageHint::C,
+            "mi_malloc should be identified as C language"
+        );
     }
 
     #[test]
     fn test_lookup_zlib() {
         let inflate_end = lookup_library_alloc("inflateEnd").expect("inflateEnd must be in table");
-        assert_eq!(inflate_end.effect, LibraryAllocEffect::Release);
+        assert_eq!(
+            inflate_end.effect,
+            LibraryAllocEffect::Release,
+            "inflateEnd should be classified as Release effect"
+        );
         let deflate_init = lookup_library_alloc("deflateInit_").expect("deflateInit_ in table");
-        assert_eq!(deflate_init.effect, LibraryAllocEffect::Acquire);
+        assert_eq!(
+            deflate_init.effect,
+            LibraryAllocEffect::Acquire,
+            "deflateInit_ should be classified as Acquire effect"
+        );
     }
 
     #[test]
     fn test_lookup_openssl() {
         let ctx_new = lookup_library_alloc("EVP_CIPHER_CTX_new").expect("must be in table");
-        assert_eq!(ctx_new.effect, LibraryAllocEffect::Acquire);
+        assert_eq!(
+            ctx_new.effect,
+            LibraryAllocEffect::Acquire,
+            "EVP_CIPHER_CTX_new should be classified as Acquire effect"
+        );
         let ctx_free = lookup_library_alloc("EVP_CIPHER_CTX_free").expect("must be in table");
-        assert_eq!(ctx_free.effect, LibraryAllocEffect::Release);
+        assert_eq!(
+            ctx_free.effect,
+            LibraryAllocEffect::Release,
+            "EVP_CIPHER_CTX_free should be classified as Release effect"
+        );
     }
 
     #[test]
     fn test_lookup_sqlite() {
         let open = lookup_library_alloc("sqlite3_open").expect("sqlite3_open in table");
-        assert_eq!(open.effect, LibraryAllocEffect::Acquire);
+        assert_eq!(
+            open.effect,
+            LibraryAllocEffect::Acquire,
+            "sqlite3_open should be classified as Acquire effect"
+        );
         let close = lookup_library_alloc("sqlite3_close").expect("sqlite3_close in table");
-        assert_eq!(close.effect, LibraryAllocEffect::Release);
+        assert_eq!(
+            close.effect,
+            LibraryAllocEffect::Release,
+            "sqlite3_close should be classified as Release effect"
+        );
     }
 
     #[test]
     fn test_lookup_go_cgo() {
         let alloc = lookup_library_alloc("_cgo_allocate").expect("must be in table");
-        assert_eq!(alloc.effect, LibraryAllocEffect::Acquire);
-        assert_eq!(alloc.language, LanguageHint::Go);
+        assert_eq!(
+            alloc.effect,
+            LibraryAllocEffect::Acquire,
+            "_cgo_allocate should be classified as Acquire effect"
+        );
+        assert_eq!(
+            alloc.language,
+            LanguageHint::Go,
+            "_cgo_allocate should be identified as Go language"
+        );
     }
 
     #[test]
     fn test_lookup_python() {
         let decref = lookup_library_alloc("Py_DECREF").expect("Py_DECREF in table");
-        assert_eq!(decref.effect, LibraryAllocEffect::ConditionalRelease);
+        assert_eq!(
+            decref.effect,
+            LibraryAllocEffect::ConditionalRelease,
+            "Py_DECREF should be classified as ConditionalRelease effect"
+        );
         let getitem = lookup_library_alloc("PyList_GetItem").expect("PyList_GetItem in table");
-        assert_eq!(getitem.effect, LibraryAllocEffect::Borrow);
+        assert_eq!(
+            getitem.effect,
+            LibraryAllocEffect::Borrow,
+            "PyList_GetItem should be classified as Borrow effect"
+        );
     }
 
     #[test]
     fn test_lookup_jni() {
         let new_ref = lookup_library_alloc("NewGlobalRef").expect("NewGlobalRef in table");
-        assert_eq!(new_ref.effect, LibraryAllocEffect::Acquire);
-        assert_eq!(new_ref.language, LanguageHint::Java);
+        assert_eq!(
+            new_ref.effect,
+            LibraryAllocEffect::Acquire,
+            "NewGlobalRef should be classified as Acquire effect"
+        );
+        assert_eq!(
+            new_ref.language,
+            LanguageHint::Java,
+            "NewGlobalRef should be identified as Java language"
+        );
         let get_chars = lookup_library_alloc("GetStringUTFChars").expect("in table");
-        assert_eq!(get_chars.effect, LibraryAllocEffect::Borrow);
+        assert_eq!(
+            get_chars.effect,
+            LibraryAllocEffect::Borrow,
+            "GetStringUTFChars should be classified as Borrow effect"
+        );
     }
 
     #[test]
     fn test_lookup_zig() {
         let alloc = lookup_library_alloc("zig_allocator_allocImpl").expect("in table");
-        assert_eq!(alloc.effect, LibraryAllocEffect::Acquire);
-        assert_eq!(alloc.language, LanguageHint::Zig);
+        assert_eq!(
+            alloc.effect,
+            LibraryAllocEffect::Acquire,
+            "zig_allocator_allocImpl should be classified as Acquire effect"
+        );
+        assert_eq!(
+            alloc.language,
+            LanguageHint::Zig,
+            "zig_allocator_allocImpl should be identified as Zig language"
+        );
     }
 
     #[test]

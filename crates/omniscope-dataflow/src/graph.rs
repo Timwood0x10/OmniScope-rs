@@ -22,6 +22,10 @@ pub struct DataFlowGraph {
     next_node_id: NodeId,
     /// Next edge ID
     next_edge_id: EdgeId,
+    /// Forward adjacency: node -> successor node IDs (O(1) lookup for successors)
+    forward_adj: HashMap<NodeId, Vec<NodeId>>,
+    /// Reverse adjacency: node -> predecessor node IDs (O(1) lookup for predecessors)
+    reverse_adj: HashMap<NodeId, Vec<NodeId>>,
 }
 
 impl DataFlowGraph {
@@ -34,6 +38,8 @@ impl DataFlowGraph {
             exit_node: None,
             next_node_id: 0,
             next_edge_id: 0,
+            forward_adj: HashMap::new(),
+            reverse_adj: HashMap::new(),
         }
     }
 
@@ -54,16 +60,23 @@ impl DataFlowGraph {
         let id = self.next_edge_id;
         self.next_edge_id += 1;
 
+        let from = edge.from;
+        let to = edge.to;
+
         let mut edge = edge;
         edge.id = id;
 
         // Update node connectivity
-        if let Some(mut from_node) = self.nodes.get_mut(&edge.from) {
+        if let Some(mut from_node) = self.nodes.get_mut(&from) {
             from_node.outgoing_edges.push(id);
         }
-        if let Some(mut to_node) = self.nodes.get_mut(&edge.to) {
+        if let Some(mut to_node) = self.nodes.get_mut(&to) {
             to_node.incoming_edges.push(id);
         }
+
+        // Update adjacency lists for O(1) predecessor/successor lookup
+        self.forward_adj.entry(from).or_default().push(to);
+        self.reverse_adj.entry(to).or_default().push(from);
 
         self.edges.insert(id, edge);
         id
@@ -119,28 +132,22 @@ impl DataFlowGraph {
         self.edges.iter().map(|e| e.clone()).collect()
     }
 
-    /// Returns predecessors of a node
+    /// Returns predecessors of a node (O(k) where k = number of predecessors)
     pub fn predecessors(&self, node_id: NodeId) -> Vec<NodeId> {
-        self.edges
-            .iter()
-            .filter(|e| e.to == node_id)
-            .map(|e| e.from)
-            .collect()
+        self.reverse_adj.get(&node_id).cloned().unwrap_or_default()
     }
 
-    /// Returns successors of a node
+    /// Returns successors of a node (O(k) where k = number of successors)
     pub fn successors(&self, node_id: NodeId) -> Vec<NodeId> {
-        self.edges
-            .iter()
-            .filter(|e| e.from == node_id)
-            .map(|e| e.to)
-            .collect()
+        self.forward_adj.get(&node_id).cloned().unwrap_or_default()
     }
 
     /// Clears the graph
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.edges.clear();
+        self.forward_adj.clear();
+        self.reverse_adj.clear();
         self.entry_node = None;
         self.exit_node = None;
         self.next_node_id = 0;

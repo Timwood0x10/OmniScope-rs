@@ -74,7 +74,7 @@ impl IssueCandidate {
             kind,
             alloc_family,
             release_family: None,
-            alloc_contract: PointerContract::Owned,
+            alloc_contract: PointerContract::Unknown,
             release_contract: None,
             alloc_function: alloc_function.into(),
             release_function: None,

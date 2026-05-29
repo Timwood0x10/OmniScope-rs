@@ -8,36 +8,34 @@ use std::path::PathBuf;
 #[test]
 fn test_analyze_rust_ffi() {
     let test_file = PathBuf::from("tests/integration/rust_hash.ll");
+    assert!(
+        test_file.exists(),
+        "Test file not found: {:?} - integration test fixtures must be present",
+        test_file
+    );
 
-    if !test_file.exists() {
-        eprintln!("Test file not found: {:?}", test_file);
-        return;
-    }
-
-    println!("=== Analyzing Rust FFI code (rust_hash.ll) ===");
+    eprintln!("=== Analyzing Rust FFI code (rust_hash.ll) ===");
 
     let mut loader = IRLoader::new();
 
     match loader.load_from_file(&test_file) {
         Ok(()) => {
-            println!("✓ Successfully loaded rust_hash.ll");
-            println!("  Functions found: (implementation pending)");
+            eprintln!("Successfully loaded rust_hash.ll");
 
             // Run analysis pipeline
             let mut pipeline = Pipeline::new();
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!("✓ Analysis completed:");
-            println!("  - Passes executed: {}", result.pass_count());
-            println!("  - Issues found: {}", result.issue_count());
-            println!("  - Nodes analyzed: {}", result.total_nodes);
+            assert!(
+                result.pass_count() > 0,
+                "Pipeline should execute at least one pass on rust_hash.ll"
+            );
 
             // Expected: Should detect FFI calls to c_fft_forward and c_hash
         }
         Err(e) => {
-            println!("✗ Could not load IR file: {:?}", e);
-            println!("  (This is expected if LLVM is not properly configured)");
+            panic!("Could not load IR file {:?}: {:?}", test_file, e);
         }
     }
 }
@@ -46,32 +44,29 @@ fn test_analyze_rust_ffi() {
 #[test]
 fn test_analyze_c_bridge() {
     let test_file = PathBuf::from("tests/integration/c_hash_c_bridge.ll");
+    assert!(
+        test_file.exists(),
+        "Test file not found: {:?} - integration test fixtures must be present",
+        test_file
+    );
 
-    if !test_file.exists() {
-        eprintln!("Test file not found: {:?}", test_file);
-        return;
-    }
-
-    println!("=== Analyzing C FFI bridge (c_hash_c_bridge.ll) ===");
+    eprintln!("=== Analyzing C FFI bridge (c_hash_c_bridge.ll) ===");
 
     let mut loader = IRLoader::new();
 
     match loader.load_from_file(&test_file) {
         Ok(()) => {
-            println!("✓ Successfully loaded c_hash_c_bridge.ll");
-
             let mut pipeline = Pipeline::new();
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!(
-                "✓ Analysis completed: {} passes, {} issues",
-                result.pass_count(),
-                result.issue_count()
+            assert!(
+                result.pass_count() > 0,
+                "Pipeline should execute at least one pass on c_hash_c_bridge.ll"
             );
         }
         Err(e) => {
-            println!("✗ Could not load IR file: {:?}", e);
+            panic!("Could not load IR file {:?}: {:?}", test_file, e);
         }
     }
 }
@@ -80,32 +75,29 @@ fn test_analyze_c_bridge() {
 #[test]
 fn test_analyze_zig_ffi() {
     let test_file = PathBuf::from("tests/integration/zig_ffi_bridge.ll");
+    assert!(
+        test_file.exists(),
+        "Test file not found: {:?} - integration test fixtures must be present",
+        test_file
+    );
 
-    if !test_file.exists() {
-        eprintln!("Test file not found: {:?}", test_file);
-        return;
-    }
-
-    println!("=== Analyzing Zig FFI bridge (zig_ffi_bridge.ll) ===");
+    eprintln!("=== Analyzing Zig FFI bridge (zig_ffi_bridge.ll) ===");
 
     let mut loader = IRLoader::new();
 
     match loader.load_from_file(&test_file) {
         Ok(()) => {
-            println!("✓ Successfully loaded zig_ffi_bridge.ll");
-
             let mut pipeline = Pipeline::new();
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!(
-                "✓ Analysis completed: {} passes, {} issues",
-                result.pass_count(),
-                result.issue_count()
+            assert!(
+                result.pass_count() > 0,
+                "Pipeline should execute at least one pass on zig_ffi_bridge.ll"
             );
         }
         Err(e) => {
-            println!("✗ Could not load IR file: {:?}", e);
+            panic!("Could not load IR file {:?}: {:?}", test_file, e);
         }
     }
 }
@@ -114,32 +106,29 @@ fn test_analyze_zig_ffi() {
 #[test]
 fn test_analyze_cpp() {
     let test_file = PathBuf::from("tests/integration/cpp_hash.ll");
+    assert!(
+        test_file.exists(),
+        "Test file not found: {:?} - integration test fixtures must be present",
+        test_file
+    );
 
-    if !test_file.exists() {
-        eprintln!("Test file not found: {:?}", test_file);
-        return;
-    }
-
-    println!("=== Analyzing C++ code (cpp_hash.ll) ===");
+    eprintln!("=== Analyzing C++ code (cpp_hash.ll) ===");
 
     let mut loader = IRLoader::new();
 
     match loader.load_from_file(&test_file) {
         Ok(()) => {
-            println!("✓ Successfully loaded cpp_hash.ll");
-
             let mut pipeline = Pipeline::new();
             pipeline.register_default_passes();
 
             let result = pipeline.run().unwrap();
-            println!(
-                "✓ Analysis completed: {} passes, {} issues",
-                result.pass_count(),
-                result.issue_count()
+            assert!(
+                result.pass_count() > 0,
+                "Pipeline should execute at least one pass on cpp_hash.ll"
             );
         }
         Err(e) => {
-            println!("✗ Could not load IR file: {:?}", e);
+            panic!("Could not load IR file {:?}: {:?}", test_file, e);
         }
     }
 }
@@ -147,13 +136,13 @@ fn test_analyze_cpp() {
 /// Test pipeline orchestration without IR
 #[test]
 fn test_pipeline_orchestration() {
-    println!("=== Testing Pipeline Orchestration ===");
-
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();
 
     let result = pipeline.run().unwrap();
 
-    assert!(result.pass_count() > 0, "Pipeline should execute passes");
-    println!("✓ Pipeline executed {} passes", result.pass_count());
+    assert!(
+        result.pass_count() > 0,
+        "Pipeline should execute at least one pass"
+    );
 }
