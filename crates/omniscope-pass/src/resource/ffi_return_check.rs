@@ -18,7 +18,7 @@
 //! - Skips `Box::into_raw` / `from_raw` (Rust raw ownership, already tracked)
 
 use omniscope_core::{Issue, Result};
-use omniscope_ir::{FunctionBody, IRInstruction, IRInstructionKind, IRModule};
+use omniscope_ir::{FunctionBody, IRInstructionKind, IRModule};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
@@ -104,51 +104,49 @@ fn scan_function_body(
                     let callee_name = callee.trim_start_matches('@');
 
                     // Check if this is an external FFI call
-                    if !module.declarations.contains_key(callee_name)
-                        && !is_likely_ffi_by_name(callee_name)
-                    {
-                        // Not an external call — skip
-                        continue;
-                    }
+                    let is_declared = module.declarations.contains_key(callee_name);
+                    let is_ffi = is_likely_ffi_by_name(callee_name);
+                    if is_declared || is_ffi {
+                        // Only track pointer-returning calls — non-pointer returns can't be null
+                        if returns_pointer(&inst.raw_text) {
+                            // Skip known non-null APIs
+                            if !is_non_null_api(callee_name) {
+                                // If the call returns into a register, track it
+                                if let Some(ref dest) = inst.dest {
+                                    ffi_return_regs.insert(dest.clone());
+                                }
+                            }
+                        }
 
-                    // Skip known non-null APIs
-                    if is_non_null_api(callee_name) {
-                        continue;
-                    }
+                        // Check if an unchecked FFI return is passed
+                        // as an argument to a null-sink function.
+                        // This check applies regardless of return type.
+                        if is_null_sink(callee_name) {
+                            // Call operands are not populated by the parser,
+                            // so we extract registers from raw_text instead.
+                            for word in inst.raw_text.split(|c: char| {
+                                c.is_whitespace() || c == ',' || c == '(' || c == ')'
+                            }) {
+                                let op = word.trim();
+                                if op.starts_with('%')
+                                    && ffi_return_regs.contains(op)
+                                    && !null_checked.contains(op)
+                                {
+                                    let issue_id = ctx.next_issue_id();
+                                    let issue = Issue::new(
+                                        issue_id,
+                                        omniscope_core::IssueKind::NullDereference,
+                                        omniscope_core::diagnostics::Severity::Error,
+                                        format!(
+                                            "FFI return value '{}' passed to null-sink '{}' without null check in '{}'",
+                                            op, callee, func_name
+                                        ),
+                                    )
+                                    .with_symbol(op.to_string());
 
-                    // If the call returns into a register, track it
-                    if let Some(ref dest) = inst.dest {
-                        ffi_return_regs.insert(dest.clone());
-                    }
-
-                    // Also check if an unchecked FFI return is passed
-                    // as an argument to a null-sink function
-                    if is_null_sink(callee_name) {
-                        // Call operands are not populated by the parser,
-                        // so we extract registers from raw_text instead.
-                        for word in inst
-                            .raw_text
-                            .split(|c: char| c.is_whitespace() || c == ',' || c == '(' || c == ')')
-                        {
-                            let op = word.trim();
-                            if op.starts_with('%')
-                                && ffi_return_regs.contains(op)
-                                && !null_checked.contains(op)
-                            {
-                                let issue_id = ctx.next_issue_id();
-                                let issue = Issue::new(
-                                    issue_id,
-                                    omniscope_core::IssueKind::NullDereference,
-                                    omniscope_core::diagnostics::Severity::Error,
-                                    format!(
-                                        "FFI return value '{}' passed to null-sink '{}' without null check in '{}'",
-                                        op, callee, func_name
-                                    ),
-                                )
-                                .with_symbol(op.to_string());
-
-                                issues.push(issue);
-                                null_checked.insert(op.to_string());
+                                    issues.push(issue);
+                                    null_checked.insert(op.to_string());
+                                }
                             }
                         }
                     }
@@ -206,6 +204,95 @@ fn scan_function_body(
     }
 }
 
+/// Returns true if the call instruction returns a pointer type.
+///
+/// Checks the raw_text for `call ptr @` pattern, which indicates
+/// a pointer return type. Non-pointer returns (i32, i64, void, etc.)
+/// cannot be null and should not be tracked.
+fn returns_pointer(raw_text: &str) -> bool {
+    let text = raw_text.trim();
+
+    // Strip "tail " / "musttail " / "notail " prefix
+    let text = text
+        .strip_prefix("tail ")
+        .or_else(|| text.strip_prefix("musttail "))
+        .or_else(|| text.strip_prefix("notail "))
+        .unwrap_or(text);
+
+    // Find "call " keyword
+    if let Some(call_pos) = text.find("call ") {
+        let after_call = &text[call_pos + 5..];
+
+        // The return type is the first token after "call".
+        // For pointer returns: "ptr @func" — "ptr" is the immediate next word
+        // For variadic: "i32 (ptr, ptr, ...) @func" — return type is "i32"
+        // We need to find the immediate return type, not types inside parens.
+
+        // Skip optional calling convention keywords (fastcc, ccc, etc.)
+        let after_call = skip_calling_conventions(after_call);
+
+        // The return type is either:
+        // - A simple type: "ptr @func" → "ptr"
+        // - A complex type: "i32 (ptr, ...) @func" → "i32"
+        // - With qualifiers: "noundef ptr @func" → "ptr"
+        //
+        // Strategy: find the position of '@' and work backwards.
+        // Everything between "call" and "@" is the return type + qualifiers.
+        if let Some(at_pos) = after_call.find('@') {
+            let ret_part = &after_call[..at_pos];
+
+            // If the return type part contains parentheses (function type),
+            // the actual return type is before the first '('
+            let ret_type = if let Some(paren_pos) = ret_part.find('(') {
+                &ret_part[..paren_pos]
+            } else {
+                ret_part
+            };
+
+            // Check if the return type is "ptr" (possibly with qualifiers like "noundef")
+            let ret_type = ret_type.trim();
+            // The last token before qualifiers should be the type itself
+            // e.g., "noundef ptr" → last word is "ptr"
+            // e.g., "ptr" → "ptr"
+            let last_word = ret_type.split_whitespace().next_back().unwrap_or("");
+            return last_word == "ptr";
+        }
+    }
+
+    false
+}
+
+/// Skips optional calling convention keywords after "call".
+fn skip_calling_conventions(s: &str) -> &str {
+    let conventions = [
+        "ccc ",
+        "fastcc ",
+        "coldcc ",
+        "webkit_jscc ",
+        "anyregcc ",
+        "preserve_mostcc ",
+        "preserve_allcc ",
+        "swiftcc ",
+        "swifttailcc ",
+        "cfguard_checkcc ",
+    ];
+    let mut s = s;
+    loop {
+        let mut found = false;
+        for cc in &conventions {
+            if s.starts_with(cc) {
+                s = &s[cc.len()..];
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    s
+}
+
 /// Returns true if the callee name looks like an FFI function.
 ///
 /// Heuristic: C-style names (lowercase, underscores) that aren't
@@ -236,16 +323,18 @@ fn is_non_null_api(name: &str) -> bool {
     {
         return true;
     }
-    // C allocators (may return null, but the Rust wrappers don't)
-    if name == "malloc" || name == "calloc" || name == "realloc" {
-        return true; // These are usually wrapped by Rust's allocator
-    }
+    // NOTE: malloc/calloc/realloc are NOT non-null — they return null on OOM!
+    // Only the Rust __rust_alloc wrappers abort on failure.
     // Rust raw ownership — already tracked by RUST_RAW_OWNERSHIP family
     if name.contains("into_raw") || name.contains("from_raw") {
         return true;
     }
     // Drop glue / RAII — never returns null
     if name.contains("drop_in_place") || name.contains("__rust_dealloc") {
+        return true;
+    }
+    // Platform-specific thread-local errno pointer — never null
+    if name == "__error" || name == "__errno_location" || name == "___errno" {
         return true;
     }
     false
@@ -289,9 +378,11 @@ mod tests {
 
     #[test]
     fn test_is_non_null_api() {
-        assert!(is_non_null_api("malloc"));
         assert!(is_non_null_api("__rust_alloc"));
         assert!(is_non_null_api("Box::into_raw"));
+        // malloc is NOT non-null — it can return null!
+        assert!(!is_non_null_api("malloc"));
+        assert!(!is_non_null_api("calloc"));
         assert!(!is_non_null_api("ffi_get_buffer"));
     }
 
@@ -309,6 +400,25 @@ mod tests {
         assert!(is_likely_ffi_by_name("curl_easy_init"));
         assert!(!is_likely_ffi_by_name("_RNvCsome_rust_mangled"));
         assert!(!is_likely_ffi_by_name("Some::rust_func"));
+    }
+
+    #[test]
+    fn test_returns_pointer() {
+        assert!(returns_pointer("  %p = call ptr @ffi_get()"));
+        assert!(returns_pointer("  %p = tail call ptr @malloc(i64 %n)"));
+        assert!(returns_pointer(
+            "  %p = call noundef ptr @fopen(ptr %s, ptr %m)"
+        ));
+        assert!(!returns_pointer("  %r = call i32 @c_hash(ptr %p, i64 %n)"));
+        assert!(!returns_pointer("  %t = call i64 @time(ptr null)"));
+        assert!(!returns_pointer("  call void @free(ptr %p)"));
+        // Variadic: return type is i32, not ptr
+        assert!(!returns_pointer(
+            "  %16 = tail call i32 (ptr, ptr, ...) @fprintf(ptr %f, ptr %s)"
+        ));
+        assert!(!returns_pointer(
+            "  %112 = tail call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 %n, ptr %f)"
+        ));
     }
 
     /// TP: FFI call returning ptr, immediately load without null check

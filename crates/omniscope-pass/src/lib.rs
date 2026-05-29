@@ -22,6 +22,7 @@ pub use analysis::{
 
 // Re-exports — Resource contract passes
 pub use resource::contract_graph_builder::{ContractEdge, ContractGraph, ContractGraphBuilderPass};
+pub use resource::ffi_return_check::FfiReturnCheckPass;
 pub use resource::ir_behavior_summary_pass::IRBehaviorSummaryPass;
 pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
 pub use resource::issue_gate::{check_issue, check_issue_with_kinds, GateVerdict};
