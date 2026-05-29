@@ -15,10 +15,26 @@ categories = ["development-tools", "development-tools::debugging"]
 chrono = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 omniscope-core = { path = "crates/omniscope-core" }
 omniscope-ir = { path = "crates/omniscope-ir" }
 omniscope-pipeline = { path = "crates/omniscope-pipeline" }
+omniscope-pass = { path = "crates/omniscope-pass" }
+omniscope-semantics = { path = "crates/omniscope-semantics" }
+omniscope-types = { path = "crates/omniscope-types" }
 serde_json = "1.0"
+
+[[bench]]
+name = "ir_parsing"
+harness = false
+
+[[bench]]
+name = "pipeline"
+harness = false
+
+[[bench]]
+name = "resource_analysis"
+harness = false
 
 [workspace]
 members = [

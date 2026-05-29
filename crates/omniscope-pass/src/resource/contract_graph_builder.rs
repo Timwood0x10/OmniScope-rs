@@ -10,6 +10,9 @@ use omniscope_types::{Effect, FamilyId, FunctionId};
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
 
+/// FIFO queue entry: (instance_id, optional_alloc_family).
+type AcquireEntry = (u64, Option<FamilyId>);
+
 /// An edge in the resource contract graph.
 #[derive(Debug, Clone)]
 pub struct ContractEdge {
@@ -111,10 +114,8 @@ impl Pass for ContractGraphBuilderPass {
         // FIFO queue per (func_id, family) so multiple allocations of the same
         // family are matched to releases in allocation order instead of
         // collapsing to a single instance.
-        let mut acquire_instances: std::collections::HashMap<
-            (u64, FamilyId),
-            Vec<(u64, Option<FamilyId>)>,
-        > = std::collections::HashMap::new();
+        let mut acquire_instances: std::collections::HashMap<(u64, FamilyId), Vec<AcquireEntry>> =
+            std::collections::HashMap::new();
 
         for fact in &raw_facts {
             let family = fact.family.unwrap_or(FamilyId::C_HEAP);
