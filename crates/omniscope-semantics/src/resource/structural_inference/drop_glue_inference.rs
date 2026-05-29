@@ -151,9 +151,9 @@ fn classify_drop_glue_name(
         LanguageHint::Cpp
             // C++ Itanium mangled destructor: _ZN...D0Ev / _ZN...D1Ev / _ZN...D2Ev
             // D0 = deleting destructor, D1 = complete destructor, D2 = base destructor
-            if (name.starts_with("_ZN") && name.contains("D0Ev"))
-                || name.contains("D1Ev")
-                || name.contains("D2Ev") =>
+            // ALL must start with _ZN (Itanium ABI mangled name prefix)
+            if name.starts_with("_ZN")
+                && (name.contains("D0Ev") || name.contains("D1Ev") || name.contains("D2Ev")) =>
         {
             return Some((DropGlueKind::CppDestructor, FamilyId::CPP_NEW_SCALAR, 0.90));
         }

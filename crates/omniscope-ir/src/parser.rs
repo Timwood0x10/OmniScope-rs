@@ -88,8 +88,10 @@ pub enum IRInstructionKind {
     Icmp,
     /// `br i1` / `br label` — conditional or unconditional branch
     Branch,
-    /// `call @func(...)` — function call
+    /// `call @func(...)` — direct function call (callee is a known function)
     Call,
+    /// `call %reg(...)` — indirect call via function pointer (callee is unknown)
+    IndirectCall,
     /// `ret` — return from function
     Ret,
     /// `phi` — SSA phi node
@@ -167,9 +169,14 @@ impl FunctionBody {
             .find(|i| i.kind == IRInstructionKind::Ret)
     }
 
-    /// Returns all call instructions in this function body.
+    /// Returns all call instructions in this function body (both direct and indirect).
     pub fn call_instructions(&self) -> Vec<&IRInstruction> {
-        self.instructions_of_kind(IRInstructionKind::Call)
+        self.instructions
+            .iter()
+            .filter(|i| {
+                i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::IndirectCall
+            })
+            .collect()
     }
 
     /// Returns all atomicrmw instructions with a specific operation.
@@ -736,13 +743,42 @@ fn parse_instruction(line: &str) -> Option<IRInstruction> {
     }
 
     // call (including "tail call", "musttail call")
+    // Direct call: call <ret_type> @<name>(<args>)
+    // Indirect call: call <ret_type> %<reg>(<args>)
     if stripped.starts_with("call") {
         let callee = extract_call_callee(stripped);
+        if callee.is_some() {
+            // Direct call — callee is a known function name
+            return Some(IRInstruction {
+                kind: IRInstructionKind::Call,
+                dest,
+                operands: Vec::new(),
+                callee,
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text,
+            });
+        }
+        // Check for indirect call: pattern like "call ... %reg(...)"
+        // An indirect call uses a register (%-prefixed) as the callee
+        let indirect_callee = extract_indirect_call_callee(stripped);
+        if indirect_callee.is_some() {
+            return Some(IRInstruction {
+                kind: IRInstructionKind::IndirectCall,
+                dest,
+                operands: extract_operands(stripped, "call"),
+                callee: indirect_callee,
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text,
+            });
+        }
+        // Unknown call format — still emit as Call to avoid silently dropping
         return Some(IRInstruction {
             kind: IRInstructionKind::Call,
             dest,
-            operands: Vec::new(), // operands not needed for call; callee is sufficient
-            callee,
+            operands: extract_operands(stripped, "call"),
+            callee: None,
             atomic_op: None,
             icmp_pred: None,
             raw_text,
@@ -899,6 +935,29 @@ fn extract_call_callee(s: &str) -> Option<String> {
             // Filter out LLVM intrinsics
             if !name.starts_with("llvm.") {
                 return Some(name);
+            }
+        }
+    }
+    None
+}
+
+/// Extract the callee register name from an indirect call instruction.
+///
+/// Indirect calls use a register (%-prefixed) as the callee instead of
+/// a named function (@-prefixed). For example:
+///   `call void %fp(i32 42)`
+///   `call i32 %callback ptr %ctx)`
+fn extract_indirect_call_callee(s: &str) -> Option<String> {
+    // Find pattern: %<name>(  — register used as callee
+    // We look for the last %-prefixed token before '(' that isn't inside args
+    if let Some(paren_pos) = s.rfind('(') {
+        let before_paren = &s[..paren_pos];
+        // Split into tokens and find the last %-prefixed token
+        // This handles cases like "call void %fp" or "call i32 (i32)* %callback"
+        for token in before_paren.split_whitespace().rev() {
+            let token = token.trim_matches(',').trim_matches('*');
+            if token.starts_with('%') {
+                return Some(token.to_string());
             }
         }
     }

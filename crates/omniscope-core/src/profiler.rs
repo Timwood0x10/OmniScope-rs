@@ -83,7 +83,7 @@ pub struct Profiler {
     /// Next span ID
     next_id: AtomicU64,
     /// Active spans (for nested profiling)
-    active_spans: DashMap<SpanId, (Instant, String)>,
+    active_spans: DashMap<SpanId, (Instant, String, Option<SpanId>)>,
 }
 
 use dashmap::DashMap;
@@ -104,26 +104,33 @@ impl Profiler {
     pub fn start_span(&self, name: impl Into<String>) -> SpanId {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = name.into();
-        self.active_spans.insert(id, (Instant::now(), name));
+        self.active_spans.insert(id, (Instant::now(), name, None));
         id
     }
 
-    /// Starts a nested span
+    /// Starts a nested span with a parent reference
+    ///
+    /// The parent_id is stored alongside the active span data and
+    /// applied when the span is finalized via `end_span`.
     pub fn start_span_with_parent(&self, name: impl Into<String>, parent_id: SpanId) -> SpanId {
-        let id = self.start_span(name);
-        if let Some(mut span) = self.spans.get_mut(&id) {
-            span.parent_id = Some(parent_id);
-        }
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let name = name.into();
+        self.active_spans
+            .insert(id, (Instant::now(), name, Some(parent_id)));
         id
     }
 
     /// Ends a profiling span
     pub fn end_span(&self, id: SpanId) {
-        if let Some((_, (start, name))) = self.active_spans.remove(&id) {
+        if let Some((_id, (start, name, parent_id))) = self.active_spans.remove(&id) {
             let duration = start.elapsed();
 
             let mut span = Span::new(id, name);
             span.duration = duration;
+            // Apply parent_id that was stored when the span was started.
+            if let Some(pid) = parent_id {
+                span.parent_id = Some(pid);
+            }
 
             // Index by name
             self.by_name.entry(span.name.clone()).or_default().push(id);
@@ -300,6 +307,29 @@ mod tests {
         let stats = profiler.stats("test").unwrap();
         assert_eq!(stats.count, 3);
         assert!(stats.avg >= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn test_span_with_parent() {
+        let profiler = Profiler::new();
+
+        let parent = profiler.start_span("parent");
+        let child = profiler.start_span_with_parent("child", parent);
+        profiler.end_span(child);
+        profiler.end_span(parent);
+
+        let child_span = profiler.get_span(child).expect("child span must exist");
+        assert_eq!(
+            child_span.parent_id,
+            Some(parent),
+            "child span must have parent_id set to the parent span ID"
+        );
+
+        let parent_span = profiler.get_span(parent).expect("parent span must exist");
+        assert_eq!(
+            parent_span.parent_id, None,
+            "top-level span must have no parent_id"
+        );
     }
 
     #[test]

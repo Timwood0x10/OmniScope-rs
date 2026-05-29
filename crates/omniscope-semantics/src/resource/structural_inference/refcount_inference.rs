@@ -170,8 +170,27 @@ fn classify_refcount_name(
     }
 
     // Generic release / decref patterns
+    // Exclude non-refcount release operations: semaphore_release, lock_release,
+    // thread_release, sem_release, etc. These are synchronization primitives,
+    // not reference counting operations.
     if lower.ends_with("_release") && !lower.contains("unconditional") {
-        return Some((RefcountKind::Generic, FamilyId::C_HEAP, 0.5));
+        let non_refcount_release = [
+            "semaphore",
+            "lock",
+            "mutex",
+            "thread",
+            "sem_",
+            "spinlock",
+            "rwlock",
+            "condvar",
+            "fence",
+        ];
+        let is_sync_release = non_refcount_release
+            .iter()
+            .any(|prefix| lower.contains(prefix));
+        if !is_sync_release {
+            return Some((RefcountKind::Generic, FamilyId::C_HEAP, 0.5));
+        }
     }
 
     if lower.ends_with("_decref") || lower.contains("_decref") {

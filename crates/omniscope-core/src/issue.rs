@@ -139,15 +139,37 @@ impl IssueKind {
     /// Returns the CWE (Common Weakness Enumeration) ID if applicable.
     pub fn cwe_id(&self) -> Option<u32> {
         match self {
+            // FFI boundary issues
             IssueKind::CrossLanguageFree => Some(762), // CWE-762: Mismatched Memory Management Routines
-            IssueKind::DoubleFree => Some(415),
+            IssueKind::OwnershipViolation => Some(763), // CWE-763: Release of Invalid Pointer or Reference
+            IssueKind::FfiTypeMismatch => Some(843), // CWE-843: Access of Resource Using Incompatible Type
+            IssueKind::AbiMismatch => Some(758), // CWE-758: Reliance on Undefined/Unspecified Behavior
+            IssueKind::UncheckedReturn => Some(252), // CWE-252: Unchecked Return Value
+            IssueKind::FfiUnsafeCall => Some(119), // CWE-119: Improper Restriction of Memory Buffer Operations
+            IssueKind::CallbackEscape => Some(749), // CWE-749: Exposed Dangerous Method or Function
+            // Local memory issues
+            IssueKind::DoubleFree => Some(415), // CWE-415: Double Free
             IssueKind::UseAfterFree => Some(416), // CWE-416: Use After Free
+            IssueKind::InvalidFree => Some(763), // CWE-763: Release of Invalid Pointer or Reference
+            IssueKind::MemoryLeak => Some(401), // CWE-401: Missing Release of Memory
             IssueKind::BufferOverflow => Some(120), // CWE-120: Buffer Copy without Size Check
             IssueKind::NullDereference => Some(476), // CWE-476: NULL Pointer Dereference
             IssueKind::IntegerOverflow => Some(190), // CWE-190: Integer Overflow or Wraparound
-            IssueKind::MemoryLeak => Some(401),   // CWE-401: Missing Release of Memory
-            IssueKind::FfiUnsafeCall => Some(119), // CWE-119: Improper Restriction of Memory Buffer Operations
-            _ => None,
+            // Resource contract issues
+            IssueKind::CrossFamilyFree => Some(762), // CWE-762: Mismatched Memory Management Routines
+            IssueKind::ConditionalLeak => Some(772), // CWE-772: Missing Release of Resource after Effective Lifetime
+            IssueKind::BorrowEscape => Some(822),    // CWE-822: Untrusted Pointer Dereference
+            IssueKind::CallbackEscapeIssue => Some(749), // CWE-749: Exposed Dangerous Method or Function
+            IssueKind::WriteToImmutable => Some(123),    // CWE-123: Write-what-where Condition
+            IssueKind::DoubleReclaim => Some(415),       // CWE-415: Double Free
+            IssueKind::OwnershipEscapeLeak => Some(772), // CWE-772: Missing Release after Effective Lifetime
+            // Concurrency issues
+            IssueKind::DataRace => Some(362), // CWE-362: Race Condition
+            IssueKind::LockOrderViolation => Some(833), // CWE-833: Deadlock
+            IssueKind::ThreadCrossing => Some(362), // CWE-362: Race Condition
+            // No direct CWE mapping
+            IssueKind::NeedsModel => None,
+            IssueKind::Unknown => None,
         }
     }
 }
@@ -403,9 +425,33 @@ mod tests {
             Some(476),
             "NullDereference must map to CWE-476"
         );
+        assert_eq!(
+            IssueKind::AbiMismatch.cwe_id(),
+            Some(758),
+            "AbiMismatch must map to CWE-758"
+        );
+        assert_eq!(
+            IssueKind::DoubleReclaim.cwe_id(),
+            Some(415),
+            "DoubleReclaim must map to CWE-415"
+        );
+        assert_eq!(
+            IssueKind::OwnershipEscapeLeak.cwe_id(),
+            Some(772),
+            "OwnershipEscapeLeak must map to CWE-772"
+        );
+        assert_eq!(
+            IssueKind::DataRace.cwe_id(),
+            Some(362),
+            "DataRace must map to CWE-362"
+        );
         assert!(
-            IssueKind::AbiMismatch.cwe_id().is_none(),
-            "AbiMismatch has no direct CWE mapping"
+            IssueKind::Unknown.cwe_id().is_none(),
+            "Unknown has no CWE mapping"
+        );
+        assert!(
+            IssueKind::NeedsModel.cwe_id().is_none(),
+            "NeedsModel has no CWE mapping"
         );
     }
 

@@ -566,7 +566,7 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // When a function body IS available, we derive from IR patterns.
 
     // ── R-3: RAII drop glue — compiler-inserted cleanup ──
-    if callee.contains("drop_in_place") || callee.contains("4drop") && callee.starts_with("_R") {
+    if (callee.contains("drop_in_place") || callee.contains("4drop")) && callee.starts_with("_R") {
         return FFIVerdict::SafeConditionalRelease;
     }
     if callee == "__rust_dealloc" || callee == "__rdl_dealloc" || callee == "__rg_dealloc" {

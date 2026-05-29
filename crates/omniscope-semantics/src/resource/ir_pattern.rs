@@ -205,7 +205,8 @@ pub enum ReturnSource {
 /// that tell us whether FFI calls from/in this function are safe.
 pub fn extract_behavior(body: &FunctionBody) -> FunctionBehavior {
     let alloca_count = body.count_kind(IRInstructionKind::Alloca);
-    let call_count = body.count_kind(IRInstructionKind::Call);
+    let call_count =
+        body.count_kind(IRInstructionKind::Call) + body.count_kind(IRInstructionKind::IndirectCall);
     let atomic_rmw_count = body.count_kind(IRInstructionKind::AtomicRmw);
     let load_count = body.count_kind(IRInstructionKind::Load);
     let store_count = body.count_kind(IRInstructionKind::Store);
@@ -343,7 +344,7 @@ fn detect_pure_computation(body: &FunctionBody) -> bool {
     let calls: Vec<&IRInstruction> = body
         .instructions
         .iter()
-        .filter(|i| i.kind == IRInstructionKind::Call)
+        .filter(|i| i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::IndirectCall)
         .collect();
 
     if calls.is_empty() {
@@ -419,7 +420,7 @@ fn detect_ownership_transfer(body: &FunctionBody) -> Option<BehaviorPattern> {
     let calls: Vec<&IRInstruction> = body
         .instructions
         .iter()
-        .filter(|i| i.kind == IRInstructionKind::Call)
+        .filter(|i| i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::IndirectCall)
         .collect();
 
     for call_inst in &calls {
@@ -534,6 +535,12 @@ fn detect_internal_bridge(body: &FunctionBody) -> bool {
             if !is_project_internal {
                 return false;
             }
+        } else {
+            // Indirect call (callee unknown) — cannot assume it is
+            // project-internal. An indirect call via function pointer
+            // might target any external function, so this function
+            // cannot be classified as InternalBridge.
+            return false;
         }
     }
 

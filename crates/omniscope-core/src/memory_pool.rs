@@ -61,8 +61,9 @@ impl MemoryPool {
     ///
     /// # Safety
     /// All references allocated from this pool become invalid after reset.
-    pub unsafe fn reset(&self) {
-        (*self.arena.get()).reset();
+    /// The caller must ensure no references derived from this pool are in use.
+    pub fn reset(&mut self) {
+        unsafe { (*self.arena.get()).reset() };
     }
 
     /// Returns the number of bytes currently allocated
@@ -77,11 +78,16 @@ impl Default for MemoryPool {
     }
 }
 
-// SAFETY: The MemoryPool is designed to be used in a single-threaded context
-// for each analysis pass. The UnsafeCell is used to allow interior mutability.
-// Cross-thread sharing should be avoided.
+// SAFETY: MemoryPool can be safely sent between threads because it has
+// exclusive ownership of its arena. No shared mutable state exists when
+// the pool is moved.
 unsafe impl Send for MemoryPool {}
-unsafe impl Sync for MemoryPool {}
+
+// NOTE: Sync is intentionally NOT implemented for MemoryPool.
+// The inner Bump allocator is not thread-safe (it uses no synchronization
+// primitives). Implementing Sync would allow &MemoryPool references to be
+// shared across threads, enabling data races on the UnsafeCell<Bump>.
+// Each analysis pass should use its own MemoryPool instance.
 
 #[cfg(test)]
 mod tests {

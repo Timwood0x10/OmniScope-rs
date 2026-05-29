@@ -174,14 +174,31 @@ fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) ->
 }
 
 /// Checks if the summary store contains a function that releases
-/// the same family as the allocation.
+/// the same family as the allocation, scoped to the allocation's function
+/// or its likely cleanup callees.
+///
+/// Previously this searched ALL summaries globally, which caused false
+/// suppression: any function with a same-family Release would suppress
+/// the leak, even if the release was in a completely unrelated function.
+///
+/// Now we restrict the search to:
+/// 1. The summary whose `function` ID matches the alloc's function ID, OR
+/// 2. Summaries whose name matches the alloc's function_name (handles
+///    the case where the alloc's callee itself has a release summary).
 fn check_release_in_summaries(store: &SummaryStore, alloc: &RawResourceFact) -> bool {
     let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
-    // Check if any summary in the store releases the same family.
-    // This handles cases where the release is in a called function
-    // (e.g., a destructor or cleanup function).
     for (_, summary) in store.iter() {
+        // Scope: only consider summaries related to the allocation's function.
+        // 1. Same function ID (the function containing the alloc also releases)
+        // 2. Summary name matches the alloc's callee name (the called function
+        //    itself is a known release, e.g. free, fclose, etc.)
+        let same_function = summary.function == alloc.function;
+        let named_like_alloc_callee = summary.name == alloc.function_name;
+        if !same_function && !named_like_alloc_callee {
+            continue;
+        }
+
         for effect in &summary.effects {
             match effect {
                 Effect::Release { family, .. } if *family == alloc_family => {

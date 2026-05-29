@@ -224,13 +224,20 @@ impl Pass for StructuralInferencePass {
 
             // R-8: FromParameter — if the function takes pointer parameters and
             // doesn't allocate, the pointer comes from the caller, not a stack escape.
-            // Heuristic: Rust functions with `_R` prefix that aren't alloc/dealloc
-            // have parameters from the caller.
+            //
+            // CRITICAL: Only annotate when we have high confidence the function
+            // is at an FFI boundary (cross-language call). Annotating all Rust
+            // functions that don't alloc/dealloc would suppress valid BorrowEscape
+            // issues for internal functions.
+            //
+            // Heuristic: Rust mangled names that bridge to C (contain FFI
+            // indicators) or are explicitly `extern "C"` wrappers.
             if summary.language_hint == omniscope_types::LanguageHint::Rust
                 && !summary.acquires_resource()
                 && !summary.releases_resource()
                 && !summary.name.contains("alloc")
                 && !summary.name.contains("dealloc")
+                && is_ffi_boundary_function(&summary.name)
             {
                 kinds.push(SemanticKind::FromParameter);
             }
@@ -240,22 +247,37 @@ impl Pass for StructuralInferencePass {
             }
         }
 
-        // Also populate SRT from IRModule function declarations — functions that
-        // take pointer arguments but aren't alloc/dealloc have FromParameter.
+        // Also populate SRT from IRModule call instructions — but only for
+        // callers that are at an FFI boundary. Previously, every caller not
+        // in the registry was annotated with FromParameter, which suppressed
+        // valid BorrowEscape issues for internal (non-FFI) functions.
+        //
+        // Now we only annotate when the call is external (is_external flag)
+        // or the callee is an FFI symbol — these are the true cross-language
+        // boundaries where pointer parameters come from the C side.
         let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
         if let Some(ref module) = ir_module {
             let registry = FamilyRegistry::new();
             for call in &module.calls {
-                // Only annotate the CALLER with FromParameter — the caller's
-                // pointers come from its own caller (parameters), so passing
-                // them to FFI is not a "stack escape".
-                //
-                // Do NOT annotate the CALLEE with FromParameter. External FFI
-                // functions may return null or allocate — we don't know their
-                // pointer provenance. Annotating them would suppress valid
-                // BorrowEscape/UncheckedReturn issues.
+                // Only annotate callers at FFI boundaries:
+                // 1. The callee is an external call (is_external flag)
+                // 2. The callee is a known symbol in the registry (alloc/dealloc/FFI)
+                // 3. The callee name has FFI indicators (C-style naming)
+                let callee = call.callee.trim_start_matches('@');
                 let caller = call.caller.trim_start_matches('@');
-                if !caller.is_empty() && registry.lookup(caller).is_none() {
+                let is_ffi_call = call.is_external
+                    || registry.lookup(callee).is_some()
+                    || is_ffi_boundary_function(caller);
+
+                // Only annotate the CALLER with FromParameter when it's an
+                // FFI boundary — the caller's pointers come from its own
+                // caller (parameters), so passing them to FFI is not a
+                // "stack escape".
+                //
+                // Do NOT annotate the CALLEE. External FFI functions may
+                // return null or allocate — we don't know their pointer
+                // provenance.
+                if !caller.is_empty() && is_ffi_call && registry.lookup(caller).is_none() {
                     srt_resolutions
                         .entry(caller.to_string())
                         .or_insert_with(|| vec![SemanticKind::FromParameter]);
@@ -288,6 +310,56 @@ impl Default for StructuralInferencePass {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Checks whether a function name indicates an FFI boundary function.
+///
+/// FFI boundary functions are those that sit at the Rust↔C interface:
+/// - Rust `extern "C"` wrappers (typically have `extern` or `ffi` in path)
+/// - C callback targets called from Rust (e.g., `_ZN...callback...`)
+/// - Functions with C-style naming that bridge to foreign code
+///
+/// Internal Rust functions (e.g., `Vec::push`, `HashMap::insert`) should
+/// NOT be annotated with FromParameter — their pointer parameters are
+/// internal to Rust's ownership system and don't indicate FFI escape.
+fn is_ffi_boundary_function(name: &str) -> bool {
+    // Rust mangled names with FFI indicators
+    if name.starts_with("_R") {
+        // extern "C" wrappers often contain these path segments
+        if name.contains("ffi")
+            || name.contains("extern")
+            || name.contains("callback")
+            || name.contains("c_api")
+            || name.contains("sys")
+        {
+            return true;
+        }
+        // Rust std FFI wrappers: std::ffi, std::os, std::sys
+        if name.contains("3ffi") || name.contains("2os") || name.contains("3sys") {
+            return true;
+        }
+        return false;
+    }
+
+    // Demangled names with FFI indicators
+    if name.contains("::ffi::")
+        || name.contains("::extern::")
+        || name.contains("::sys::")
+        || name.contains("::c_api::")
+        || name.contains("::callback::")
+    {
+        return true;
+    }
+
+    // C-style function names (no :: or _R prefix, typically from C code)
+    // These are likely FFI if they have underscores and no Rust path separators
+    if !name.contains("::") && !name.starts_with('_') && name.contains('_') {
+        // Heuristic: C library functions like `sqlite3_exec`, `uv_timer_start`
+        // These are typically FFI callees, not Rust functions
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]

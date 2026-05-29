@@ -114,23 +114,74 @@ impl RaiiDropPass {
     }
 
     /// Checks if a callee is a drop_in_place function.
+    ///
+    /// Uses precise matching to avoid false positives from names like
+    /// "dropdown", "dropshadow", "floodrop", etc.
     fn is_drop_in_place(&self, callee: &str) -> bool {
-        callee.contains("drop_in_place") || callee.contains("drop") || callee.contains("Drop")
+        // Exact match for bare "drop" (Rust Drop trait impl)
+        if callee == "drop" {
+            return true;
+        }
+
+        // Rust Drop::drop trait path: ends with "::drop"
+        if callee.ends_with("::drop") {
+            return true;
+        }
+
+        // Rust mangled Drop: _RNv...Drop (uppercase D, trait name)
+        if callee.contains("Drop") && callee.starts_with("_RNv") {
+            return true;
+        }
+
+        // drop_in_place (compiler-inserted destructor glue)
+        if callee.contains("drop_in_place") {
+            return true;
+        }
+
+        // C++ destructor mangled: _ZN...D[012]Ev
+        if callee.starts_with("_ZN")
+            && (callee.contains("D0Ev") || callee.contains("D1Ev") || callee.contains("D2Ev"))
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Checks if a callee is a tail-position __rust_dealloc.
+    ///
+    /// Uses precise matching to avoid false positives from names like
+    /// "custom_dealloc" which may not be RAII-related.
     fn is_tail_dealloc(&self, callee: &str) -> bool {
-        callee.contains("__rust_dealloc")
-            || callee.contains("__rust_free")
-            || callee.contains("dealloc")
+        callee == "__rust_dealloc"
+            || callee == "__rust_free"
+            || callee == "_ZN9alloc1raw8dealloc17h" // Rust alloc::raw::dealloc mangled prefix
     }
 
     /// Checks if a callee is an Arc/Rc refcount decrement operation.
+    ///
+    /// Uses word-boundary-aware matching to avoid false positives from
+    /// names containing "atomic" that aren't refcount operations.
     fn is_refcount_decrement(&self, callee: &str) -> bool {
-        callee.contains("atomicrmw")
-            || callee.contains("atomic")
-            || (callee.contains("Arc") && callee.contains("drop"))
-            || (callee.contains("Rc") && callee.contains("drop"))
+        // LLVM atomicrmw instruction — exact match
+        if callee.starts_with("atomicrmw") {
+            return true;
+        }
+
+        // Rust Arc/Rc Drop impl via mangled name: _R...5alloc3arc3Arc3Drop or similar
+        if callee.contains("Arc") && callee.contains("drop") && callee.starts_with("_R") {
+            return true;
+        }
+        if callee.contains("Rc") && callee.contains("drop") && callee.starts_with("_R") {
+            return true;
+        }
+
+        // Demangled: Arc::<T>::drop or Rc::<T>::drop
+        if (callee.contains("Arc") || callee.contains("Rc")) && callee.ends_with("::drop") {
+            return true;
+        }
+
+        false
     }
 }
 
@@ -154,8 +205,20 @@ mod tests {
     #[test]
     fn test_is_drop_in_place() {
         let pass = RaiiDropPass::new();
+        // Exact "drop" match
+        assert!(pass.is_drop_in_place("drop"));
+        // drop_in_place (compiler-inserted)
         assert!(pass.is_drop_in_place("_RNvNtCsgXhsEb1m4tm_4core3ptr13drop_in_place"));
+        // Rust mangled Drop trait
         assert!(pass.is_drop_in_place("_RNvMNtCsgXhsEb1m4tm_4alloc3box3Box3Drop"));
+        // C++ destructor
+        assert!(pass.is_drop_in_place("_ZN3FooD1Ev"));
+        // ::drop suffix
+        assert!(pass.is_drop_in_place("std::mem::drop"));
+        // Negative: bare "drop" substring in unrelated names
+        assert!(!pass.is_drop_in_place("dropdown"));
+        assert!(!pass.is_drop_in_place("dropshadow"));
+        assert!(!pass.is_drop_in_place("floodrop"));
         assert!(!pass.is_drop_in_place("malloc"));
     }
 
@@ -164,16 +227,26 @@ mod tests {
         let pass = RaiiDropPass::new();
         assert!(pass.is_tail_dealloc("__rust_dealloc"));
         assert!(pass.is_tail_dealloc("__rust_free"));
-        assert!(pass.is_tail_dealloc("custom_dealloc"));
+        // custom_dealloc should NOT match — it's not a compiler RAII dealloc
+        assert!(!pass.is_tail_dealloc("custom_dealloc"));
         assert!(!pass.is_tail_dealloc("malloc"));
     }
 
     #[test]
     fn test_is_refcount_decrement() {
         let pass = RaiiDropPass::new();
+        // atomicrmw instruction prefix
         assert!(pass.is_refcount_decrement("atomicrmw"));
-        assert!(pass.is_refcount_decrement("Arc_drop"));
-        assert!(pass.is_refcount_decrement("Rc_drop"));
+        assert!(pass.is_refcount_decrement("atomicrmw.sub.i64"));
+        // Demangled Arc/Rc drop
+        assert!(pass.is_refcount_decrement("Arc<i32>::drop"));
+        assert!(pass.is_refcount_decrement("Rc<i32>::drop"));
+        // Mangled Arc/Rc drop
+        assert!(pass.is_refcount_decrement("_RNvXsNtC4alloc3arc3Arc3drop"));
+        // Negative: "atomic" alone is not a refcount op
+        assert!(!pass.is_refcount_decrement("atomic_flag_clear"));
+        // Negative: "Arc_drop" without mangled prefix or ::drop suffix
+        assert!(!pass.is_refcount_decrement("Arc_drop"));
         assert!(!pass.is_refcount_decrement("malloc"));
     }
 }

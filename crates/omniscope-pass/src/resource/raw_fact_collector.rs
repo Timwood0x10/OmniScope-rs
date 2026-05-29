@@ -48,12 +48,32 @@ impl RawFactCollectorPass {
     fn collect_from_ir(module: &IRModule) -> Vec<RawResourceFact> {
         let registry = omniscope_semantics::FamilyRegistry::new();
         let mut facts = Vec::new();
-        let mut func_id: u64 = 0;
+
+        // Stable function ID assignment: each unique function name gets the
+        // same func_id across all calls, so the same function is never
+        // treated as different functions (which would cause PathSensitiveLeak
+        // false positives).
+        let mut func_name_to_id: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        let mut next_func_id: u64 = 0;
+
+        // Helper: get or assign a stable func_id for a function name.
+        let mut get_func_id = |name: &str| -> u64 {
+            if let Some(&id) = func_name_to_id.get(name) {
+                id
+            } else {
+                let id = next_func_id;
+                next_func_id = next_func_id.wrapping_add(1);
+                func_name_to_id.insert(name.to_string(), id);
+                id
+            }
+        };
 
         // Scan all call instructions for known alloc/dealloc symbols
         for call in &module.calls {
             // Strip LLVM name decoration: @name → name
             let callee_name = call.callee.trim_start_matches('@');
+            let caller_name = call.caller.trim_start_matches('@');
 
             if let Some(entry) = registry.lookup(callee_name) {
                 let is_acquire = matches!(
@@ -71,6 +91,14 @@ impl RawFactCollectorPass {
                     PointerContract::Unknown
                 };
 
+                // Use the CALLER's stable func_id so that acquire/release
+                // facts within the same function share the same ID.
+                let func_id = if caller_name.is_empty() {
+                    get_func_id(callee_name)
+                } else {
+                    get_func_id(caller_name)
+                };
+
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: callee_name.to_string(),
@@ -79,11 +107,6 @@ impl RawFactCollectorPass {
                     contract,
                     arg_index: Some(0),
                 });
-            }
-
-            // Also record the caller function for FFI boundary detection
-            if !call.caller.is_empty() {
-                func_id = func_id.wrapping_add(1);
             }
         }
 
@@ -101,6 +124,7 @@ impl RawFactCollectorPass {
                         | omniscope_semantics::SymbolEffect::Retain
                         | omniscope_semantics::SymbolEffect::Reclaim
                 );
+                let func_id = get_func_id(sym_name);
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: sym_name.to_string(),
@@ -113,7 +137,6 @@ impl RawFactCollectorPass {
                     },
                     arg_index: Some(0),
                 });
-                func_id = func_id.wrapping_add(1);
             }
         }
 
@@ -130,6 +153,7 @@ impl RawFactCollectorPass {
                         | omniscope_semantics::SymbolEffect::Retain
                         | omniscope_semantics::SymbolEffect::Reclaim
                 );
+                let func_id = get_func_id(func_name);
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: func_name.clone(),
@@ -142,7 +166,6 @@ impl RawFactCollectorPass {
                     },
                     arg_index: Some(0),
                 });
-                func_id = func_id.wrapping_add(1);
             }
         }
 

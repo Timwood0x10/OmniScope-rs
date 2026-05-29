@@ -100,12 +100,19 @@ impl Pass for ContractGraphBuilderPass {
         let raw_facts = raw_facts.unwrap_or_default();
 
         // Build contract edges from raw facts
-        // Group facts by function, then create acquire→release pairs
-        let mut acquire_instances: std::collections::HashMap<String, (u64, Option<FamilyId>)> =
-            std::collections::HashMap::new();
+        // Group facts by (function_id, family) for acquire→release pairing.
+        // Using function_name as key is unreliable: different callees may
+        // be aliases or the same callee may appear in different families.
+        // Using (func_id, family) ensures acquire and release pair only
+        // when they share both the enclosing function and the family.
+        let mut acquire_instances: std::collections::HashMap<
+            (u64, FamilyId),
+            (u64, Option<FamilyId>),
+        > = std::collections::HashMap::new();
 
         for fact in &raw_facts {
             let family = fact.family.unwrap_or(FamilyId::C_HEAP);
+            let key = (fact.function, family);
 
             if fact.is_acquire {
                 // Create a new resource instance for this acquire
@@ -121,19 +128,19 @@ impl Pass for ContractGraphBuilderPass {
                     function_name: fact.function_name.clone(),
                     family: Some(family),
                 });
-                // Track this instance by function for matching with releases
-                acquire_instances.insert(fact.function_name.clone(), (instance_id, Some(family)));
+                // Track this instance by (func_id, family) for matching with releases
+                acquire_instances
+                    .entry(key)
+                    .or_insert((instance_id, Some(family)));
             } else {
-                // Release — find the matching acquire instance
-                let (source_id, alloc_family) = acquire_instances
-                    .get(&fact.function_name)
-                    .copied()
-                    .unwrap_or((0, None));
+                // Release — find the matching acquire instance by (func_id, family)
+                let (source_id, alloc_family) =
+                    acquire_instances.get(&key).copied().unwrap_or((0, None));
 
                 // If no matching acquire, create a standalone instance
                 let source_id = if source_id == 0 {
                     let id = graph.alloc_instance();
-                    acquire_instances.insert(fact.function_name.clone(), (id, Some(family)));
+                    acquire_instances.entry(key).or_insert((id, Some(family)));
                     id
                 } else {
                     source_id

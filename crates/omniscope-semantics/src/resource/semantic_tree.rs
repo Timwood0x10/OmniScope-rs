@@ -132,10 +132,7 @@ impl TypeSemantic {
     /// Returns whether this type semantic implies that writing through `&T`
     /// is safe (i.e., the type contains interior mutability).
     pub fn allows_write_through_shared_ref(&self) -> bool {
-        matches!(
-            self,
-            TypeSemantic::InteriorMutability | TypeSemantic::Once | TypeSemantic::ManuallyDrop
-        )
+        matches!(self, TypeSemantic::InteriorMutability | TypeSemantic::Once)
     }
 
     /// Extracts type semantic from a Rust v0 mangled name.
@@ -362,7 +359,10 @@ impl SyscallSemantic {
             | "operator new[]"
             | "_ZdlPv"
             | "_Znwm"
-            | "_Znam" => SyscallSemantic::MemoryManagement,
+            | "_Znam"
+            | "mmap"
+            | "munmap"
+            | "mprotect" => SyscallSemantic::MemoryManagement,
 
             // Data queries — read-only, no ownership
             "strlen" | "strnlen" | "wcslen" | "strcmp" | "strncmp" | "strcasecmp"
@@ -389,8 +389,9 @@ impl SyscallSemantic {
 
             // I/O operations
             "poll" | "select" | "pselect" | "ppoll" | "epoll_create" | "epoll_wait"
-            | "epoll_ctl" | "pipe" | "pipe2" | "dup" | "dup2" | "fcntl" | "ioctl" | "msync"
-            | "mmap" | "munmap" | "mprotect" => SyscallSemantic::IOOperation,
+            | "epoll_ctl" | "pipe" | "pipe2" | "dup" | "dup2" | "fcntl" | "ioctl" | "msync" => {
+                SyscallSemantic::IOOperation
+            }
 
             // Network operations
             "socket" | "bind" | "connect" | "listen" | "accept" | "accept4" | "recv" | "send"

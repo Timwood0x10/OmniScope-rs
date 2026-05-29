@@ -154,9 +154,16 @@ fn classify_bridge_name(name: &str, language_hint: LanguageHint) -> Option<(Brid
             {
                 return Some((BridgeKind::AsPtr, 0.95));
             }
-            // from_raw_parts, slice_from_raw_parts
+            // from_raw_parts, slice_from_raw_parts — ownership reclaim, NOT bridge.
+            // These reconstruct an owned object from a raw pointer, reclaiming
+            // ownership that was previously transferred via into_raw. They should
+            // be classified as OwnershipReclaim rather than ReturnsBorrowed.
             if name.contains("from_raw_parts") || name.contains("slice_from_raw_parts") {
-                return Some((BridgeKind::FromRawParts, 0.9));
+                return None;
+            }
+            // from_raw — ownership reclaim (Box::from_raw, CString::from_raw)
+            if name.contains("from_raw") {
+                return None;
             }
             // into_raw — this is actually a transfer, NOT a bridge.
             // Do not classify into_raw as ReturnsBorrowed.
@@ -261,13 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn test_rust_from_raw_parts_bridge() {
+    fn test_rust_from_raw_parts_not_bridge() {
+        // from_raw_parts is ownership reclaim, NOT a bridge.
+        // It reconstructs an owned object from a raw pointer, reclaiming
+        // ownership previously transferred via into_raw.
         let (_summary, result) = infer_bridge_summary("from_raw_parts", 3, 300, LanguageHint::Rust);
         assert!(
-            result.is_bridge,
-            "from_raw_parts must be inferred as bridge"
+            !result.is_bridge,
+            "from_raw_parts must NOT be inferred as bridge — it is ownership reclaim"
         );
-        assert_eq!(result.kind, BridgeKind::FromRawParts);
     }
 
     #[test]

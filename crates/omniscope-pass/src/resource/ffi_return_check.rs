@@ -99,7 +99,7 @@ fn scan_function_body(
 
     for inst in &body.instructions {
         match inst.kind {
-            IRInstructionKind::Call => {
+            IRInstructionKind::Call | IRInstructionKind::IndirectCall => {
                 if let Some(ref callee) = inst.callee {
                     let callee_name = callee.trim_start_matches('@');
 
