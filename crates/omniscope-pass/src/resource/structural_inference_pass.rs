@@ -443,6 +443,7 @@ mod tests {
         let raw_facts = vec![RawResourceFact {
             function: 1,
             function_name: "drop".to_string(),
+            caller_name: String::new(),
             family: None,
             is_acquire: false,
             contract: omniscope_types::PointerContract::Owned,
@@ -476,6 +477,7 @@ mod tests {
         let raw_facts = vec![RawResourceFact {
             function: 2,
             function_name: "as_ptr".to_string(),
+            caller_name: String::new(),
             family: None,
             is_acquire: false,
             contract: omniscope_types::PointerContract::Borrowed,

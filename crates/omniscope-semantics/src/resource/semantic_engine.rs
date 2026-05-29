@@ -520,6 +520,24 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
     }
 }
 
+/// Returns true if the callee name strongly suggests a memory release function.
+///
+/// This is used to prevent the broad caller-side heuristics (wrapper and
+/// read-only) from misclassifying a caller that invokes a release function
+/// as safe. The FamilyRegistry catches exact matches at Step 0, but
+/// unregistered release functions (e.g. project-specific deallocators)
+/// would slip through without this guard.
+fn callee_name_suggests_release(callee: &str) -> bool {
+    callee.contains("free")
+        || callee.contains("dealloc")
+        || callee.contains("drop")
+        || callee.contains("destroy")
+        || callee.contains("release")
+        || callee.contains("unref")
+        || callee.contains("cleanup")
+        || callee.contains("dispose")
+}
+
 /// Derive FFI safety from the caller's instruction context.
 ///
 /// When the callee is external (no function body), we combine:
@@ -566,7 +584,11 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
     // When a function body IS available, we derive from IR patterns.
 
     // ── R-3: RAII drop glue — compiler-inserted cleanup ──
-    if (callee.contains("drop_in_place") || callee.contains("4drop")) && callee.starts_with("_R") {
+    // `_4drop` matches Rust mangling where `_` is the separator before
+    // length-prefixed identifiers (e.g. `_RNvNt...4drop...`). Using
+    // `contains("4drop")` alone could match unrelated substrings like
+    // "x4dropbox".
+    if (callee.contains("drop_in_place") || callee.contains("_4drop")) && callee.starts_with("_R") {
         return FFIVerdict::SafeConditionalRelease;
     }
     if callee == "__rust_dealloc" || callee == "__rdl_dealloc" || callee == "__rg_dealloc" {
@@ -707,7 +729,6 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
             | "strncpy"
             | "strerror"
             | "__error"
-            | "getcwd"
     ) {
         return FFIVerdict::SafeNoOwnership;
     }
@@ -737,19 +758,13 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
         return FFIVerdict::SafeNoOwnership;
     }
 
-    // Memory management — the real concern
-    if matches!(
-        callee,
-        "malloc"
-            | "calloc"
-            | "realloc"
-            | "free"
-            | "reallocarray"
-            | "__rust_alloc"
-            | "__rust_dealloc"
-            | "__rust_realloc"
-            | "__rust_alloc_zeroed"
-    ) || callee.starts_with("_Zdl")
+    // Memory management — C++ mangled new/delete variants NOT in the registry.
+    // The exact symbols (malloc, calloc, realloc, free, reallocarray,
+    // __rust_alloc, __rust_realloc, __rust_alloc_zeroed) are already handled
+    // by the FamilyRegistry lookup at Step 0 and never reach this code.
+    // Only C++ mangled name prefixes for overloads not explicitly registered
+    // (e.g. _ZdlRKv, _ZdlPvm) fall through here.
+    if callee.starts_with("_Zdl")
         || callee.starts_with("_Zda")
         || callee.starts_with("_Znw")
         || callee.starts_with("_Zna")
@@ -778,15 +793,24 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
         return FFIVerdict::Unknown; // C++ — could be anything
     }
 
-    // Heuristic: simple wrapper (few calls, no stores) → likely bridge
-    if caller_behavior.call_count <= 2 && caller_behavior.store_count == 0 {
+    // Heuristic: simple wrapper (few calls, no stores) → likely bridge.
+    // Guard: exclude callees whose name suggests release semantics — a
+    // function like `dangerous_wrapper(ptr p) { free(p); }` has
+    // call_count==1 and store_count==0 but is NOT a safe bridge.
+    if caller_behavior.call_count <= 2
+        && caller_behavior.store_count == 0
+        && !callee_name_suggests_release(callee)
+    {
         return FFIVerdict::SafeInternalBridge;
     }
 
-    // Heuristic: only loads and arithmetic (no stores, no atomicrmw) → read op
+    // Heuristic: only loads and arithmetic (no stores, no atomicrmw) → read op.
+    // Guard: same reasoning — a load-then-free pattern must not be classified
+    // as a safe read operation.
     if caller_behavior.store_count == 0
         && caller_behavior.atomic_rmw_count == 0
         && caller_behavior.load_count > 0
+        && !callee_name_suggests_release(callee)
     {
         return FFIVerdict::SafeNoOwnership;
     }

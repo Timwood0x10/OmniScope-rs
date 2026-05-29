@@ -206,7 +206,19 @@ fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) ->
     facts
         .iter()
         .filter(|f| !f.is_acquire && f.family == Some(alloc_family))
-        .any(|f| f.function == alloc.function || f.function_name == alloc.function_name)
+        .any(|f| {
+            // Scope: only consider releases related to the allocation's context.
+            // 1. Same function ID — release is in the same function as the alloc.
+            // 2. Release's caller is the alloc's callee — cross-function pattern
+            //    where A calls malloc, then A calls helper(), and helper calls free().
+            //    Here free's caller_name == helper, and alloc.function_name == "malloc".
+            //    This doesn't match — correct, because we can't know helper frees
+            //    without call-graph data.  The summary-based check covers known
+            //    library free functions (free, fclose, etc.).
+            // 3. Alloc's caller matches the release's function — alloc is in a
+            //    helper, and the release is in the same helper (same as #1 by ID).
+            f.function == alloc.function
+        })
 }
 
 /// Checks if the summary store contains a function that releases
@@ -426,7 +438,8 @@ mod tests {
     fn test_check_release_in_facts() {
         let alloc = RawResourceFact {
             function: 1,
-            function_name: "test_func".to_string(),
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
             is_acquire: true,
             contract: omniscope_types::PointerContract::Owned,
@@ -435,7 +448,8 @@ mod tests {
 
         let release = RawResourceFact {
             function: 1,
-            function_name: "test_func".to_string(),
+            function_name: "free".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
             is_acquire: false,
             contract: omniscope_types::PointerContract::Released,
@@ -453,7 +467,8 @@ mod tests {
     fn test_check_release_in_facts_cross_family() {
         let alloc = RawResourceFact {
             function: 1,
-            function_name: "test_func".to_string(),
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
             is_acquire: true,
             contract: omniscope_types::PointerContract::Owned,
@@ -462,7 +477,8 @@ mod tests {
 
         let release = RawResourceFact {
             function: 1,
-            function_name: "test_func".to_string(),
+            function_name: "delete".to_string(),
+            caller_name: "test_func".to_string(),
             family: Some(FamilyId::CPP_NEW_SCALAR),
             is_acquire: false,
             contract: omniscope_types::PointerContract::Released,

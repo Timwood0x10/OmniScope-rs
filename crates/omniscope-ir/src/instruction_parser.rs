@@ -513,17 +513,30 @@ fn extract_operands(s: &str, opcode: &str) -> Vec<String> {
             continue;
         }
 
-        // Numeric constants (integer or negative)
-        if part.parse::<i64>().is_ok() || part.parse::<f64>().is_ok() {
-            operands.push(part.to_string());
-            continue;
+        // Hex constants must be checked before f64 parsing because
+        // Rust's f64 parser does NOT accept hex floats, so "0x..."
+        // would fall through to the generic catch-all. Checking hex
+        // first avoids relying on that implementation detail.
+        if part.starts_with("0x") || part.starts_with("0X") {
+            let rest = &part[2..];
+            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit()) {
+                operands.push(part.to_string());
+                continue;
+            }
         }
 
-        // Hex constants (e.g., 0x401000)
-        if part.starts_with("0x")
-            && part.len() > 2
-            && part[2..].chars().all(|c| c.is_ascii_hexdigit())
-        {
+        // Numeric constants (integer or float).
+        // Exclude inf/NaN variants: LLVM IR never uses these as
+        // operand literals (they appear as special float values like
+        // 0x7FF0000000000000 for +inf), so matching them would be
+        // incorrect.
+        let is_inf_nan = part.eq_ignore_ascii_case("inf")
+            || part.eq_ignore_ascii_case("nan")
+            || part.eq_ignore_ascii_case("-inf")
+            || part.eq_ignore_ascii_case("+inf")
+            || part.eq_ignore_ascii_case("-nan")
+            || part.eq_ignore_ascii_case("+nan");
+        if !is_inf_nan && (part.parse::<i64>().is_ok() || part.parse::<f64>().is_ok()) {
             operands.push(part.to_string());
             continue;
         }

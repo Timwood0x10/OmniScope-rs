@@ -17,10 +17,12 @@ use crate::pass::{Pass, PassContext, PassKind, PassResult};
 /// A raw resource fact collected from IR analysis.
 #[derive(Debug, Clone)]
 pub struct RawResourceFact {
-    /// The function where this fact occurs.
+    /// The function where this fact occurs (stable ID of the caller).
     pub function: u64,
     /// Function name (for lookup in the family registry).
     pub function_name: String,
+    /// Name of the caller function (the function containing this call site).
+    pub caller_name: String,
     /// The resource family (if identified).
     pub family: Option<FamilyId>,
     /// Whether this is an acquire or release.
@@ -102,6 +104,7 @@ impl RawFactCollectorPass {
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: callee_name.to_string(),
+                    caller_name: caller_name.to_string(),
                     family: Some(entry.family_id),
                     is_acquire,
                     contract,
@@ -128,6 +131,7 @@ impl RawFactCollectorPass {
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: sym_name.to_string(),
+                    caller_name: String::new(),
                     family: Some(entry.family_id),
                     is_acquire,
                     contract: if is_acquire {
@@ -157,6 +161,7 @@ impl RawFactCollectorPass {
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: func_name.clone(),
+                    caller_name: String::new(),
                     family: Some(entry.family_id),
                     is_acquire,
                     contract: if is_acquire {
@@ -211,6 +216,7 @@ impl Pass for RawFactCollectorPass {
                 let raw = RawResourceFact {
                     function: 0,
                     function_name: String::new(),
+                    caller_name: String::new(),
                     family: None,
                     is_acquire: fact.kind == FactKind::AllocSite,
                     contract: PointerContract::Unknown,

@@ -11,6 +11,7 @@ use std::path::Path;
 // Re-export instruction-level types so that external consumers can still
 // access them via `omniscope_ir::IRInstructionKind` etc.
 pub use crate::instruction_parser::{IRInstruction, IRInstructionKind};
+use crate::location::SourceLocation;
 
 /// Function in LLVM IR
 #[derive(Debug, Clone)]
@@ -38,14 +39,6 @@ pub struct CallInstruction {
     pub location: Option<SourceLocation>,
 }
 
-/// Source code location
-#[derive(Debug, Clone)]
-pub struct SourceLocation {
-    pub file: String,
-    pub line: u32,
-    pub column: u32,
-}
-
 /// Data layout information extracted from IR
 #[derive(Debug, Clone)]
 pub struct DataLayout {
@@ -64,8 +57,6 @@ pub struct DataLayout {
 pub struct CallingConvention {
     /// Convention name (e.g., "ccc", "fastcc", "webkit_jscc")
     pub name: String,
-    /// Platform-specific convention
-    pub platform_specific: bool,
 }
 
 /// Function body with extracted instruction stream.
@@ -139,6 +130,8 @@ pub struct IRModule {
     pub data_layout: DataLayout,
     /// Calling conventions used in this module
     pub calling_conventions: Vec<CallingConvention>,
+    /// Debug metadata: maps metadata ID (e.g., "123" from !123) to source location.
+    pub debug_metadata: HashMap<String, SourceLocation>,
 }
 
 impl IRModule {
@@ -156,6 +149,7 @@ impl IRModule {
                 little_endian: None,
             },
             calling_conventions: Vec::new(),
+            debug_metadata: HashMap::new(),
         }
     }
 
@@ -174,6 +168,17 @@ impl IRModule {
             } else if line.starts_with("target datalayout") {
                 module.data_layout.data_layout = extract_datalayout(line);
                 module.parse_datalayout_info();
+            }
+
+            // Collect debug metadata definitions: !N = !DILocation(...)
+            if line.starts_with('!') {
+                if let Some((id, loc)) = parse_debug_metadata(line) {
+                    module.debug_metadata.insert(id, loc);
+                }
+                // Skip other metadata lines inside function bodies
+                if !current_function.is_empty() {
+                    continue;
+                }
             }
 
             // Parse function declarations: declare ... @name(...)
@@ -201,10 +206,9 @@ impl IRModule {
 
                     // Extract calling convention
                     if let Some(conv_name) = extract_calling_convention(line) {
-                        module.calling_conventions.push(CallingConvention {
-                            name: conv_name,
-                            platform_specific: true,
-                        });
+                        module
+                            .calling_conventions
+                            .push(CallingConvention { name: conv_name });
                     }
                 }
             }
@@ -225,8 +229,8 @@ impl IRModule {
             // Parse instructions inside function body
             else if !current_function.is_empty() && !line.is_empty() {
                 // Skip labels (including labels with trailing metadata like "entry: !dbg !123"),
-                // comments, and metadata-only lines
-                if line.starts_with(';') || line.starts_with('!') || is_label_line(line) {
+                // and comments. Metadata lines (!) are handled above.
+                if line.starts_with(';') || is_label_line(line) {
                     continue;
                 }
 
@@ -236,7 +240,9 @@ impl IRModule {
                     // Both direct and indirect calls are recorded to module.calls.
                     match inst.kind {
                         IRInstructionKind::Call => {
-                            if let Some(call) = parse_call(line, &current_function) {
+                            if let Some(call) =
+                                parse_call(line, &current_function, &module.debug_metadata)
+                            {
                                 module.calls.push(call);
                             }
                         }
@@ -252,7 +258,7 @@ impl IRModule {
                                 callee: callee_name,
                                 caller: current_function.clone(),
                                 is_external: false,
-                                location: extract_location(line),
+                                location: extract_location(line, &module.debug_metadata),
                             });
                         }
                         _ => {}
@@ -265,7 +271,7 @@ impl IRModule {
             // discover these calls rather than silently dropping them.
             else if line.contains("call") && current_function.is_empty() {
                 let caller_tag = "<top-level>";
-                if let Some(call) = parse_call(line, caller_tag) {
+                if let Some(call) = parse_call(line, caller_tag, &module.debug_metadata) {
                     module.calls.push(call);
                 }
             }
@@ -448,7 +454,11 @@ fn parse_definition(line: &str) -> Option<Function> {
 }
 
 /// Parse a call instruction
-fn parse_call(line: &str, current_function: &str) -> Option<CallInstruction> {
+fn parse_call(
+    line: &str,
+    current_function: &str,
+    metadata: &HashMap<String, SourceLocation>,
+) -> Option<CallInstruction> {
     // Format: ... call ... @name(...)
     if !line.contains("call") {
         return None;
@@ -465,7 +475,7 @@ fn parse_call(line: &str, current_function: &str) -> Option<CallInstruction> {
             let callee = rest.get(..end).unwrap_or("").to_string();
 
             // Extract source location if present (!dbg !123)
-            let location = extract_location(line);
+            let location = extract_location(line, metadata);
 
             return Some(CallInstruction {
                 callee,
@@ -480,14 +490,92 @@ fn parse_call(line: &str, current_function: &str) -> Option<CallInstruction> {
 }
 
 /// Extract source location from metadata
-fn extract_location(line: &str) -> Option<SourceLocation> {
+///
+/// Looks for `!dbg !N` in the instruction line, then resolves the metadata
+/// ID `N` against the provided debug metadata table (populated from
+/// `!N = !DILocation(line: ..., column: ..., ...)` entries).
+fn extract_location(
+    line: &str,
+    metadata: &HashMap<String, SourceLocation>,
+) -> Option<SourceLocation> {
     // Look for !dbg !N pattern
-    if let Some(dbg_pos) = line.rfind("!dbg") {
-        // In real implementation, we'd look up the metadata
-        // For now, return None
-        let _ = dbg_pos;
+    let dbg_pos = line.rfind("!dbg")?;
+    let after_dbg = &line[dbg_pos + 4..].trim_start();
+
+    // Extract the metadata ID number (e.g., "123" from "!123")
+    if after_dbg.starts_with('!') {
+        let num_start = 1;
+        let num_str: String = after_dbg[num_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !num_str.is_empty() {
+            if let Some(loc) = metadata.get(&num_str) {
+                return Some(loc.clone());
+            }
+            // Metadata not yet parsed (forward reference) — return a
+            // placeholder SourceLocation with the metadata ID as file name
+            // so downstream code knows a debug location was present.
+            return Some(SourceLocation::new(
+                std::path::PathBuf::from(format!("!{}", num_str)),
+                0,
+            ));
+        }
     }
     None
+}
+
+/// Parse a debug metadata definition line.
+///
+/// Format: `!N = !DILocation(line: 42, column: 5, scope: !1, file: !2)`
+/// Returns (metadata_id, SourceLocation) if the line is a DILocation.
+fn parse_debug_metadata(line: &str) -> Option<(String, SourceLocation)> {
+    // Match: !N = !DILocation(...)
+    let eq_pos = line.find(" = ")?;
+    let id_part = &line[..eq_pos];
+    if !id_part.starts_with('!') {
+        return None;
+    }
+    let id_num: String = id_part[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if id_num.is_empty() {
+        return None;
+    }
+
+    let def_part = &line[eq_pos + 3..];
+    if !def_part.starts_with("!DILocation") {
+        return None;
+    }
+
+    // Extract line number: "line: N"
+    let mut src_line: u32 = 0;
+    let mut src_column: Option<u32> = None;
+    if let Some(line_start) = def_part.find("line:") {
+        let after = &def_part[line_start + 5..];
+        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !num.is_empty() {
+            if let Ok(v) = num.parse() {
+                src_line = v;
+            }
+        }
+    }
+
+    // Extract column number: "column: N"
+    if let Some(col_start) = def_part.find("column:") {
+        let after = &def_part[col_start + 7..];
+        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !num.is_empty() {
+            if let Ok(v) = num.parse() {
+                src_column = Some(v);
+            }
+        }
+    }
+
+    let mut loc = SourceLocation::new(std::path::PathBuf::new(), src_line);
+    loc.column = src_column;
+    Some((id_num, loc))
 }
 
 /// Extract target triple from IR line.

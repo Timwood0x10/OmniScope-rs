@@ -26,6 +26,9 @@ pub enum EscapeKind {
     Container,
     /// Static lifetime — never deallocated, not a leak.
     StaticLifetime,
+    /// Escaped via raw pointer (Box::into_raw, CString::into_raw).
+    /// Ownership is tracked outside Rust's type system, not a leak per se.
+    RawPointer,
     /// Unknown escape — cannot determine how it left scope.
     Unknown,
 }
@@ -50,6 +53,7 @@ impl EscapeKind {
             EscapeKind::GlobalStore
                 | EscapeKind::Callback
                 | EscapeKind::Thread
+                | EscapeKind::RawPointer
                 | EscapeKind::Unknown
         )
     }
@@ -65,6 +69,7 @@ impl EscapeKind {
             EscapeKind::Thread => "thread",
             EscapeKind::Container => "container",
             EscapeKind::StaticLifetime => "static_lifetime",
+            EscapeKind::RawPointer => "raw_pointer",
             EscapeKind::Unknown => "unknown",
         }
     }

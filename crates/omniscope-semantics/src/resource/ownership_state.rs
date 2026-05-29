@@ -177,15 +177,35 @@ impl ResourceInstance {
                     }),
                 }
             }
+            OwnershipEvent::Borrow => {
+                match self.state {
+                    OwnershipState::Acquired | OwnershipState::Retained => {
+                        self.state = OwnershipState::Borrowed;
+                        Ok(())
+                    }
+                    OwnershipState::Borrowed => {
+                        // Already borrowed — idempotent
+                        Ok(())
+                    }
+                    _ => Err(OwnershipError::InvalidTransition {
+                        instance: self.id,
+                        from_state: self.state,
+                        event: "Borrow",
+                    }),
+                }
+            }
         }
     }
 
     /// Returns true if this instance is a leak candidate
-    /// (acquired but never released or escaped).
+    /// (acquired or retained but never released or escaped).
+    /// Unknown state is excluded because it represents an
+    /// indeterminate ownership — treating it as a leak would
+    /// produce false positives.
     pub fn is_leak_candidate(&self) -> bool {
         matches!(
             self.state,
-            OwnershipState::Acquired | OwnershipState::Retained | OwnershipState::Unknown
+            OwnershipState::Acquired | OwnershipState::Retained
         )
     }
 }
@@ -201,6 +221,8 @@ pub enum OwnershipEvent {
     Transfer,
     /// Resource is retained (refcount increment).
     Retain,
+    /// Resource becomes borrowed (returned as a borrowed reference).
+    Borrow,
 }
 
 /// Errors from invalid ownership state transitions.
@@ -724,6 +746,7 @@ mod tests {
             EscapeKind::Thread,
             EscapeKind::Container,
             EscapeKind::StaticLifetime,
+            EscapeKind::RawPointer,
             EscapeKind::Unknown,
         ];
 

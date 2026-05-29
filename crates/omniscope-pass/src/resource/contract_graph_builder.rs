@@ -105,9 +105,12 @@ impl Pass for ContractGraphBuilderPass {
         // be aliases or the same callee may appear in different families.
         // Using (func_id, family) ensures acquire and release pair only
         // when they share both the enclosing function and the family.
+        // FIFO queue per (func_id, family) so multiple allocations of the same
+        // family are matched to releases in allocation order instead of
+        // collapsing to a single instance.
         let mut acquire_instances: std::collections::HashMap<
             (u64, FamilyId),
-            (u64, Option<FamilyId>),
+            Vec<(u64, Option<FamilyId>)>,
         > = std::collections::HashMap::new();
 
         for fact in &raw_facts {
@@ -131,16 +134,29 @@ impl Pass for ContractGraphBuilderPass {
                 // Track this instance by (func_id, family) for matching with releases
                 acquire_instances
                     .entry(key)
-                    .or_insert((instance_id, Some(family)));
+                    .or_default()
+                    .push((instance_id, Some(family)));
             } else {
-                // Release — find the matching acquire instance by (func_id, family)
+                // Release — pop the oldest matching acquire instance (FIFO)
                 let (source_id, alloc_family) =
-                    acquire_instances.get(&key).copied().unwrap_or((0, None));
+                    if let Some(instances) = acquire_instances.get_mut(&key) {
+                        if let Some((sid, af)) = instances.first().copied() {
+                            instances.remove(0); // consume FIFO
+                            (sid, af)
+                        } else {
+                            (0, None)
+                        }
+                    } else {
+                        (0, None)
+                    };
 
                 // If no matching acquire, create a standalone instance
                 let source_id = if source_id == 0 {
                     let id = graph.alloc_instance();
-                    acquire_instances.entry(key).or_insert((id, Some(family)));
+                    acquire_instances
+                        .entry(key)
+                        .or_default()
+                        .push((id, Some(family)));
                     id
                 } else {
                     source_id
@@ -189,10 +205,25 @@ impl Pass for ContractGraphBuilderPass {
                 calls_by_caller.entry(caller).or_default().push(callee);
             }
 
-            // For each function, find acquire→release patterns
-            for callees in calls_by_caller.values() {
-                let mut func_acquires: Vec<(u64, FamilyId, &str)> = Vec::new();
-                let mut func_releases: Vec<(FamilyId, &str)> = Vec::new();
+            // For each function, find acquire→release patterns.
+            // Track a per-caller function ID so edges are scoped correctly.
+            let mut next_func_id: u64 = 1;
+            let mut func_id_map: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+
+            for (caller_name, callees) in &calls_by_caller {
+                let func_id = *func_id_map
+                    .entry(caller_name.to_string())
+                    .or_insert_with(|| {
+                        let id = next_func_id;
+                        next_func_id += 1;
+                        id
+                    });
+
+                // VecDeque for FIFO consumption — releases match acquires in order
+                let mut func_acquires: std::collections::VecDeque<(u64, FamilyId, &str)> =
+                    std::collections::VecDeque::new();
+                let mut func_releases: Vec<(FamilyId, &str, bool)> = Vec::new();
                 let mut func_escapes: Vec<(u64, FamilyId, &str)> = Vec::new();
                 let mut func_reclaims: Vec<(u64, FamilyId, &str)> = Vec::new();
 
@@ -201,15 +232,17 @@ impl Pass for ContractGraphBuilderPass {
                         match entry.effect {
                             omniscope_semantics::SymbolEffect::Acquire => {
                                 let id = graph.alloc_instance();
-                                func_acquires.push((id, entry.family_id, callee));
+                                func_acquires.push_back((id, entry.family_id, callee));
                             }
                             omniscope_semantics::SymbolEffect::Reclaim => {
                                 let id = graph.alloc_instance();
                                 func_reclaims.push((id, entry.family_id, callee));
                             }
-                            omniscope_semantics::SymbolEffect::Release
-                            | omniscope_semantics::SymbolEffect::ConditionalRelease => {
-                                func_releases.push((entry.family_id, callee));
+                            omniscope_semantics::SymbolEffect::Release => {
+                                func_releases.push((entry.family_id, callee, false));
+                            }
+                            omniscope_semantics::SymbolEffect::ConditionalRelease => {
+                                func_releases.push((entry.family_id, callee, true));
                             }
                             omniscope_semantics::SymbolEffect::Escape => {
                                 // into_raw: ownership escapes to raw pointer
@@ -231,45 +264,71 @@ impl Pass for ContractGraphBuilderPass {
                             family: *family,
                             result: *instance_id,
                         },
-                        function: 0,
+                        function: func_id,
                         function_name: callee_name.to_string(),
                         family: Some(*family),
                     });
                 }
 
-                // Create edges for each release
-                for (family, callee_name) in &func_releases {
-                    // Find a matching acquire instance (same family or cross-family)
-                    let source_id = func_acquires
-                        .iter()
-                        .find(|(_, f, _)| *f == *family)
-                        .map(|(id, _, _)| *id)
-                        .or_else(|| func_acquires.last().map(|(id, _, _)| *id))
-                        .unwrap_or(0);
+                // Create edges for each release, consuming matched acquires (FIFO)
+                for (family, callee_name, is_conditional) in &func_releases {
+                    // Find and consume a matching acquire (same family preferred, else any)
+                    let source_id = if let Some(pos) =
+                        func_acquires.iter().position(|(_, f, _)| *f == *family)
+                    {
+                        let (id, _, _) = func_acquires.remove(pos).unwrap();
+                        id
+                    } else if let Some((id, _, _)) = func_acquires.pop_front() {
+                        // Cross-family fallback: consume oldest unmatched acquire
+                        id
+                    } else {
+                        0
+                    };
+
+                    let effect = if *is_conditional {
+                        Effect::ConditionalRelease {
+                            family: *family,
+                            arg: 0,
+                        }
+                    } else {
+                        Effect::Release {
+                            family: *family,
+                            arg: 0,
+                        }
+                    };
 
                     graph.add_edge(ContractEdge {
                         source: source_id,
                         target: 0,
-                        effect: Effect::Release {
-                            family: *family,
-                            arg: 0,
-                        },
-                        function: 0,
+                        effect,
+                        function: func_id,
                         function_name: callee_name.to_string(),
                         family: Some(*family),
                     });
                 }
 
-                // Create edges for each escape (into_raw)
-                for (instance_id, family, callee_name) in &func_escapes {
+                // Create edges for each escape (into_raw), consuming matched acquires.
+                // The edge source must be an existing acquire instance so the
+                // ownership solver can look it up in instance_map.  The freshly-
+                // allocated escape instance is kept for reclaim matching.
+                for (escape_id, family, callee_name) in &func_escapes {
+                    let source_id = if let Some(pos) =
+                        func_acquires.iter().position(|(_, f, _)| *f == *family)
+                    {
+                        let (id, _, _) = func_acquires.remove(pos).unwrap();
+                        id
+                    } else {
+                        *escape_id
+                    };
+
                     graph.add_edge(ContractEdge {
-                        source: *instance_id,
+                        source: source_id,
                         target: 0,
                         effect: Effect::OwnershipEscape {
                             family: *family,
-                            result: *instance_id,
+                            result: *escape_id,
                         },
-                        function: 0,
+                        function: func_id,
                         function_name: callee_name.to_string(),
                         family: Some(*family),
                     });
@@ -296,10 +355,10 @@ impl Pass for ContractGraphBuilderPass {
                                 .map(|(eid, _, _)| *eid)
                         })
                         .or_else(|| {
-                            // Priority 3: match an acquire instance of the same family
+                            // Priority 3: match an unclaimed acquire of the same family
                             func_acquires
                                 .iter()
-                                .find(|(_, f, _)| *f == *family)
+                                .find(|(id, f, _)| *f == *family && !escape_claimed.contains(id))
                                 .map(|(id, _, _)| *id)
                         })
                         .or_else(|| {
@@ -328,12 +387,15 @@ impl Pass for ContractGraphBuilderPass {
 
                     graph.add_edge(ContractEdge {
                         source: target_id,
-                        target: target_id,
+                        // target uses the fresh reclaim instance ID so the edge
+                        // is not a self-loop; the solver uses source to find and
+                        // transition the escaped instance.
+                        target: *instance_id,
                         effect: Effect::OwnershipReclaim {
                             family: *family,
-                            result: target_id,
+                            result: *instance_id,
                         },
-                        function: 0,
+                        function: func_id,
                         function_name: callee_name.to_string(),
                         family: Some(*family),
                     });
@@ -382,7 +444,7 @@ impl Pass for ContractGraphBuilderPass {
                             source: instance_id,
                             target: 0,
                             effect: Effect::EscapesToCallback { arg: 0 },
-                            function: 0,
+                            function: func_id,
                             function_name: callee.to_string(),
                             family: None,
                         });
@@ -498,6 +560,7 @@ mod tests {
             RawResourceFact {
                 function: 1,
                 function_name: "malloc".to_string(),
+                caller_name: "test_func".to_string(),
                 family: Some(FamilyId::C_HEAP),
                 is_acquire: true,
                 contract: PointerContract::Owned,
@@ -506,6 +569,7 @@ mod tests {
             RawResourceFact {
                 function: 1,
                 function_name: "free".to_string(),
+                caller_name: "test_func".to_string(),
                 family: Some(FamilyId::C_HEAP),
                 is_acquire: false,
                 contract: PointerContract::Unknown,
@@ -583,6 +647,7 @@ mod tests {
             RawResourceFact {
                 function: 1,
                 function_name: "malloc".to_string(),
+                caller_name: "test_func".to_string(),
                 family: Some(FamilyId::C_HEAP),
                 is_acquire: true,
                 contract: PointerContract::Owned,
@@ -591,6 +656,7 @@ mod tests {
             RawResourceFact {
                 function: 1,
                 function_name: "operator delete".to_string(),
+                caller_name: "test_func".to_string(),
                 family: Some(FamilyId::CPP_NEW_SCALAR),
                 is_acquire: false,
                 contract: PointerContract::Unknown,
@@ -704,17 +770,15 @@ mod tests {
         let graph: Option<ContractGraph> = ctx.get("contract_graph");
         let graph = graph.expect("ContractGraph must be stored in context");
 
-        // In the IRModule path, both SymbolEffect::Release and
-        // SymbolEffect::ConditionalRelease are mapped to Effect::Release.
-        // Verify that Py_DECREF produces a Release edge with the correct family.
-        let release_edges: Vec<_> = graph
+        // Py_DECREF is a ConditionalRelease — verify it produces a ConditionalRelease edge.
+        let cond_release_edges: Vec<_> = graph
             .edges
             .iter()
-            .filter(|e| matches!(e.effect, Effect::Release { family, .. } if family == FamilyId::PYTHON_OBJECT))
+            .filter(|e| matches!(e.effect, Effect::ConditionalRelease { family, .. } if family == FamilyId::PYTHON_OBJECT))
             .collect();
         assert!(
-            !release_edges.is_empty(),
-            "IRModule path must produce Release edge for Py_DECREF, found {} edges total",
+            !cond_release_edges.is_empty(),
+            "IRModule path must produce ConditionalRelease edge for Py_DECREF, found {} edges total",
             graph.edges.len()
         );
 
@@ -819,11 +883,15 @@ mod tests {
             "Must produce OwnershipReclaim edge for Box::from_raw call"
         );
 
-        // Verify reclaim edge links to the escape instance (same source and target)
+        // Verify reclaim edge links from the escape instance to the reclaim instance
         let reclaim = &reclaim_edges[0];
-        assert_eq!(
+        assert_ne!(
+            reclaim.source, 0,
+            "Reclaim edge source must reference an existing instance (not 0)"
+        );
+        assert_ne!(
             reclaim.source, reclaim.target,
-            "Reclaim edge source and target must be the same instance (reclaims from self)"
+            "Reclaim edge must not be a self-loop — source is the escaped instance, target is the reclaim instance"
         );
 
         // Verify the reclaim edge uses RUST_RAW_OWNERSHIP family
@@ -918,6 +986,7 @@ mod tests {
         let facts = vec![RawResourceFact {
             function: 5,
             function_name: "free".to_string(),
+            caller_name: "cleanup_func".to_string(),
             family: Some(FamilyId::C_HEAP),
             is_acquire: false,
             contract: PointerContract::Unknown,
@@ -1009,6 +1078,7 @@ mod tests {
             RawResourceFact {
                 function: 1,
                 function_name: "malloc".to_string(),
+                caller_name: "test_func".to_string(),
                 family: Some(FamilyId::C_HEAP),
                 is_acquire: true,
                 contract: PointerContract::Owned,
@@ -1017,6 +1087,7 @@ mod tests {
             RawResourceFact {
                 function: 1,
                 function_name: "free".to_string(),
+                caller_name: "test_func".to_string(),
                 family: Some(FamilyId::C_HEAP),
                 is_acquire: false,
                 contract: PointerContract::Unknown,
@@ -1026,6 +1097,7 @@ mod tests {
             RawResourceFact {
                 function: 2,
                 function_name: "PyObject_New".to_string(),
+                caller_name: "py_func".to_string(),
                 family: Some(FamilyId::PYTHON_OBJECT),
                 is_acquire: true,
                 contract: PointerContract::Owned,
@@ -1034,6 +1106,7 @@ mod tests {
             RawResourceFact {
                 function: 2,
                 function_name: "Py_DECREF".to_string(),
+                caller_name: "py_func".to_string(),
                 family: Some(FamilyId::PYTHON_OBJECT),
                 is_acquire: false,
                 contract: PointerContract::Unknown,

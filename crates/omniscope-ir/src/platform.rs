@@ -81,11 +81,13 @@ impl PlatformInfo {
         {
             Platform::MacOS
         }
-        // Windows detection (multiple variants)
+        // Windows detection (multiple variants including MinGW and Cygwin)
         else if triple_lower.contains("windows")
             || triple_lower.contains("msvc")
+            || triple_lower.contains("mingw")
             || triple_lower.contains("w64-windows")
             || triple_lower.contains("pc-windows")
+            || triple_lower.contains("cygwin")
         {
             Platform::Windows
         }
@@ -439,6 +441,22 @@ mod tests {
             info2.platform,
             Platform::Windows,
             "MinGW target triple 'x86_64-w64-windows-gnu' should also be detected as Windows platform"
+        );
+
+        // i686-w64-mingw32 (classic MinGW32 cross-compilation target)
+        let info3 = PlatformInfo::from_target_triple("i686-w64-mingw32");
+        assert_eq!(
+            info3.platform,
+            Platform::Windows,
+            "MinGW32 target triple 'i686-w64-mingw32' must be detected as Windows platform"
+        );
+
+        // x86_64-pc-windows-cygwin
+        let info4 = PlatformInfo::from_target_triple("x86_64-pc-windows-cygwin");
+        assert_eq!(
+            info4.platform,
+            Platform::Windows,
+            "Cygwin target triple must be detected as Windows platform"
         );
     }
 

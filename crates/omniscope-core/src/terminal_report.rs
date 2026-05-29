@@ -196,7 +196,7 @@ impl TerminalReporter {
         let release_func = candidate.release_function.as_deref().unwrap_or("unknown");
 
         format!(
-            "{badge} cross-family free: {} ({}) ──{}──> {} ({})",
+            "{badge} cross-family free: {} ({}) {} {} ({})",
             candidate.alloc_function, alloc_family, arrow, release_family, release_func
         )
     }

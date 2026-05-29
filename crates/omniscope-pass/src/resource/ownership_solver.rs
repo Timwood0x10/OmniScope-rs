@@ -161,7 +161,14 @@ impl Pass for OwnershipSolverPass {
                     }
                     Effect::ReturnsBorrowed => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            instances[idx].state = OwnershipState::Borrowed;
+                            if let Err(e) = instances[idx].transition(OwnershipEvent::Borrow) {
+                                tracing::debug!(
+                                    "Borrow transition error for instance {}: {:?} in function {}",
+                                    edge.source,
+                                    e,
+                                    edge.function_name
+                                );
+                            }
                         }
                     }
                     Effect::ConsumesArg { .. } => {
@@ -238,11 +245,14 @@ impl Pass for OwnershipSolverPass {
                             // Stack/borrowed userdata: no prior Acquire, so create a
                             // Borrowed instance directly. This models the case where
                             // a stack-allocated pointer escapes to a C callback.
-                            let instance = ResourceInstance::new(
+                            // Note: ResourceInstance::new() always starts in Acquired,
+                            // so we must explicitly transition to Borrowed.
+                            let mut instance = ResourceInstance::new(
                                 edge.source,
                                 edge.family.unwrap_or(FamilyId::C_HEAP),
                                 PointerContract::Borrowed,
                             );
+                            instance.state = OwnershipState::Borrowed;
                             if let std::collections::hash_map::Entry::Vacant(entry) =
                                 instance_map.entry(edge.source)
                             {
@@ -251,9 +261,8 @@ impl Pass for OwnershipSolverPass {
                             } else {
                                 tracing::warn!(
                                     instance_id = edge.source,
-                                    "duplicate instance_id in callback escape edge — first instance kept"
+                                    "duplicate instance_id in callback escape edge — first instance kept, duplicate dropped"
                                 );
-                                instances.push(instance);
                             }
                         }
                     }
@@ -263,10 +272,10 @@ impl Pass for OwnershipSolverPass {
                         // tracked outside Rust's type system.
                         if let Some(&idx) = instance_map.get(&edge.source) {
                             if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
-                                kind: EscapeKind::ReturnToCaller,
+                                kind: EscapeKind::RawPointer,
                             }) {
                                 tracing::debug!(
-                                    "Escape(ReturnToCaller) transition error for instance {}: \
+                                    "Escape(RawPointer) transition error for instance {}: \
                                      {:?} in function {}",
                                     edge.source,
                                     e,
