@@ -77,10 +77,14 @@ impl Pass for StructuralInferencePass {
         let mut behavior_override_count: usize = 0;
 
         // Retrieve shared data from earlier passes.
-        let registry: Option<FamilyRegistry> = ctx.get("family_registry");
-        let mut store: SummaryStore = ctx.get("summary_store").unwrap_or_default();
-
-        let registry = registry.unwrap_or_default();
+        let registry = ctx
+            .get_ref::<FamilyRegistry>("family_registry")
+            .cloned()
+            .unwrap_or_default();
+        let mut store: SummaryStore = ctx
+            .get_ref::<SummaryStore>("summary_store")
+            .cloned()
+            .unwrap_or_default();
 
         // Retrieve IR behavior summaries (from IRBehaviorSummaryPass)
         let behaviors: Option<Vec<FunctionBehavior>> = ctx.get("function_behaviors");

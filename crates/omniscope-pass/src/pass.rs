@@ -233,12 +233,15 @@ impl PassContext {
     pub fn emit_issue(&mut self, issue: Issue) -> EmitOutcome {
         let id = issue.id;
 
-        // Check SRT gate if resolutions are available
-        let srt_resolutions: Option<
-            std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>,
-        > = self.get("srt_resolutions");
+        // Check SRT gate if resolutions are available.
+        // Use get_ref to avoid cloning the entire HashMap on every call —
+        // this is called thousands of times per analysis run.
+        let srt_resolutions = self
+            .get_ref::<std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>>(
+                "srt_resolutions",
+            );
 
-        if let Some(ref resolutions) = srt_resolutions {
+        if let Some(resolutions) = srt_resolutions {
             let gate_verdict =
                 crate::resource::issue_gate::check_issue_with_kinds(&issue, resolutions);
             if !gate_verdict.is_allowed() {

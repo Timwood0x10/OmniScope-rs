@@ -56,9 +56,14 @@ impl Pass for IssueVerifierPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
-        let candidates: Vec<IssueCandidate> = ctx.get("issue_candidates").unwrap_or_default();
-        let registry: Option<FamilyRegistry> = ctx.get("family_registry");
-        let registry = registry.unwrap_or_default();
+        let candidates: Vec<IssueCandidate> = ctx
+            .get_ref::<Vec<IssueCandidate>>("issue_candidates")
+            .cloned()
+            .unwrap_or_default();
+        let registry = ctx
+            .get_ref::<FamilyRegistry>("family_registry")
+            .cloned()
+            .unwrap_or_default();
 
         // Layer 1: NoiseReduction — fast string-based FP pre-filter.
         let noise = NoiseReduction::new();

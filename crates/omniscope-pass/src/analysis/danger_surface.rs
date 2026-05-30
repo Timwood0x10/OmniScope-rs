@@ -45,8 +45,13 @@ impl Pass for DangerSurfacePass {
         let start = std::time::Instant::now();
         let registry = FamilyRegistry::new();
 
-        // Retrieve cross-lang edges from CallGraphPass
-        let cross_lang_edges: Vec<CrossLangEdge> = ctx.get("cross_lang_edges").unwrap_or_default();
+        // Retrieve cross-lang edges from CallGraphPass (reference, no clone
+        // when possible — but we need a separate value to avoid borrow conflicts
+        // with ctx.emit_issue later).
+        let cross_lang_edges: Vec<CrossLangEdge> = ctx
+            .get_ref::<Vec<CrossLangEdge>>("cross_lang_edges")
+            .cloned()
+            .unwrap_or_default();
 
         // Early return: if no FFI boundaries, skip (pure C fast path)
         let ffi_count = cross_lang_edges
