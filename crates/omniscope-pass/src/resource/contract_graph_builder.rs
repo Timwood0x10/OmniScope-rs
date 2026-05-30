@@ -114,8 +114,11 @@ impl Pass for ContractGraphBuilderPass {
         // FIFO queue per (func_id, family) so multiple allocations of the same
         // family are matched to releases in allocation order instead of
         // collapsing to a single instance.
-        let mut acquire_instances: std::collections::HashMap<(u64, FamilyId), Vec<AcquireEntry>> =
-            std::collections::HashMap::new();
+        // Use VecDeque for O(1) pop_front instead of Vec::remove(0) which is O(n).
+        let mut acquire_instances: std::collections::HashMap<
+            (u64, FamilyId),
+            std::collections::VecDeque<AcquireEntry>,
+        > = std::collections::HashMap::new();
 
         for fact in &raw_facts {
             let family = fact.family.unwrap_or(FamilyId::C_HEAP);
@@ -140,13 +143,12 @@ impl Pass for ContractGraphBuilderPass {
                 acquire_instances
                     .entry(key)
                     .or_default()
-                    .push((instance_id, Some(family)));
+                    .push_back((instance_id, Some(family)));
             } else {
                 // Release — pop the oldest matching acquire instance (FIFO)
                 let (source_id, alloc_family) =
                     if let Some(instances) = acquire_instances.get_mut(&key) {
-                        if let Some((sid, af)) = instances.first().copied() {
-                            instances.remove(0); // consume FIFO
+                        if let Some((sid, af)) = instances.pop_front() {
                             (sid, af)
                         } else {
                             (0, None)

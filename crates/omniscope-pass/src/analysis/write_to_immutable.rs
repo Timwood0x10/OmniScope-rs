@@ -64,11 +64,15 @@ impl Pass for WriteToImmutablePass {
 
                 // Build a target symbol from the function name and store operands.
                 // Store instructions don't have a callee; use the raw text for context.
-                let target_symbol = format!(
-                    "{}->store:{}",
-                    func_name,
-                    inst.raw_text.chars().take(80).collect::<String>()
-                );
+                // Find a byte boundary for ~80 chars to bound allocation without
+                // collecting an intermediate String.
+                let byte_end = inst
+                    .raw_text
+                    .char_indices()
+                    .nth(80)
+                    .map_or(inst.raw_text.len(), |(i, _)| i);
+                let raw_prefix = &inst.raw_text[..byte_end];
+                let target_symbol = format!("{}->store:{}", func_name, raw_prefix);
 
                 // Analyze the store target for semantic context
                 self.analyze_store_target(

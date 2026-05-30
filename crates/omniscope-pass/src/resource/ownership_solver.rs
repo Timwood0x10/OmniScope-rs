@@ -49,12 +49,20 @@ impl Pass for OwnershipSolverPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
+        // Pre-allocate instances Vec (will be sized after acquire edge count).
         let mut instances: Vec<ResourceInstance> = Vec::new();
 
         // Load the contract graph from context (reference, no clone).
         let graph_ref = ctx.get_ref::<ContractGraph>("contract_graph");
 
         if let Some(graph) = graph_ref {
+            // Pre-allocate based on acquire edge count to avoid realloc.
+            let acquire_count = graph
+                .edges
+                .iter()
+                .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
+                .count();
+            instances.reserve(acquire_count);
             // Index instances by their ID for fast lookup during transitions.
             let mut instance_map: std::collections::HashMap<u64, usize> =
                 std::collections::HashMap::new();
