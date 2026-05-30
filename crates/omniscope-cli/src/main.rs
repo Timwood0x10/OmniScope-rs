@@ -9,6 +9,7 @@
 mod output;
 
 use clap::Parser;
+use omniscope_ir::loader_v2::{load_ir, LoadStrategy};
 use omniscope_pipeline::Pipeline;
 use output::json::JsonFormatter;
 use output::rich::RichFormatter;
@@ -67,6 +68,10 @@ struct AnalyzeCommand {
     /// Run in parallel mode
     #[arg(long, default_value = "false")]
     parallel: bool,
+
+    /// IR loading strategy (auto, llvm-sys, cpp-pass, text-parser)
+    #[arg(long, default_value = "auto")]
+    strategy: String,
 }
 
 #[derive(clap::Args)]
@@ -82,6 +87,10 @@ struct AuditCommand {
     /// Audit type (ffi, memory, concurrency)
     #[arg(short = 't', long, default_value = "ffi")]
     audit_type: String,
+
+    /// IR loading strategy (auto, llvm-sys, cpp-pass, text-parser)
+    #[arg(long, default_value = "auto")]
+    strategy: String,
 }
 
 #[derive(clap::Args)]
@@ -132,9 +141,10 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     tracing::info!("Starting analysis of {:?}", cmd.input);
     tracing::debug!("Format: {}, Parallel: {}", cmd.format, cmd.parallel);
 
-    // Parse the IR file
-    tracing::info!("Parsing LLVM IR from {:?}", cmd.input);
-    let module = omniscope_ir::IRModule::load_from_file(&cmd.input)?;
+    // Parse the IR file — auto-detects best backend (llvm-sys > cpp pass > text)
+    let strategy = parse_strategy(&cmd.strategy);
+    tracing::info!("Parsing LLVM IR from {:?} (strategy: {})", cmd.input, strategy);
+    let module = load_ir(&cmd.input, strategy)?;
     let func_count = module.functions.len();
     let decl_count = module.declarations.len();
     tracing::info!(
@@ -225,9 +235,10 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
     println!("{} {}", "Language:".green(), cmd.language);
     println!("{} {}", "Audit type:".green(), cmd.audit_type);
 
-    // Parse the IR file — same as run_analyze
-    tracing::info!("Parsing LLVM IR from {:?}", cmd.input);
-    let module = omniscope_ir::IRModule::load_from_file(&cmd.input)?;
+    // Parse the IR file — auto-detects best backend (llvm-sys > cpp pass > text)
+    let strategy = parse_strategy(&cmd.strategy);
+    tracing::info!("Parsing LLVM IR from {:?} (strategy: {})", cmd.input, strategy);
+    let module = load_ir(&cmd.input, strategy)?;
 
     // Create pipeline and load IR
     let mut pipeline = Pipeline::new();
@@ -243,6 +254,16 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
     println!("Completed in {:?}", duration);
 
     Ok(())
+}
+
+/// Parses a strategy string into a [`LoadStrategy`].
+fn parse_strategy(s: &str) -> LoadStrategy {
+    match s.to_lowercase().as_str() {
+        "llvm-sys" | "llvm_sys" | "llvmsys" => LoadStrategy::LlvmSys,
+        "cpp-pass" | "cpp_pass" | "cpppass" => LoadStrategy::CppPass,
+        "text-parser" | "text_parser" | "textparser" | "text" => LoadStrategy::TextParser,
+        _ => LoadStrategy::Auto,
+    }
 }
 
 /// Runs the info command — display configuration and pass info.

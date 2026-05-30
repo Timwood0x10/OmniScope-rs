@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
 project(SafetyExportPass LANGUAGES C CXX)
 
+# Force the LLVM-bundled clang when LLVM_PREFIX is set (avoids version
+# mismatch between the system AppleClang and the Homebrew LLVM opt).
+if(DEFINED ENV{LLVM_PREFIX} OR DEFINED LLVM_PREFIX)
+    file(TO_CMAKE_PATH "$ENV{LLVM_PREFIX}" _LLVM_PREFIX)
+    if(NOT _LLVM_PREFIX AND DEFINED LLVM_PREFIX)
+        set(_LLVM_PREFIX "${LLVM_PREFIX}")
+    endif()
+    if(EXISTS "${_LLVM_PREFIX}/bin/clang++")
+        set(CMAKE_C_COMPILER "${_LLVM_PREFIX}/bin/clang" CACHE FILEPATH "C compiler" FORCE)
+        set(CMAKE_CXX_COMPILER "${_LLVM_PREFIX}/bin/clang++" CACHE FILEPATH "C++ compiler" FORCE)
+        message(STATUS "Using LLVM-bundled compiler: ${_LLVM_PREFIX}/bin/clang++")
+    endif()
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

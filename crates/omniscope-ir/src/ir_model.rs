@@ -72,6 +72,9 @@ impl IRModuleModel {
 pub struct IRFunction {
     /// Function name (without the leading `@`).
     pub name: String,
+    /// Demangled C++ name (e.g. `"foo(int)"` from `"_Z3fooi"`).
+    #[serde(default)]
+    pub demangled: Option<String>,
     /// LLVM IR return type string (e.g. `"i32"`, `"void"`, `"ptr"`).
     #[serde(default)]
     pub return_type: String,
@@ -97,6 +100,7 @@ impl Default for IRFunction {
     fn default() -> Self {
         Self {
             name: String::new(),
+            demangled: None,
             return_type: "void".to_string(),
             param_types: Vec::new(),
             calling_convention: default_calling_convention(),
@@ -127,6 +131,35 @@ pub struct IRBasicBlock {
 }
 
 // ---------------------------------------------------------------------------
+// GEP deconstruction types
+// ---------------------------------------------------------------------------
+
+/// Deconstructed GEP instruction details for struct field access analysis.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IRGepDetails {
+    /// Source element type being indexed into.
+    #[serde(default)]
+    pub source_type: String,
+    /// Whether the GEP is in-bounds.
+    #[serde(default)]
+    pub in_bounds: bool,
+    /// Per-index details: value and the composite type at that level.
+    #[serde(default)]
+    pub indices: Vec<IRGepIndex>,
+}
+
+/// A single GEP index with its value and the field type at that level.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IRGepIndex {
+    /// The index value (register or constant).
+    #[serde(default)]
+    pub value: String,
+    /// The composite type that this index is selecting within.
+    #[serde(default)]
+    pub field_type: String,
+}
+
+// ---------------------------------------------------------------------------
 // Instruction model
 // ---------------------------------------------------------------------------
 
@@ -137,6 +170,9 @@ pub struct IRBasicBlock {
 /// type, per-operand types, and source location.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IRInstructionModel {
+    /// Instruction index within its basic block.
+    #[serde(default)]
+    pub id: Option<u64>,
     /// Opcode string (e.g. `"add"`, `"load"`, `"call"`, `"br"`).
     pub opcode: String,
     /// Result type of the instruction (e.g. `"i64"`, `"ptr"`).
@@ -158,6 +194,11 @@ pub struct IRInstructionModel {
     /// Raw LLVM IR text of the instruction.
     #[serde(default)]
     pub raw: String,
+    /// For bitcast/inttoptr/ptrtoint: the original source type after tracing
+    /// through chains of casts. Critical for FFI type recovery.
+    pub source_type: Option<String>,
+    /// For GEP instructions: deconstructed index and field-type information.
+    pub gep_details: Option<IRGepDetails>,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +210,9 @@ pub struct IRInstructionModel {
 pub struct IRDeclaration {
     /// Function name (without `@`).
     pub name: String,
+    /// Demangled C++ name.
+    #[serde(default)]
+    pub demangled: Option<String>,
     /// LLVM IR return type string.
     #[serde(default)]
     pub return_type: String,
@@ -181,6 +225,7 @@ impl Default for IRDeclaration {
     fn default() -> Self {
         Self {
             name: String::new(),
+            demangled: None,
             return_type: "void".to_string(),
             param_types: Vec::new(),
         }
@@ -330,6 +375,12 @@ impl IRInstructionModel {
             None
         };
 
+        // Derive element_type from source_type (bitcast chains) or gep_details.
+        let element_type = self
+            .source_type
+            .clone()
+            .or_else(|| self.gep_details.as_ref().map(|g| g.source_type.clone()));
+
         IRInstruction {
             kind,
             dest,
@@ -339,7 +390,7 @@ impl IRInstructionModel {
             icmp_pred,
             raw_text: self.raw.clone(),
             result_type: self.result_type.clone(),
-            element_type: None,
+            element_type,
             function_signature: None,
         }
     }

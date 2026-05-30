@@ -43,6 +43,7 @@ if [ "$CMAKE_MAJOR" -lt 3 ] || { [ "$CMAKE_MAJOR" -eq 3 ] && [ "$CMAKE_MINOR" -l
 fi
 
 # ── Configure & Build ───────────────────────────────────────────────
+export LLVM_PREFIX
 cmake -B "$SCRIPT_DIR/build" -S "$SCRIPT_DIR" \
     -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
     -DCMAKE_BUILD_TYPE=Release

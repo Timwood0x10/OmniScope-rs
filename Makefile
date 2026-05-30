@@ -23,7 +23,7 @@ CARGO_BUILD  := cargo build
 PASS_DIR      := pass
 PASS_BUILD    := $(PASS_DIR)/build
 PASS_SRC      := $(PASS_DIR)/SafetyExportPass.cpp
-LLVM_PREFIX   := $(shell llvm-config --prefix 2>/dev/null)
+LLVM_PREFIX   ?= $(shell llvm-config --prefix 2>/dev/null)
 CLANG_TIDY    := $(shell which clang-tidy 2>/dev/null)
 CLANG_FORMAT  := $(shell which clang-format 2>/dev/null)
 NPROC         := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
@@ -144,7 +144,7 @@ ifndef LLVM_PREFIX
 	@exit 1
 endif
 	@echo "$(BLUE)Building SafetyExportPass plugin...$(NC)"
-	cmake -B "$(PASS_BUILD)" -S "$(PASS_DIR)" \
+	LLVM_PREFIX="$(LLVM_PREFIX)" cmake -B "$(PASS_BUILD)" -S "$(PASS_DIR)" \
 		-DLLVM_DIR="$(LLVM_PREFIX)/lib/cmake/llvm" \
 		-DCMAKE_BUILD_TYPE=Release
 	cmake --build "$(PASS_BUILD)" --config Release -j$(NPROC)

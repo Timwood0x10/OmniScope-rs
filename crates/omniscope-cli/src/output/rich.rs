@@ -20,8 +20,8 @@ impl RichFormatter {
         Self { use_color: true }
     }
 
-    /// Creates a formatter with explicit color control.
-    #[allow(dead_code)]
+    /// Creates a formatter with explicit color control (used in tests).
+    #[cfg(test)]
     pub fn with_color(use_color: bool) -> Self {
         Self { use_color }
     }

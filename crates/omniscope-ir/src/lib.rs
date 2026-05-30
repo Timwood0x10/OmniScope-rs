@@ -27,8 +27,8 @@ pub mod platform;
 
 // Re-exports
 pub use ir_model::{
-    load_from_json, parse_from_json, IRBasicBlock, IRDeclaration, IRFunction, IRGlobalVariable,
-    IRInstructionModel, IRModuleModel,
+    load_from_json, parse_from_json, IRBasicBlock, IRDeclaration, IRFunction, IRGepDetails,
+    IRGepIndex, IRGlobalVariable, IRInstructionModel, IRModuleModel,
 };
 pub use loader_v2::{load_ir, LoadStrategy};
 pub use location::{LocationManager, SourceLocation};

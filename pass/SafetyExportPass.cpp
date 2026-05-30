@@ -4,14 +4,19 @@
 //   opt -load-pass-plugin ./libSafetyExportPass.dylib \
 //       -passes='safety-export' input.ll 2>/dev/null
 
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
-// clang-format off — PassPlugin.h moved to Plugins/ in LLVM 22
+// clang-format off — PassPlugin.h location changed across LLVM versions
+#if __has_include("llvm/Plugins/PassPlugin.h")
 #include "llvm/Plugins/PassPlugin.h"
+#else
+#include "llvm/Passes/PassPlugin.h"
+#endif
 // clang-format on
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -84,6 +89,47 @@ static llvm::json::Object serializeInstruction(const llvm::Instruction &I,
   Obj["operands"] = std::move(Ops);
   Obj["operand_types"] = std::move(OpTypes);
 
+  // Bitcast chain: trace back through chains of bitcasts/inttoptr/ptrtoint
+  // to recover the original source type, which is critical for FFI analysis.
+  if (I.getOpcode() == llvm::Instruction::BitCast ||
+      I.getOpcode() == llvm::Instruction::IntToPtr ||
+      I.getOpcode() == llvm::Instruction::PtrToInt) {
+    const llvm::Value *Src = I.getOperand(0);
+    // Walk through chains: bitcast(bitcast(x)) → trace to original
+    while (auto *BC = llvm::dyn_cast<llvm::CastInst>(Src))
+      Src = BC->getOperand(0);
+    Obj["source_type"] = typeToString(Src->getType());
+  }
+
+  // GEP deconstruction: expose the source element type and per-index field
+  // types so the Rust side can reconstruct which struct field is being
+  // accessed.
+  if (const auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(&I)) {
+    llvm::json::Object GepObj;
+    GepObj["source_type"] = typeToString(GEP->getSourceElementType());
+    GepObj["in_bounds"] = GEP->isInBounds();
+
+    // Walk each index and record the type that GEP "sees" at that level
+    llvm::json::Array Indices;
+    for (unsigned OpIdx = 1; OpIdx < GEP->getNumOperands(); ++OpIdx) {
+      llvm::json::Object IdxObj;
+      IdxObj["value"] = valueToString(GEP->getOperand(OpIdx));
+      // For the first index (ptr offset), type is the source element type.
+      // For subsequent indices, we compute the composite type at that level.
+      if (OpIdx == 1) {
+        IdxObj["field_type"] = typeToString(GEP->getSourceElementType());
+      } else {
+        // Get the type we're indexing into at this level
+        // This requires walking the GEP type chain — use the generic accessor
+        auto *IdxTy = GEP->getOperand(OpIdx)->getType();
+        IdxObj["field_type"] = typeToString(IdxTy);
+      }
+      Indices.push_back(std::move(IdxObj));
+    }
+    GepObj["indices"] = std::move(Indices);
+    Obj["gep_details"] = std::move(GepObj);
+  }
+
   // Call-specific info
   if (const auto *CI = llvm::dyn_cast<llvm::CallInst>(&I)) {
     if (const llvm::Function *Callee = CI->getCalledFunction()) {
@@ -127,11 +173,24 @@ static llvm::json::Object serializeInstruction(const llvm::Instruction &I,
   return Obj;
 }
 
+/// Build a label for a basic block.  LLVM auto-numbered blocks (e.g. %1, %2)
+/// have an empty getName(); we synthesize "bb_0", "bb_1" etc. so that
+/// successors and cross-references are always non-empty.
+static std::string blockLabel(const llvm::BasicBlock &BB, unsigned BBIndex) {
+  if (!BB.getName().empty())
+    return BB.getName().str();
+  return "bb_" + std::to_string(BBIndex);
+}
+
 /// Serialize a basic block: label, instructions, CFG successors.
-static llvm::json::Object serializeBasicBlock(const llvm::BasicBlock &BB) {
+/// BBIndexMap maps each BasicBlock* to its synthetic label (for successor
+/// refs).
+static llvm::json::Object serializeBasicBlock(
+    const llvm::BasicBlock &BB, unsigned BBIndex,
+    const llvm::DenseMap<const llvm::BasicBlock *, std::string> &BBIndexMap) {
   llvm::json::Object Obj;
 
-  Obj["label"] = BB.getName().str();
+  Obj["label"] = blockLabel(BB, BBIndex);
 
   // Instructions
   llvm::json::Array Instrs;
@@ -141,12 +200,14 @@ static llvm::json::Object serializeBasicBlock(const llvm::BasicBlock &BB) {
   }
   Obj["instructions"] = std::move(Instrs);
 
-  // CFG successors from the terminator
+  // CFG successors from the terminator — use BBIndexMap for label lookup
   llvm::json::Array Succs;
   if (const llvm::Instruction *TI = BB.getTerminator()) {
     for (unsigned i = 0; i < TI->getNumSuccessors(); ++i) {
       const llvm::BasicBlock *Succ = TI->getSuccessor(i);
-      Succs.push_back(Succ->getName().str());
+      auto It = BBIndexMap.find(Succ);
+      Succs.push_back(It != BBIndexMap.end() ? It->second
+                                             : Succ->getName().str());
     }
   }
   Obj["successors"] = std::move(Succs);
@@ -158,7 +219,9 @@ static llvm::json::Object serializeBasicBlock(const llvm::BasicBlock &BB) {
 static llvm::json::Object serializeFunction(const llvm::Function &F) {
   llvm::json::Object Obj;
 
-  Obj["name"] = F.getName().str();
+  std::string Name = F.getName().str();
+  Obj["name"] = Name;
+  Obj["demangled"] = llvm::demangle(Name);
   Obj["is_declaration"] = F.isDeclaration();
   Obj["return_type"] = typeToString(F.getReturnType());
 
@@ -171,9 +234,17 @@ static llvm::json::Object serializeFunction(const llvm::Function &F) {
 
   // Basic blocks (only for definitions)
   if (!F.isDeclaration()) {
+    // Build BB* → synthetic label map (fixes unnamed-BB successor refs)
+    llvm::DenseMap<const llvm::BasicBlock *, std::string> BBIndexMap;
+    unsigned BBIdx = 0;
+    for (const llvm::BasicBlock &BB : F) {
+      BBIndexMap[&BB] = blockLabel(BB, BBIdx++);
+    }
+
     llvm::json::Array Blocks;
+    BBIdx = 0;
     for (const llvm::BasicBlock &BB : F)
-      Blocks.push_back(serializeBasicBlock(BB));
+      Blocks.push_back(serializeBasicBlock(BB, BBIdx++, BBIndexMap));
     Obj["blocks"] = std::move(Blocks);
   }
 
@@ -183,7 +254,9 @@ static llvm::json::Object serializeFunction(const llvm::Function &F) {
 /// Serialize a function declaration (no body — extern / intrinsics).
 static llvm::json::Object serializeDeclaration(const llvm::Function &F) {
   llvm::json::Object Obj;
-  Obj["name"] = F.getName().str();
+  std::string Name = F.getName().str();
+  Obj["name"] = Name;
+  Obj["demangled"] = llvm::demangle(Name);
   Obj["return_type"] = typeToString(F.getReturnType());
 
   llvm::json::Array Params;
@@ -192,6 +265,38 @@ static llvm::json::Object serializeDeclaration(const llvm::Function &F) {
   Obj["param_types"] = std::move(Params);
 
   return Obj;
+}
+
+/// Check whether a function should be excluded from the output.
+/// Filters out LLVM intrinsics and compiler-support routines that add noise
+/// without providing useful FFI analysis information.
+static bool shouldSkipFunction(const llvm::Function &F) {
+  llvm::StringRef Name = F.getName();
+
+  // LLVM intrinsics: llvm.memset, llvm.lifetime, llvm.dbg, etc.
+  if (Name.starts_with("llvm."))
+    return true;
+
+  // Compiler support routines that are noise for FFI analysis
+  static const char *SkipList[] = {
+      "__chkstk",    // stack probe (Windows)
+      "__stack_chk", // stack canary (partial match covers __stack_chk_fail,
+                     // etc.)
+      "_GLOBAL_",    // global constructors/destructors
+      "__cxa_",      // C++ ABI helpers (exception handling, atexit, etc.)
+      "__gmon_",     // gprof profiling
+      "__sanitizer", // sanitizer runtime (partial match)
+      "__asan",      // AddressSanitizer
+      "__msan",      // MemorySanitizer
+      "__tsan",      // ThreadSanitizer
+      "__ubsan",     // UndefinedBehaviorSanitizer
+  };
+  for (const char *Pfx : SkipList) {
+    if (Name.starts_with(Pfx))
+      return true;
+  }
+
+  return false;
 }
 
 /// Serialize named struct types.
@@ -244,6 +349,8 @@ struct SafetyExportPass : public llvm::PassInfoMixin<SafetyExportPass> {
     llvm::json::Array Declarations;
 
     for (const llvm::Function &F : M) {
+      if (shouldSkipFunction(F))
+        continue;
       if (F.isDeclaration())
         Declarations.push_back(serializeDeclaration(F));
       else
