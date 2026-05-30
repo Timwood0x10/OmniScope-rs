@@ -171,6 +171,14 @@ impl PassContext {
             .and_then(|arc| arc.downcast_ref::<T>().cloned())
     }
 
+    /// Retrieves a reference to shared data without cloning.
+    ///
+    /// Use this for large collections (ContractGraph, SummaryStore, etc.)
+    /// where cloning would be O(n) and wasteful.
+    pub fn get_ref<T: 'static + Send + Sync>(&self, key: &str) -> Option<&T> {
+        self.shared.get(key).and_then(|arc| arc.downcast_ref::<T>())
+    }
+
     /// Adds a diagnostic
     pub fn add_diagnostic(&mut self, diag: Diagnostic) {
         self.diagnostics.push(diag);

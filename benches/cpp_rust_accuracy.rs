@@ -81,8 +81,14 @@ const CPP_BUGS: &[ExpectedBug] = &[
 ];
 
 const CPP_NOISE: &[ExpectedNoise] = &[
-    ExpectedNoise { label: "N1: proper_new_delete", func_substring: "noise_n1" },
-    ExpectedNoise { label: "N2: proper_new_array_delete_array", func_substring: "noise_n2" },
+    ExpectedNoise {
+        label: "N1: proper_new_delete",
+        func_substring: "noise_n1",
+    },
+    ExpectedNoise {
+        label: "N2: proper_new_array_delete_array",
+        func_substring: "noise_n2",
+    },
 ];
 
 const RUST_BUGS: &[ExpectedBug] = &[
@@ -109,8 +115,14 @@ const RUST_BUGS: &[ExpectedBug] = &[
 ];
 
 const RUST_NOISE: &[ExpectedNoise] = &[
-    ExpectedNoise { label: "N1: __rust_alloc+dealloc", func_substring: "noise_n1" },
-    ExpectedNoise { label: "N2: __rust_alloc_zeroed+dealloc", func_substring: "noise_n2" },
+    ExpectedNoise {
+        label: "N1: __rust_alloc+dealloc",
+        func_substring: "noise_n1",
+    },
+    ExpectedNoise {
+        label: "N2: __rust_alloc_zeroed+dealloc",
+        func_substring: "noise_n2",
+    },
 ];
 
 fn run_pipeline(ir: &str) -> omniscope_pipeline::PipelineResult {
@@ -145,7 +157,12 @@ fn count_fp_on_noise(issues: &[omniscope_core::Issue], noise: &[ExpectedNoise]) 
 }
 
 /// Print an accuracy report for a given corpus.
-fn print_accuracy_report(label: &str, issues: &[omniscope_core::Issue], bugs: &[ExpectedBug], noise: &[ExpectedNoise]) {
+fn print_accuracy_report(
+    label: &str,
+    issues: &[omniscope_core::Issue],
+    bugs: &[ExpectedBug],
+    noise: &[ExpectedNoise],
+) {
     eprintln!("\n{}", "=".repeat(60));
     eprintln!("  ACCURACY REPORT: {label}");
     eprintln!("{}", "=".repeat(60));
@@ -170,16 +187,29 @@ fn print_accuracy_report(label: &str, issues: &[omniscope_core::Issue], bugs: &[
     eprintln!("    False Negatives: {fn_count}/{}", bugs.len());
     eprintln!("    False Positives: {fp}/{}", noise.len());
 
-    let recall = if bugs.is_empty() { 1.0 } else { tp as f64 / bugs.len() as f64 };
-    let precision = if (tp + fp) == 0 { 1.0 } else { tp as f64 / (tp + fp) as f64 };
-    let f1 = if (precision + recall) == 0.0 { 0.0 } else { 2.0 * precision * recall / (precision + recall) };
+    let recall = if bugs.is_empty() {
+        1.0
+    } else {
+        tp as f64 / bugs.len() as f64
+    };
+    let precision = if (tp + fp) == 0 {
+        1.0
+    } else {
+        tp as f64 / (tp + fp) as f64
+    };
+    let f1 = if (precision + recall) == 0.0 {
+        0.0
+    } else {
+        2.0 * precision * recall / (precision + recall)
+    };
 
     eprintln!("    Recall:    {:.1}%", recall * 100.0);
     eprintln!("    Precision: {:.1}%", precision * 100.0);
     eprintln!("    F1 Score:  {:.1}%", f1 * 100.0);
 
     eprintln!("\n  All issues by kind:");
-    let mut kind_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut kind_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for i in issues {
         *kind_counts.entry(format!("{:?}", i.kind)).or_default() += 1;
     }
@@ -234,10 +264,7 @@ fn bench_cpp_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("cpp_scaling");
     group.sample_size(15);
 
-    let fixtures = vec![
-        ("cpp_corpus_4KB", CPP_CORPUS),
-        ("cpp_hash_23KB", CPP_HASH),
-    ];
+    let fixtures = vec![("cpp_corpus_4KB", CPP_CORPUS), ("cpp_hash_23KB", CPP_HASH)];
 
     for (name, ir) in fixtures {
         let module = IRModule::parse_from_text(ir);
@@ -306,22 +333,46 @@ fn bench_rust_scaling(c: &mut Criterion) {
 fn accuracy_report(c: &mut Criterion) {
     // C++ accuracy
     let cpp_result = run_pipeline(CPP_CORPUS);
-    print_accuracy_report("C++ (cpp_hidden_bugs.ll)", cpp_result.issues(), CPP_BUGS, CPP_NOISE);
+    print_accuracy_report(
+        "C++ (cpp_hidden_bugs.ll)",
+        cpp_result.issues(),
+        CPP_BUGS,
+        CPP_NOISE,
+    );
 
     // Rust accuracy
     let rust_result = run_pipeline(RUST_CORPUS);
-    print_accuracy_report("Rust (rust_hidden_bugs.ll)", rust_result.issues(), RUST_BUGS, RUST_NOISE);
+    print_accuracy_report(
+        "Rust (rust_hidden_bugs.ll)",
+        rust_result.issues(),
+        RUST_BUGS,
+        RUST_NOISE,
+    );
 
     // Also report for the larger integration fixtures
     let rust_ffi_result = run_pipeline(RUST_FFI_BUGS);
     eprintln!("\n--- rust_ffi_bugs_30KB ---");
     eprintln!("  Total issues: {}", rust_ffi_result.issues().len());
-    eprintln!("  Issue kinds: {:?}", rust_ffi_result.issues().iter().map(|i| format!("{:?}", i.kind)).collect::<Vec<_>>());
+    eprintln!(
+        "  Issue kinds: {:?}",
+        rust_ffi_result
+            .issues()
+            .iter()
+            .map(|i| format!("{:?}", i.kind))
+            .collect::<Vec<_>>()
+    );
 
     let cpp_hash_result = run_pipeline(CPP_HASH);
     eprintln!("\n--- cpp_hash_23KB ---");
     eprintln!("  Total issues: {}", cpp_hash_result.issues().len());
-    eprintln!("  Issue kinds: {:?}", cpp_hash_result.issues().iter().map(|i| format!("{:?}", i.kind)).collect::<Vec<_>>());
+    eprintln!(
+        "  Issue kinds: {:?}",
+        cpp_hash_result
+            .issues()
+            .iter()
+            .map(|i| format!("{:?}", i.kind))
+            .collect::<Vec<_>>()
+    );
 
     // Dummy benchmark so criterion doesn't complain
     let mut group = c.benchmark_group("accuracy_report");

@@ -174,11 +174,18 @@ impl IRModule {
             }
 
             // Parse global variables: @name = global ... or @name = constant ...
-            if line.starts_with('@') && line.contains(" = global ") || line.contains(" = constant ") {
-                let name = line.split_whitespace().next().unwrap_or("").trim_start_matches('@');
+            if line.starts_with('@') && line.contains(" = global ") || line.contains(" = constant ")
+            {
+                let name = line
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches('@');
                 let is_constant = line.contains(" = constant ");
                 if !name.is_empty() {
-                    module.global_variables.insert(name.to_string(), is_constant);
+                    module
+                        .global_variables
+                        .insert(name.to_string(), is_constant);
                 }
             }
 

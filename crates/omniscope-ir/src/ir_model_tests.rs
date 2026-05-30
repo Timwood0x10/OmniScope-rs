@@ -550,7 +550,7 @@ fn test_conversion_classify_all_opcodes() {
         ("cmpxchg", IRInstructionKind::AtomicRmw),
         ("getelementptr", IRInstructionKind::GetElementPtr),
         ("icmp", IRInstructionKind::Icmp),
-        ("fcmp", IRInstructionKind::Icmp),
+        ("fcmp", IRInstructionKind::Fcmp),
         ("br", IRInstructionKind::Branch),
         ("call", IRInstructionKind::Call),
         ("ret", IRInstructionKind::Ret),

@@ -23,6 +23,7 @@ use omniscope_core::{Issue, IssueCandidate, Result};
 use omniscope_semantics::FamilyRegistry;
 use omniscope_types::{EvidenceKind, IssueCandidateKind, VerifierVerdict};
 
+use crate::analysis::NoiseReduction;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
 /// Issue verifier pass.
@@ -59,8 +60,12 @@ impl Pass for IssueVerifierPass {
         let registry: Option<FamilyRegistry> = ctx.get("family_registry");
         let registry = registry.unwrap_or_default();
 
+        // Layer 1: NoiseReduction — fast string-based FP pre-filter.
+        let noise = NoiseReduction::new();
+
         let mut verified: Vec<IssueCandidate> = Vec::new();
         let mut issues: Vec<Issue> = Vec::new();
+        let mut noise_suppressed: usize = 0;
 
         for mut candidate in candidates {
             let verdict = verify_candidate(&candidate, &registry);
@@ -69,6 +74,20 @@ impl Pass for IssueVerifierPass {
             // Attach a human-readable description based on the verdict.
             if candidate.description.is_none() {
                 candidate.description = Some(build_verdict_description(&candidate, verdict));
+            }
+
+            // Layer 1: Fast string-based FP suppression — skip known
+            // safe patterns (compiler intrinsics, allocator internals, etc.)
+            // before even reaching the SRT gate.
+            let func_name = candidate
+                .release_function
+                .as_deref()
+                .unwrap_or(&candidate.alloc_function);
+            if noise.should_suppress(func_name) {
+                noise_suppressed += 1;
+                candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                verified.push(candidate);
+                continue;
             }
 
             if candidate.is_reportable() {
@@ -119,6 +138,7 @@ impl Pass for IssueVerifierPass {
             result.add_issue(issue);
         }
         result.add_stat("gate_suppressed", gate_suppressed);
+        result.add_stat("noise_suppressed", noise_suppressed);
 
         Ok(result)
     }

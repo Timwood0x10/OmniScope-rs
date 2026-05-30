@@ -126,6 +126,7 @@ fn build_rust_hash_json_model() -> IRModuleModel {
 
     let fft_func = IRFunction {
         name: "rust_fft_forward".to_string(),
+        demangled: None,
         return_type: "i32".to_string(),
         param_types: vec!["ptr".to_string(), "ptr".to_string(), "i64".to_string()],
         calling_convention: "ccc".to_string(),
@@ -178,6 +179,7 @@ fn build_rust_hash_json_model() -> IRModuleModel {
 
     let hash_func = IRFunction {
         name: "rust_hash_compute".to_string(),
+        demangled: None,
         return_type: "i32".to_string(),
         param_types: vec!["ptr".to_string(), "i64".to_string(), "ptr".to_string()],
         calling_convention: "ccc".to_string(),
@@ -192,11 +194,13 @@ fn build_rust_hash_json_model() -> IRModuleModel {
     // -- Declarations --
     let decl_fft = IRDeclaration {
         name: "c_fft_forward".to_string(),
+        demangled: None,
         return_type: "i32".to_string(),
         param_types: vec!["ptr".to_string(), "ptr".to_string(), "i64".to_string()],
     };
     let decl_hash = IRDeclaration {
         name: "c_hash".to_string(),
+        demangled: None,
         return_type: "i32".to_string(),
         param_types: vec!["ptr".to_string(), "i64".to_string(), "ptr".to_string()],
     };
@@ -779,7 +783,7 @@ fn test_json_opcode_classification() {
         ("cmpxchg", IRInstructionKind::AtomicRmw),
         ("getelementptr", IRInstructionKind::GetElementPtr),
         ("icmp", IRInstructionKind::Icmp),
-        ("fcmp", IRInstructionKind::Icmp),
+        ("fcmp", IRInstructionKind::Fcmp),
         ("br", IRInstructionKind::Branch),
         ("call", IRInstructionKind::Call),
         ("invoke", IRInstructionKind::Call),

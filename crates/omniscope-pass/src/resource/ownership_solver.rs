@@ -51,10 +51,10 @@ impl Pass for OwnershipSolverPass {
 
         let mut instances: Vec<ResourceInstance> = Vec::new();
 
-        // Load the contract graph from context.
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
+        // Load the contract graph from context (reference, no clone).
+        let graph_ref = ctx.get_ref::<ContractGraph>("contract_graph");
 
-        if let Some(ref graph) = graph {
+        if let Some(graph) = graph_ref {
             // Index instances by their ID for fast lookup during transitions.
             let mut instance_map: std::collections::HashMap<u64, usize> =
                 std::collections::HashMap::new();

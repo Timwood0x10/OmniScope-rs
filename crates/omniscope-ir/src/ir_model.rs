@@ -369,7 +369,7 @@ impl IRInstructionModel {
         };
 
         // Derive icmp_pred for Icmp / fcmp.
-        let icmp_pred = if kind == IRInstructionKind::Icmp {
+        let icmp_pred = if kind == IRInstructionKind::Icmp || kind == IRInstructionKind::Fcmp {
             extract_icmp_pred_from_raw(&self.raw)
         } else {
             None
@@ -411,7 +411,8 @@ fn classify_opcode(opcode: &str) -> IRInstructionKind {
         "store" => IRInstructionKind::Store,
         "atomicrmw" | "cmpxchg" => IRInstructionKind::AtomicRmw,
         "getelementptr" => IRInstructionKind::GetElementPtr,
-        "icmp" | "fcmp" => IRInstructionKind::Icmp,
+        "icmp" => IRInstructionKind::Icmp,
+        "fcmp" => IRInstructionKind::Fcmp,
         "br" => IRInstructionKind::Branch,
         "call" | "invoke" => IRInstructionKind::Call,
         "ret" => IRInstructionKind::Ret,

@@ -69,12 +69,12 @@ impl Pass for IssueCandidateBuilderPass {
 
         // Load the contract graph and ownership states from context.
         // Fall back to empty defaults if upstream passes haven't run.
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
+        let graph = ctx.get_ref::<ContractGraph>("contract_graph");
         let ownership_states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
         let registry: Option<FamilyRegistry> = ctx.get("family_registry");
         let registry = registry.unwrap_or_default();
 
-        if let Some(ref graph) = graph {
+        if let Some(graph) = graph {
             // ── Pass 1: Group edges by instance to detect cross-family and double-release ──
             let instance_edges = group_edges_by_instance(graph);
 

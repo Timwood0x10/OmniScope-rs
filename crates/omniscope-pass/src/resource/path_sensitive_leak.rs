@@ -81,7 +81,7 @@ impl Pass for LeakDetectionPass {
 
         // Retrieve the contract graph and summary store.
         // If no contract graph is available, this pass is a no-op.
-        let graph: Option<ContractGraph> = ctx.get("contract_graph");
+        let graph = ctx.get_ref::<ContractGraph>("contract_graph");
         let summary_store: Option<SummaryStore> = ctx.get("summary_store");
         let summary_store = summary_store.unwrap_or_default();
 

@@ -26,6 +26,7 @@
 use crate::resource::family_registry::FamilyRegistry;
 use crate::resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior};
 use omniscope_ir::{IRInstructionKind, IRModule};
+use std::sync::LazyLock;
 
 // ──────────────────────────────────────────────────────────────────────────
 // FFI Safety Assessment — the output of semantic derivation
@@ -150,6 +151,10 @@ impl FFISafetyAssessment {
 // Main assessment function
 // ──────────────────────────────────────────────────────────────────────────
 
+/// Global singleton FamilyRegistry — avoids re-allocating ~100 entries
+/// on every `assess_ffi_safety()` call (review-report HIGH #10).
+static FAMILY_REGISTRY: LazyLock<FamilyRegistry> = LazyLock::new(FamilyRegistry::new);
+
 /// Assess the safety of an FFI call using IR instruction-level semantic derivation.
 ///
 /// This is the main entry point that replaces `SyscallSemantic::classify()`.
@@ -167,7 +172,7 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
     // ── Step 0: Check FamilyRegistry for known symbols ──
     // This covers all 20 families including the 7 new library-managed ones
     // from IR Pattern Atlas (zlib, openssl, sqlite, go_cgo, mimalloc, etc.)
-    let registry = FamilyRegistry::new();
+    let registry = &*FAMILY_REGISTRY;
     if let Some(entry) = registry.lookup(callee) {
         use crate::resource::family_registry::SymbolEffect;
         match entry.effect {

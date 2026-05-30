@@ -6,9 +6,10 @@ use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_pass::{
-    ContractGraphBuilderPass, FFIBoundaryPass, FfiReturnCheckPass, IRBehaviorSummaryPass,
-    IssueCandidateBuilderPass, IssueVerifierPass, LeakDetectionPass, OwnershipSolverPass,
-    PassManager, RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
+    CallGraphPass, ContractGraphBuilderPass, DangerSurfacePass, FFIBoundaryPass,
+    FfiReturnCheckPass, IRBehaviorSummaryPass, IssueCandidateBuilderPass, IssueVerifierPass,
+    LeakDetectionPass, OwnershipSolverPass, PassManager, RawFactCollectorPass,
+    StructuralInferencePass, SummaryBuilderPass, SurfaceClassifierPass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -54,8 +55,13 @@ impl Pipeline {
 
     /// Registers default passes
     pub fn register_default_passes(&mut self) {
-        // Analysis passes
+        // Foundation passes (no dependencies)
+        self.pass_manager.register(CallGraphPass::new());
+
+        // Analysis passes (depend on CallGraph)
         self.pass_manager.register(FFIBoundaryPass::new());
+        self.pass_manager.register(SurfaceClassifierPass::new());
+        self.pass_manager.register(DangerSurfacePass::new());
 
         // Resource contract passes (new architecture)
         self.pass_manager.register(RawFactCollectorPass::new());
@@ -123,7 +129,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
 
-        assert_eq!(pipeline.pass_count(), 11);
+        assert_eq!(pipeline.pass_count(), 14);
     }
 
     #[test]

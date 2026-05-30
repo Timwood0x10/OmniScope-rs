@@ -147,7 +147,12 @@ fn bench_write_to_immutable(c: &mut Criterion) {
 //   - saturating_add for func_id
 // ========================================================================
 
-fn build_raw_facts_for_leak(n: usize) -> (Vec<omniscope_pass::resource::raw_fact_collector::RawResourceFact>, ContractGraph) {
+fn build_raw_facts_for_leak(
+    n: usize,
+) -> (
+    Vec<omniscope_pass::resource::raw_fact_collector::RawResourceFact>,
+    ContractGraph,
+) {
     use omniscope_pass::resource::raw_fact_collector::RawResourceFact;
     use omniscope_types::PointerContract;
 
@@ -291,10 +296,7 @@ fn bench_profiler_memory_samples(c: &mut Criterion) {
                 b.iter(|| {
                     let profiler = Profiler::new();
                     for i in 0..n {
-                        profiler.record_memory(
-                            black_box(1024 * 1024),
-                            black_box((i * 100) as u64),
-                        );
+                        profiler.record_memory(black_box(1024 * 1024), black_box((i * 100) as u64));
                     }
                     let history = profiler.memory_history();
                     black_box(history.len());
