@@ -130,6 +130,7 @@ impl PassResult {
 }
 
 /// Pass context for sharing data between passes
+#[derive(Clone)]
 pub struct PassContext {
     /// Shared data between passes
     shared: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,

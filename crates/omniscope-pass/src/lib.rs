@@ -28,7 +28,7 @@ pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
 pub use resource::issue_gate::{check_issue, check_issue_with_kinds, GateVerdict};
 pub use resource::issue_verifier::IssueVerifierPass;
 pub use resource::ownership_solver::OwnershipSolverPass;
-pub use resource::path_sensitive_leak::{LeakPath, PathAnalysisResult, PathSensitiveLeakPass};
+pub use resource::path_sensitive_leak::{LeakDetectionPass, LeakPath, PathAnalysisResult};
 pub use resource::raw_fact_collector::RawFactCollectorPass;
 pub use resource::risk_scoring::{compute_risk_score, RiskScore};
 pub use resource::structural_inference_pass::StructuralInferencePass;

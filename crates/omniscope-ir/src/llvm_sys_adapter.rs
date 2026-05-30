@@ -326,10 +326,10 @@ fn walk_global_variables(module_ref: LLVMModuleRef, module: &mut IRModule) {
         // SAFETY: `LLVMIsGlobalConstant` checks if the global is constant.
         let is_constant = unsafe { LLVMIsGlobalConstant(global) } != 0;
 
-        // We record global variables as declarations for visibility tracking
-        if !is_constant && !module.declarations.contains_key(&name) {
-            // Non-constant globals are tracked but not as function declarations
-        }
+        // Record every global variable so downstream passes can query
+        // whether a symbol is a global (e.g. HeapProvenancePass,
+        // BorrowEscapePass) instead of relying on name heuristics.
+        module.global_variables.insert(name, is_constant);
 
         // SAFETY: `LLVMGetNextGlobal` advances to the next global variable.
         global = unsafe { LLVMGetNextGlobal(global) };
@@ -474,7 +474,7 @@ fn map_opcode(opcode: LLVMOpcode) -> Option<IRInstructionKind> {
         LLVMOpcode::LLVMAtomicRMW => Some(IRInstructionKind::AtomicRmw),
         LLVMOpcode::LLVMGetElementPtr => Some(IRInstructionKind::GetElementPtr),
         LLVMOpcode::LLVMICmp => Some(IRInstructionKind::Icmp),
-        LLVMOpcode::LLVMFCmp => Some(IRInstructionKind::Icmp),
+        LLVMOpcode::LLVMFCmp => Some(IRInstructionKind::Fcmp),
         LLVMOpcode::LLVMBr => Some(IRInstructionKind::Branch),
         LLVMOpcode::LLVMIndirectBr => Some(IRInstructionKind::Branch),
         LLVMOpcode::LLVMCall => Some(IRInstructionKind::Call),

@@ -31,6 +31,8 @@ pub enum IRInstructionKind {
     GetElementPtr,
     /// `icmp eq/ne/...` — integer comparison (condition for branch)
     Icmp,
+    /// `fcmp oeq/une/...` — floating-point comparison (condition for branch)
+    Fcmp,
     /// `br i1` / `br label` — conditional or unconditional branch
     Branch,
     /// `call @func(...)` — direct function call (callee is a known function)
@@ -257,7 +259,7 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
     if stripped.starts_with("fcmp") {
         let icmp_pred = extract_icmp_pred(stripped);
         return Some(IRInstruction {
-            kind: IRInstructionKind::Icmp, // Treat similarly
+            kind: IRInstructionKind::Fcmp,
             dest,
             operands: extract_operands(stripped, "fcmp"),
             callee: None,

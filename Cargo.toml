@@ -40,6 +40,14 @@ harness = false
 name = "resource_analysis"
 harness = false
 
+[[bench]]
+name = "bugfix_regression"
+harness = false
+
+[[bench]]
+name = "cpp_rust_accuracy"
+harness = false
+
 [workspace]
 members = [
     "crates/omniscope-core",

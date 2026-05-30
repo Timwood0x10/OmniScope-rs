@@ -78,10 +78,13 @@ pub struct Profiler {
     spans: DashMap<SpanId, Span>,
     /// Spans by name
     by_name: DashMap<String, Vec<SpanId>>,
-    /// Memory samples
-    memory_samples: DashMap<DateTime<Utc>, MemorySample>,
+    /// Memory samples, keyed by monotonic sequence ID to avoid timestamp collisions
+    /// under high-frequency sampling.
+    memory_samples: DashMap<u64, MemorySample>,
     /// Next span ID
     next_id: AtomicU64,
+    /// Next memory sample sequence ID
+    next_sample_id: AtomicU64,
     /// Active spans (for nested profiling)
     active_spans: DashMap<SpanId, (Instant, String, Option<SpanId>)>,
 }
@@ -96,6 +99,7 @@ impl Profiler {
             by_name: DashMap::new(),
             memory_samples: DashMap::new(),
             next_id: AtomicU64::new(1),
+            next_sample_id: AtomicU64::new(1),
             active_spans: DashMap::new(),
         }
     }
@@ -148,7 +152,8 @@ impl Profiler {
             total_bytes,
             used_bytes,
         };
-        self.memory_samples.insert(timestamp, sample);
+        let sample_id = self.next_sample_id.fetch_add(1, Ordering::Relaxed);
+        self.memory_samples.insert(sample_id, sample);
     }
 
     /// Gets a span by ID
@@ -193,8 +198,12 @@ impl Profiler {
         }
 
         let count = spans.len();
+        if count == 0 {
+            return None;
+        }
+
         let total: Duration = spans.iter().map(|s| s.duration).sum();
-        let avg = total / count as u32;
+        let avg = total / (count as u32).max(1);
         let max = spans.iter().map(|s| s.duration).max().unwrap_or_default();
         let min = spans.iter().map(|s| s.duration).min().unwrap_or_default();
 

@@ -159,8 +159,8 @@ fn scan_function_body(
                 }
             }
 
-            IRInstructionKind::Icmp => {
-                // If this is an icmp eq/ne %reg, null, mark %reg as checked
+            IRInstructionKind::Icmp | IRInstructionKind::Fcmp => {
+                // If this is an icmp/fcmp eq/ne %reg, null, mark %reg as checked
                 if let Some(ref pred) = inst.icmp_pred {
                     if pred == "eq" || pred == "ne" {
                         // Check if one operand is the register and the other is null
@@ -307,8 +307,9 @@ fn skip_calling_conventions(s: &str) -> &str {
 
 /// Returns true if the callee name looks like an FFI function.
 ///
-/// Heuristic: C-style names (lowercase, underscores) that aren't
-/// Rust mangled names.
+/// Heuristic: C-style names (alphanumeric + underscores) that aren't
+/// Rust mangled names. Supports both lowercase (POSIX) and CamelCase
+/// (Windows API, Objective-C) naming conventions.
 fn is_likely_ffi_by_name(name: &str) -> bool {
     // Rust v0 mangled names start with _RNv or _RINv
     if name.starts_with("_R") {
@@ -318,9 +319,8 @@ fn is_likely_ffi_by_name(name: &str) -> bool {
     if name.contains("::") {
         return false;
     }
-    // C-style names: lowercase with underscores
-    name.chars()
-        .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+    // C-style names: alphanumeric with underscores (allows CamelCase for Windows APIs)
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Known APIs that are guaranteed to return non-null.

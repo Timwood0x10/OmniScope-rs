@@ -126,6 +126,8 @@ pub struct IRModule {
     pub calls: Vec<CallInstruction>,
     /// Function bodies with instruction-level detail (for defined functions)
     pub function_bodies: HashMap<String, FunctionBody>,
+    /// Global variables (name → is_constant)
+    pub global_variables: HashMap<String, bool>,
     /// Data layout information
     pub data_layout: DataLayout,
     /// Calling conventions used in this module
@@ -142,6 +144,7 @@ impl IRModule {
             declarations: HashMap::new(),
             calls: Vec::new(),
             function_bodies: HashMap::new(),
+            global_variables: HashMap::new(),
             data_layout: DataLayout {
                 target_triple: None,
                 data_layout: None,
@@ -168,6 +171,15 @@ impl IRModule {
             } else if line.starts_with("target datalayout") {
                 module.data_layout.data_layout = extract_datalayout(line);
                 module.parse_datalayout_info();
+            }
+
+            // Parse global variables: @name = global ... or @name = constant ...
+            if line.starts_with('@') && line.contains(" = global ") || line.contains(" = constant ") {
+                let name = line.split_whitespace().next().unwrap_or("").trim_start_matches('@');
+                let is_constant = line.contains(" = constant ");
+                if !name.is_empty() {
+                    module.global_variables.insert(name.to_string(), is_constant);
+                }
             }
 
             // Collect debug metadata definitions: !N = !DILocation(...)

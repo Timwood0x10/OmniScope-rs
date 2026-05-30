@@ -143,7 +143,11 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
 
     // Parse the IR file — auto-detects best backend (llvm-sys > cpp pass > text)
     let strategy = parse_strategy(&cmd.strategy);
-    tracing::info!("Parsing LLVM IR from {:?} (strategy: {})", cmd.input, strategy);
+    tracing::info!(
+        "Parsing LLVM IR from {:?} (strategy: {})",
+        cmd.input,
+        strategy
+    );
     let module = load_ir(&cmd.input, strategy)?;
     let func_count = module.functions.len();
     let decl_count = module.declarations.len();
@@ -237,7 +241,11 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
 
     // Parse the IR file — auto-detects best backend (llvm-sys > cpp pass > text)
     let strategy = parse_strategy(&cmd.strategy);
-    tracing::info!("Parsing LLVM IR from {:?} (strategy: {})", cmd.input, strategy);
+    tracing::info!(
+        "Parsing LLVM IR from {:?} (strategy: {})",
+        cmd.input,
+        strategy
+    );
     let module = load_ir(&cmd.input, strategy)?;
 
     // Create pipeline and load IR

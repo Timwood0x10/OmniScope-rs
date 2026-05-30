@@ -34,15 +34,15 @@ const DEFAULT_MAX_PATH_LENGTH: usize = 256;
 /// it produces a leak candidate:
 /// - All paths leak → `ConditionalLeak` (high confidence)
 /// - Some paths leak → `ConditionalLeak` (lower confidence)
-pub struct PathSensitiveLeakPass {
+pub struct LeakDetectionPass {
     /// Maximum number of paths to explore per allocation.
     path_budget: usize,
     /// Maximum path length before giving up.
     max_path_length: usize,
 }
 
-impl PathSensitiveLeakPass {
-    /// Creates a new path-sensitive leak pass with default settings.
+impl LeakDetectionPass {
+    /// Creates a new leak detection pass with default settings.
     pub fn new() -> Self {
         Self {
             path_budget: DEFAULT_PATH_BUDGET,
@@ -63,9 +63,9 @@ impl PathSensitiveLeakPass {
     }
 }
 
-impl Pass for PathSensitiveLeakPass {
+impl Pass for LeakDetectionPass {
     fn name(&self) -> &'static str {
-        "PathSensitiveLeak"
+        "LeakDetection"
     }
 
     fn kind(&self) -> PassKind {
@@ -190,7 +190,7 @@ impl Pass for PathSensitiveLeakPass {
     }
 }
 
-impl Default for PathSensitiveLeakPass {
+impl Default for LeakDetectionPass {
     fn default() -> Self {
         Self::new()
     }
@@ -218,15 +218,10 @@ fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) ->
         .any(|f| {
             // Scope: only consider releases related to the allocation's context.
             // 1. Same function ID — release is in the same function as the alloc.
-            // 2. Release's caller is the alloc's callee — cross-function pattern
-            //    where A calls malloc, then A calls helper(), and helper calls free().
-            //    Here free's caller_name == helper, and alloc.function_name == "malloc".
-            //    This doesn't match — correct, because we can't know helper frees
-            //    without call-graph data.  The summary-based check covers known
-            //    library free functions (free, fclose, etc.).
-            // 3. Alloc's caller matches the release's function — alloc is in a
-            //    helper, and the release is in the same helper (same as #1 by ID).
-            f.function == alloc.function
+            // 2. Same function name — handles cases where the same logical function
+            //    might appear with different IDs (e.g. across IR modules or after
+            //    inlining). This matches condition #2 from the doc comment.
+            f.function == alloc.function || f.function_name == alloc.function_name
         })
 }
 
@@ -361,8 +356,8 @@ mod tests {
 
     #[test]
     fn test_pass_creation() {
-        let pass = PathSensitiveLeakPass::new();
-        assert_eq!(pass.name(), "PathSensitiveLeak");
+        let pass = LeakDetectionPass::new();
+        assert_eq!(pass.name(), "LeakDetection");
         assert_eq!(pass.kind(), PassKind::Analysis);
         assert_eq!(pass.dependencies(), vec!["OwnershipSolver"]);
         assert_eq!(pass.path_budget, DEFAULT_PATH_BUDGET);
@@ -370,14 +365,14 @@ mod tests {
 
     #[test]
     fn test_custom_path_budget() {
-        let pass = PathSensitiveLeakPass::new().with_path_budget(128);
+        let pass = LeakDetectionPass::new().with_path_budget(128);
         assert_eq!(pass.path_budget, 128);
     }
 
     #[test]
     fn test_pass_run_no_graph() {
         let mut ctx = PassContext::new();
-        let pass = PathSensitiveLeakPass::new();
+        let pass = LeakDetectionPass::new();
         let result = pass.run(&mut ctx).unwrap();
         assert_eq!(result.nodes_analyzed, 0, "No graph means no analysis");
     }

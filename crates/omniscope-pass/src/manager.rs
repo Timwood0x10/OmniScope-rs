@@ -158,7 +158,9 @@ impl PassManager {
                     .into_par_iter()
                     .map(|idx| {
                         let pass = &self.passes[idx];
-                        let mut local_ctx = PassContext::new();
+                        // Clone the main context so each parallel pass can read
+                        // upstream data produced by previous levels.
+                        let mut local_ctx = ctx.clone();
                         let start = Instant::now();
 
                         let mut result = match pass.run(&mut local_ctx) {

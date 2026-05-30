@@ -7,8 +7,8 @@ use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_pass::{
     ContractGraphBuilderPass, FFIBoundaryPass, FfiReturnCheckPass, IRBehaviorSummaryPass,
-    IssueCandidateBuilderPass, IssueVerifierPass, OwnershipSolverPass, PassManager,
-    PathSensitiveLeakPass, RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
+    IssueCandidateBuilderPass, IssueVerifierPass, LeakDetectionPass, OwnershipSolverPass,
+    PassManager, RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -66,7 +66,7 @@ impl Pipeline {
         self.pass_manager.register(OwnershipSolverPass::new());
         self.pass_manager.register(IssueCandidateBuilderPass::new());
         self.pass_manager.register(IssueVerifierPass::new());
-        self.pass_manager.register(PathSensitiveLeakPass::new());
+        self.pass_manager.register(LeakDetectionPass::new());
 
         // FFI nullable return check pass
         self.pass_manager.register(FfiReturnCheckPass::new());

@@ -53,7 +53,7 @@ impl RawFactCollectorPass {
 
         // Stable function ID assignment: each unique function name gets the
         // same func_id across all calls, so the same function is never
-        // treated as different functions (which would cause PathSensitiveLeak
+        // treated as different functions (which would cause LeakDetection
         // false positives).
         let mut func_name_to_id: std::collections::HashMap<String, u64> =
             std::collections::HashMap::new();
@@ -65,7 +65,7 @@ impl RawFactCollectorPass {
                 id
             } else {
                 let id = next_func_id;
-                next_func_id = next_func_id.wrapping_add(1);
+                next_func_id = next_func_id.saturating_add(1);
                 func_name_to_id.insert(name.to_string(), id);
                 id
             }

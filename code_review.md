@@ -56,187 +56,19 @@ LLVMOpcode::LLVMFCmp => Some(IRInstructionKind::FCmp),  // 新增 FCmp 变体
 
 ---
 
-## BUG-4: Evidence 缺少 escape 字段导致 `has_escape_evidence` 永远返回 false [严重]
+## BUG-4: Evidence 缺少 escape 字段导致 `has_escape_evidence` 永远返回 false [严重] [已勘误]
+
+> **⚠️ 勘误 (2026-05-30):** 此 BUG 为**误报**。`Evidence` 结构体在 `crates/omniscope-types/src/evidence.rs:98` 确实有 `pub escape: Option<EscapeKind>` 字段。`e.escape.is_some()` 是合法的 Rust 代码。保留此条目作为审计记录。
 
 **位置:** `crates/omniscope-pass/src/resource/issue_verifier.rs:308-313`
 
-**问题:**
+**原始问题(已确认是误报):**
 ```rust
 fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
     candidate.evidence.iter().any(|e| e.kind == kind && e.escape.is_some())
 }
 ```
-`Evidence` 结构体（`crates/omniscope-types/src/evidence.rs`）**没有** `escape` 字段。查看 `Evidence` 定义：
-- 字段为: `kind`, `description`, `family`, `confidence`, `ir_pattern`, `escape_kind`
-- 没有 `escape` 字段，只有 `escape_kind: Option<EscapeKind>`
-
-所以 `e.escape.is_some()` 是编译错误。如果这代码能编译，说明 `escape` 在旧版本存在或 `Evidence` 另有定义。
-
-修复前需确认 `Evidence` 实际字段名。如字段为 `escape_kind` 则应改为 `e.escape_kind.is_some()`。
-
----
-
-## BUG-5: name-based 启发式分析极度不可靠 [高]
-
-### 5a: borrow_escape.rs 全局/堆/参数检测
-
-**位置:** `crates/omniscope-pass/src/analysis/borrow_escape.rs:176-197`
-
-```rust
-fn has_heap_provenance(&self, caller: &str) -> bool {
-    caller.contains("alloc")    // ← 匹配 "dealloc", "realloc"
-        || caller.contains("_new")  // ← 匹配 "renew", "known_error"
-        || caller.ends_with("new")  // ← 匹配 "renew"
-}
-fn is_function_parameter(&self, symbol: &str) -> bool {
-    symbol.contains("param") || symbol.contains("arg")  // ← 在 mangled name 中不存在
-}
-```
-`symbol` 参数格式为 `"caller->callee"`，从中寻找 `"param"`、"arg" 在 Rust mangled name 中几乎不可能匹配。整个 pass 的有效性依赖于这些不可靠的字符串匹配。
-
-### 5b: heap_provenance.rs
-
-**位置:** `crates/omniscope-pass/src/analysis/heap_provenance.rs:141-146`
-
-```rust
-fn is_global_storage(&self, callee: &str) -> bool {
-    callee.starts_with("@") || callee.contains("static") || callee.contains("global") || callee.contains("const")
-}
-```
-名为 `"static_assert"`, `"global_counter"`, `"const_eval"` 的函数会被误分类为全局存储。
-
-### 5c: interior_mutability.rs
-
-**位置:** `crates/omniscope-pass/src/analysis/interior_mutability.rs:114-142`
-
-```rust
-fn has_interior_mutability(&self, name: &str) -> bool {
-    let interior_patterns = ["UnsafeCell", "Cell", "Mutex", "RwLock", "Atomic", ...];
-    interior_patterns.iter().any(|&pattern| name.contains(pattern))
-}
-```
-- `"Cell"` 匹配 `"Cancel"`, `"Cello"`, `"Cellular"`
-- `"Mutex"` 匹配任何包含该子串的非 Mutex 函数
-- Rust v0 mangled name 中 `4Cell` 表示 `std::cell::Cell`，但 `name.contains("Cell")` 会匹配所有包含 "Cell" 的内容
-
-**影响:** 所有基于 name-based 的语义分析 pass（BorrowEscape、WriteToImmutable、InteriorMutability、HeapProvenance）产生大量误报/漏报，其分析结果不可信赖。
-
-**修复:** 使用真正的 IR 类型系统进行判断（AllocaInst → stack, malloc/calloc → heap），或至少使用 Rust v0 mangled name 解析 crate。
-
----
-
-## BUG-6: WriteToImmutablePass 遍历 calls 而非 store 指令 [高]
-
-**位置:** `crates/omniscope-pass/src/analysis/write_to_immutable.rs:60-80`
-
-**问题:**
-```rust
-for call in &module.calls {         // ← 遍历的是 CALL 指令，不是 STORE
-    if !call.callee.contains("store") {  // ← 检查 callee 名字是否包含 "store"
-        continue;
-    }
-```
-`module.calls` 是 `Vec<CallInstruction>`，来自 `parse_call()`，记录的是 `call` 指令。LLVM `store` 指令**不是** call 指令，不会出现在 `module.calls` 中。这个 pass 实际上**永远不会**检测到任何 store 操作。
-
-`call.callee.contains("store")` 仅在 callee 函数名包含 "store" 时才进入分析，与写不可变内存的检测目标完全无关。
-
-**影响:** WriteToImmutable pass 完全失效，所有 write-to-immutable 问题均无法检测。
-
-**修复:** 遍历 `module.function_bodies` 中的 `IRInstructionKind::Store` 指令，而非 `module.calls`。
-
----
-
-## BUG-7: BorrowEscapePass 对符号参数的解析错误 [高]
-
-**位置:** `crates/omniscope-pass/src/analysis/borrow_escape.rs:195`
-
-**问题:**
-```rust
-fn is_function_parameter(&self, symbol: &str) -> bool {
-    symbol.contains("param") || symbol.contains("arg") || symbol.contains("parameter")
-}
-```
-`symbol` 的值为 `"caller->callee"` 格式（如 `"test_func->malloc"`）。在这种格式的字符串中寻找 `"param"`/`"arg"` 几乎永远找不到，因为函数名中通常不包含这些子串。
-
-此外，`has_heap_provenance` 接收的是 `caller`（调用者函数名），但在 `analyze_ffi_call` 中：
-- 第 118 行: `self.has_heap_provenance(caller)` — 检查**调用者**是否为堆分配
-- 但实际上应该检查被调用函数是否为堆分配，或者检查传入参数是否为堆指针
-
-**影响:** 几乎所有 FFI call 的堆/栈/参数检测都得出错误结论，导致大量误报或漏报。
-
----
-
-## BUG-8: `check_release_in_facts` 文档与实现不匹配 [中]
-
-**位置:** `crates/omniscope-pass/src/resource/path_sensitive_leak.rs:207-231`
-
-**问题:**
-文档注释说:
-> Now we restrict the search to:
-> 1. Facts whose `function` ID matches the alloc's function ID (same scope), OR
-> 2. Facts whose `function_name` matches the alloc's `function_name`
-
-但实现仅检查了条件 1（`f.function == alloc.function`），从未检查条件 2（`f.function_name == alloc.function_name`）。可能导致跨函数释放模式漏报。
-
-**影响:** 当一个函数内调用 `malloc` 和 `free` 但由于某些原因不在相同 `function` ID 下时，释放不会被识别为匹配，产生假阳性泄漏报告。
-
----
-
-## BUG-9: RawFactCollector 使用 `wrapping_add` 可能导致 func_id 绕回 [中]
-
-**位置:** `crates/omniscope-ir/src/parser.rs:68`
-
-**问题:**
-```rust
-next_func_id = next_func_id.wrapping_add(1);
-```
-使用 `wrapping_add` 而不是普通 `+= 1` 或 `checked_add`。在分析大型 IR 模块时，如果函数数量超过 `u64::MAX`，ID 会绕回 0，导致不同函数共用相同 ID。虽然 u64::MAX 在实际中不太可能达到，但 `wrapping_add` 的使用表明开发者的意图不明确，可能在其他地方也存在类似的溢出风险。
-
----
-
-## BUG-10: ffi_return_check `is_likely_ffi_by_name` 排除大写函数名 [中]
-
-**位置:** `crates/omniscope-pass/src/resource/ffi_return_check.rs:312-324`
-
-**问题:**
-```rust
-fn is_likely_ffi_by_name(name: &str) -> bool {
-    if name.starts_with("_R") { return false; }
-    name.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
-}
-```
-要求 FFI 函数名全小写+下划线+数字。Windows API 函数（如 `GetProcessHeap`、`HeapAlloc`）、Objective-C 函数、CamelCase 命名的 C 库函数都被排除。
-
-**影响:** 非全小写的 FFI 调用完全跳过 nullable return 检测，导致大量漏报。
-
----
-
-## BUG-11: Profiler `stats()` 除法溢出 [中]
-
-**位置:** `crates/omniscope-core/src/profiler.rs:197`
-
-**问题:**
-```rust
-let total: Duration = spans.iter().map(|s| s.duration).sum();
-let avg = total / count as u32;
-```
-`Duration` 的 `Div<u32>` 在 `count == 0` 时会 panic（虽然之前有 empty check，但如果 `count > u32::MAX` 也会有问题）。更重要的是，`spans_by_name` 查询可能存在竞态条件导致 `spans` 在 `is_empty` 判断后被修改。
-
----
-
-## BUG-12: Profiler memory_samples 时间戳冲突 [中]
-
-**位置:** `crates/omniscope-core/src/profiler.rs:144-151`
-
-**问题:**
-```rust
-pub fn record_memory(&self, total_bytes: u64, used_bytes: u64) {
-    let timestamp = Utc::now();
-    let sample = MemorySample { timestamp, total_bytes, used_bytes };
-    self.memory_samples.insert(timestamp, sample);
-}
-```
-以 `DateTime<Utc>` 为 key 插入 `DashMap`。如果在同一纳秒内多次调用 `record_memory`（高并发场景），后一次会覆盖前一次，丢失采样数据。
+`Evidence` 结构体定义在 `evidence.rs:85-104`，字段包括 `escape: Option<EscapeKind>`。`e.escape.is_some()` 能够正常编译和运行。无修复必要。
 
 ---
 
@@ -253,17 +85,9 @@ RawFactCollector 从 `0` 开始分配函数 ID，ContractGraphBuilder 在扫描 
 
 ---
 
-## BUG-14: Evidence 字段名不一致 [低]
+## BUG-14: Evidence 字段名不一致 [低] [已勘误]
 
-**位置:** `crates/omniscope-pass/src/resource/issue_verifier.rs:308-313`
-
-**问题:**
-```rust
-fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
-    candidate.evidence.iter().any(|e| e.kind == kind && e.escape.is_some())
-}
-```
-且看 `Evidence` 实际定义（假设在 `omniscope-types/src/evidence.rs`），如果字段名是 `escape_kind` 而不是 `escape`，则此方法始终返回 `false`。需修复引用为 `e.escape_kind.is_some()`。
+> **⚠️ 勘误 (2026-05-30):** 与 BUG-4 同为误报。`Evidence.escape` 字段确实存在。此条目可忽略。
 
 ---
 
@@ -283,14 +107,127 @@ fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
 
 ---
 
-## 严重性汇总
+## BUG-17: `classify_opcode` 在 ir_model 与 instruction_parser 之间不一致 [高] (回归)
+
+**位置:** `crates/omniscope-ir/src/ir_model.rs:414`
+
+**问题:**
+本次 diff 修改了 `instruction_parser.rs:262` 和 `llvm_sys_adapter.rs:477`，将 `fcmp` 映射为 `IRInstructionKind::Fcmp`。但 `ir_model.rs:classify_opcode()` 仍保持 `"fcmp" => IRInstructionKind::Icmp`。
+
+```rust
+// ir_model.rs:414 — 未更新
+"icmp" | "fcmp" => IRInstructionKind::Icmp,
+```
+
+**影响:**
+1. `IRInstructionModel::to_ir_instruction()` (ir_model.rs:354) 对 `fcmp` 指令返回 `Icmp` 而不是 `Fcmp`，与 instruction_parser 的结果不一致。
+2. 测试 `ir_model_tests.rs:553` 和 `plan_a_c_integration.rs:782` 期望 `("fcmp", IRInstructionKind::Icmp)`，与新的 parser 行为矛盾。
+3. 下游代码同时使用两种 parser 路径时，同一 `fcmp` 指令可能被赋予不同的 `IRInstructionKind`，导致 `kind` 匹配分析结果不一致。
+
+**修复:** `classify_opcode` 的第 414 行改为 `"icmp" => IRInstructionKind::Icmp, "fcmp" => IRInstructionKind::Fcmp,`，并更新对应的测试用例。
+
+---
+
+## BUG-18: `to_ir_instruction` 在 `classify_opcode` 修复后会丢失 fcmp 的 icmp_pred [中] (潜在)
+
+**位置:** `crates/omniscope-ir/src/ir_model.rs:371-376`
+
+**问题:**
+```rust
+let icmp_pred = if kind == IRInstructionKind::Icmp {
+    extract_icmp_pred_from_raw(&self.raw)
+} else {
+    None
+};
+```
+当 `classify_opcode` 修复（BUG-17）后返回 `Fcmp` 时，`kind != Icmp`，因此 `extract_icmp_pred_from_raw` 不会执行，icmp_pred 为 `None`。但 `fcmp` 指令的浮点比较谓词（oeq, olt, ord, uno 等）对 null-check 检测很重要。
+
+**影响:** 仅影响通过 `IRInstructionModel::to_ir_instruction()` 路径处理 fcmp 的代码。instruction_parser.rs 路径 call `extract_icmp_pred` 不受影响。ffi_return_check.rs 已正确处理 `Icmp | Fcmp` 分支。
+
+---
+
+## BUG-19: CallGraphPass / SurfaceClassifierPass / DangerSurfacePass 未注册到 Pipeline [严重]
+
+**位置:** `crates/omniscope-pipeline/src/pipeline.rs:56-73`
+
+**问题:**
+3 个完全实现的 Pass 结构体（实现 `Pass` trait，含完整的 `run()` 实现）**从未**在 `Pipeline::register_default_passes()` 中注册：
+
+| Pass | 文件位置 | 功能 |
+|------|---------|------|
+| `CallGraphPass` | `crates/omniscope-pass/src/analysis/call_graph.rs:27` | 构建调用图、检测跨语言边界 |
+| `SurfaceClassifierPass` | `crates/omniscope-pass/src/analysis/surface_classifier_pass.rs:24` | L1+L2+L3 函数表面分类 |
+| `DangerSurfacePass` | `crates/omniscope-pass/src/analysis/danger_surface.rs:22` | 危险表面分析 |
+
+**影响链:**
+```
+CallGraphPass 未注册
+  → cross_lang_edges 始终为空
+  → SurfaceClassifierPass 的 L3 升级 (第84-117行) 永远收不到 FFI 边界数据
+  → function_surfaces 缺少 Boundary 分类
+  → NoiseReduction 的 SRT 层 (should_suppress_by_srt) 无有效输入
+  
+CallGraphPass 未注册
+  → FFIBoundaryPass 依赖的 cross_lang_edges 为空
+  → FFI 边界检测退化到 name-based 启发式
+```
+
+**影响:** 约 30% 的 pass 功能是死代码。Pipeline 在 `test_pipeline_with_default_passes` 中断言 `pass_count() == 11`，加上这 3 个 pass 后应为 14。
+
+---
+
+## BUG-20: NoiseReduction 是生产环境死代码 [中]
+
+**位置:** `crates/omniscope-pass/src/analysis/noise_reduction.rs`
+
+**问题:**
+`NoiseReduction` 提供了两层 FP 抑制机制：
+- `should_suppress()` — 字符串匹配快速预滤
+- `should_suppress_by_srt()` — SRT 语义判别
+
+但这两方法**在 production 代码路径中从未被调用**。仅在测试和基准测试中使用。
+
+`grep` 确认：所有 `NoiseReduction::` 调用仅在 `noise_reduction.rs` 自身的测试模块和 `analysis_passes.rs` benchmark 中出现。
+
+**影响:** FP 抑制完全未生效。IssueGate 是唯一的 FP 拦截点，缺少 NoiseReduction 的协同。
+
+---
+
+## 工作树 Diff 分析 (13 个修改文件 + 1 个新增)
+
+### 已修复的 BUG
+| BUG | 状态 | 修复文件 |
+|-----|------|---------|
+| BUG-1 (FCmp) | ✅ 已修复 | `instruction_parser.rs`, `llvm_sys_adapter.rs` |
+| BUG-2 (并行上下文) | ✅ 已修复 | `manager.rs`, `pass.rs` (Clone) |
+| BUG-3 (路径敏感误称) | ✅ 已修复 | `path_sensitive_leak.rs` (更名为 LeakDetectionPass) |
+| BUG-6 (write_to_immutable) | ✅ 已修复 | `write_to_immutable.rs` (遍历 function_bodies) |
+| BUG-8 (check_release_in_facts) | ✅ 已修复 | `path_sensitive_leak.rs` (添加 function_name 匹配) |
+| BUG-9 (wrapping_add) | ✅ 已修复 | `raw_fact_collector.rs` (改为 saturating_add) |
+| BUG-10 (FFI 名称检测) | ✅ 已修复 | `ffi_return_check.rs` (允许 CamelCase) |
+| BUG-11 (除法溢出) | ✅ 已修复 | `profiler.rs` (空值检查 + .max(1)) |
+| BUG-12 (时间戳冲突) | ✅ 已修复 | `profiler.rs` (改用单调 ID) |
+
+### 新增回归
+| 问题 | 类型 | 详情 |
+|------|------|------|
+| BUG-17 | 回归 | `classify_opcode` 未更新 (见上) |
+| BUG-18 | 潜在 | `to_ir_instruction` 在 Fcmp 时丢失谓词 (见上) |
+
+### 新增文件
+- `benches/bugfix_regression.rs` — 对 7 个已修复 BUG 的基准测试，确保性能无退化。使用 `IRInstructionKind::Fcmp`（正确）。
+
+---
+
+## 严重性汇总 (已更新)
 
 | 严重性 | 数量 | BUG-ID |
 |--------|------|--------|
-| 严重 (Critical) | 4 | BUG-1, BUG-2, BUG-3, BUG-4 |
-| 高 (High) | 4 | BUG-5, BUG-6, BUG-7, BUG-8 |
-| 中 (Medium) | 5 | BUG-9, BUG-10, BUG-11, BUG-12, BUG-13 |
-| 低 (Low) | 3 | BUG-14, BUG-15, BUG-16 |
+| 严重 (Critical) | 4 | BUG-1, BUG-2, BUG-3, BUG-19 |
+| 高 (High) | 5 | BUG-5, BUG-6, BUG-7, BUG-8, BUG-17 |
+| 中 (Medium) | 6 | BUG-9, BUG-10, BUG-11, BUG-12, BUG-13, BUG-20 |
+| 低 (Low) | 2 | BUG-15, BUG-16 |
+| 勘误 (误报) | 2 | ~~BUG-4~~, ~~BUG-14~~ |
 
 ---
 
@@ -298,8 +235,10 @@ fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
 
 1. **Name-based 启发式分析泛滥** — 5 个分析 pass 严重依赖函数名字符串匹配来判断语义属性（堆/栈/全局、内部可变性、是否参数等）。这是最突出的系统性问题，导致所有基于 SRT 的抑制机制（R-0 到 R-8）不可靠。
 
-2. **IR 分析与实际指令不匹配** — `WriteToImmutablePass` 遍历 `calls` 而非 `store` 指令（BUG-6），`llvm_sys_adapter` 映射 FCmp → Icmp（BUG-1）。多个 pass 对 LLVM IR 的数据模型理解有偏差。
+2. **IR 分析与实际指令不匹配** — `WriteToImmutablePass` 曾遍历 `calls` 而非 `store` 指令（BUG-6 已修复），`llvm_sys_adapter` 映射 FCmp → Icmp（BUG-1 已修复）。但 `classify_opcode` 仍不一致（BUG-17）。
 
-3. **并行模式不可用** — PassManager 的并行模式存在根本性的数据隔离问题（BUG-2），所有 pass 链式分析在并行模式下全部失效。
+3. **并行模式不可用** — PassManager 的并行模式存在根本性的数据隔离问题（BUG-2 已修复 — `ctx.clone()` + `#[derive(Clone)]`）。
 
-4. **文档与实现不同步** — 多处函数注释描述的行为与实际代码实现不一致（BUG-8），struct 定义与方法参数不匹配（BUG-4、BUG-14）。
+4. **Pass 注册缺失 → 大量死代码** — `CallGraphPass`、`SurfaceClassifierPass`、`DangerSurfacePass` 完全实现但从未注册到 Pipeline（BUG-19）。`NoiseReduction` 的 FP 抑制逻辑从未在生产中调用（BUG-20）。这是目前最严重的架构问题，约 30% pass 功能不可达。
+
+5. **文档与实现不同步** — 多处函数注释描述的行为与实际代码实现不一致（BUG-8 已修复）。

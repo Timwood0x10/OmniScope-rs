@@ -56,27 +56,30 @@ impl Pass for WriteToImmutablePass {
         // Build semantic tree for R-0~R-8 pattern suppression
         let mut semantic_tree = SemanticTree::new();
 
-        // Scan for store instructions that might be writing to immutable memory
-        for call in &module.calls {
-            nodes_analyzed += 1;
+        // Scan for store instructions that might be writing to immutable memory.
+        // Store instructions live in function_bodies, not in module.calls.
+        for (func_name, body) in &module.function_bodies {
+            for inst in body.instructions_of_kind(omniscope_ir::IRInstructionKind::Store) {
+                nodes_analyzed += 1;
 
-            // Skip if this is not a store operation
-            if !call.callee.contains("store") {
-                continue;
+                // Build a target symbol from the function name and store operands.
+                // Store instructions don't have a callee; use the raw text for context.
+                let target_symbol = format!(
+                    "{}->store:{}",
+                    func_name,
+                    inst.raw_text.chars().take(80).collect::<String>()
+                );
+
+                // Analyze the store target for semantic context
+                self.analyze_store_target(
+                    ctx,
+                    &mut semantic_tree,
+                    &target_symbol,
+                    func_name,
+                    &inst.raw_text,
+                    &mut issues,
+                );
             }
-
-            // Check if we're writing to a potentially immutable location
-            let target_symbol = format!("{}->{}", call.caller, call.callee);
-
-            // Analyze the store target for semantic context
-            self.analyze_store_target(
-                ctx,
-                &mut semantic_tree,
-                &target_symbol,
-                &call.caller,
-                &call.callee,
-                &mut issues,
-            );
         }
 
         // Store semantic tree for downstream passes
