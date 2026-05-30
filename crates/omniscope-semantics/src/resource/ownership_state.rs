@@ -62,6 +62,22 @@ impl ResourceInstance {
         }
     }
 
+    /// Creates a new resource instance in the Borrowed state.
+    ///
+    /// Used for stack-allocated or borrowed pointers that escape to
+    /// C callbacks — no prior Acquire edge exists for them.
+    pub fn new_borrowed(id: u64, family: FamilyId) -> Self {
+        Self {
+            id,
+            family,
+            state: OwnershipState::Borrowed,
+            contract: PointerContract::Borrowed,
+            acquired_in: None,
+            released_in: None,
+            function_name: String::new(),
+        }
+    }
+
     /// Transitions the state machine based on an event.
     ///
     /// Returns `Ok(())` if the transition is valid, or `Err(OwnershipError)`
@@ -198,6 +214,52 @@ impl ResourceInstance {
                     }),
                 }
             }
+            OwnershipEvent::ConditionalRelease { function } => {
+                match self.state {
+                    // Retained + ConditionalRelease → Acquired
+                    // (refcount decrement, but resource may still be alive
+                    // if other references exist — back to base state).
+                    OwnershipState::Retained => {
+                        self.state = OwnershipState::Acquired;
+                        let _ = function; // not recorded as final release
+                        Ok(())
+                    }
+                    // Acquired + ConditionalRelease → Released
+                    // (only reference, so conditional release is definitive).
+                    OwnershipState::Acquired => {
+                        self.state = OwnershipState::Released;
+                        self.released_in = Some(function);
+                        Ok(())
+                    }
+                    // Escaped + ConditionalRelease → Released
+                    // (risky, same semantics as unconditional Release).
+                    OwnershipState::Escaped(_) => {
+                        self.state = OwnershipState::Released;
+                        self.released_in = Some(function);
+                        Ok(())
+                    }
+                    // Already released — double release regardless of
+                    // conditionality.
+                    OwnershipState::Released => {
+                        Err(OwnershipError::DoubleRelease {
+                            instance: self.id,
+                            family: self.family,
+                        })
+                    }
+                    OwnershipState::Borrowed => {
+                        Err(OwnershipError::ReleaseBorrowed { instance: self.id })
+                    }
+                    OwnershipState::Transferred
+                    | OwnershipState::Untracked
+                    | OwnershipState::Unknown => {
+                        Err(OwnershipError::InvalidTransition {
+                            instance: self.id,
+                            from_state: self.state,
+                            event: "ConditionalRelease",
+                        })
+                    }
+                }
+            }
         }
     }
 
@@ -217,8 +279,14 @@ impl ResourceInstance {
 /// Events that can transition the ownership state machine.
 #[derive(Debug, Clone, Copy)]
 pub enum OwnershipEvent {
-    /// Resource is released.
+    /// Resource is unconditionally released (freed/destroyed).
     Release { function: u64 },
+    /// Resource is conditionally released (e.g. Py_DECREF, JNI DeleteLocalRef).
+    ///
+    /// The release only happens when the refcount reaches zero or the scope
+    /// ends. For refcounted resources, this decrements the count but the
+    /// resource may still be alive if other references exist.
+    ConditionalRelease { function: u64 },
     /// Resource escapes with the given kind.
     Escape { kind: EscapeKind },
     /// Ownership is transferred.
@@ -733,6 +801,161 @@ mod tests {
             instance.released_in,
             Some(55),
             "released_in must be set even for escaped-then-released resources"
+        );
+    }
+
+    // ── ConditionalRelease event tests ──
+
+    /// Objective: Verify that ConditionalRelease from Retained transitions
+    ///            back to Acquired (refcount decrement, but resource alive).
+    /// Invariants: Retained + ConditionalRelease → Acquired; NOT Released.
+    #[test]
+    fn test_conditional_release_from_retained_to_acquired() {
+        let mut instance =
+            ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
+        // Acquired → Retained
+        instance
+            .transition(OwnershipEvent::Retain)
+            .expect("Retain from Acquired must succeed");
+        assert_eq!(instance.state, OwnershipState::Retained);
+
+        // Retained → Acquired (refcount still > 0)
+        let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 10 });
+        assert!(
+            result.is_ok(),
+            "ConditionalRelease from Retained must succeed"
+        );
+        assert_eq!(
+            instance.state,
+            OwnershipState::Acquired,
+            "ConditionalRelease from Retained must go to Acquired, not Released"
+        );
+        assert!(
+            instance.is_leak_candidate(),
+            "Acquired after ConditionalRelease is still a leak candidate"
+        );
+    }
+
+    /// Objective: Verify that ConditionalRelease from Acquired transitions
+    ///            to Released (only reference, so decrement is definitive).
+    /// Invariants: Acquired + ConditionalRelease → Released.
+    #[test]
+    fn test_conditional_release_from_acquired_to_released() {
+        let mut instance =
+            ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
+        assert_eq!(instance.state, OwnershipState::Acquired);
+
+        let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 20 });
+        assert!(
+            result.is_ok(),
+            "ConditionalRelease from Acquired must succeed"
+        );
+        assert_eq!(
+            instance.state,
+            OwnershipState::Released,
+            "ConditionalRelease from Acquired must transition to Released"
+        );
+        assert_eq!(
+            instance.released_in,
+            Some(20),
+            "released_in must be set for definitive ConditionalRelease"
+        );
+    }
+
+    /// Objective: Verify the full Python refcount pattern:
+    ///            Acquired → Retained → ConditionalRelease → Acquired
+    ///            This models Py_INCREF / Py_DECREF where the object stays alive.
+    /// Invariants: After the cycle, state == Acquired (object still alive).
+    #[test]
+    fn test_incr_decr_cycle_preserves_acquired() {
+        let mut instance =
+            ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
+
+        // Py_INCREF
+        instance
+            .transition(OwnershipEvent::Retain)
+            .expect("Retain must succeed");
+        assert_eq!(instance.state, OwnershipState::Retained);
+
+        // Py_DECREF (refcount > 0 after decrement)
+        instance
+            .transition(OwnershipEvent::ConditionalRelease { function: 30 })
+            .expect("ConditionalRelease from Retained must succeed");
+        assert_eq!(
+            instance.state,
+            OwnershipState::Acquired,
+            "After Py_INCREF/Py_DECREF cycle, object is still Acquired"
+        );
+        assert!(
+            instance.is_leak_candidate(),
+            "Still a leak candidate — needs a final release"
+        );
+    }
+
+    /// Objective: Verify that ConditionalRelease from Released is DoubleRelease.
+    /// Invariants: Already-released resource cannot be conditionally released.
+    #[test]
+    fn test_conditional_release_from_released_is_double_release() {
+        let mut instance =
+            ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
+        instance
+            .transition(OwnershipEvent::Release { function: 40 })
+            .expect("Release must succeed");
+
+        let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 41 });
+        assert!(result.is_err(), "ConditionalRelease from Released must fail");
+        assert_eq!(
+            instance.state,
+            OwnershipState::Released,
+            "State must remain Released"
+        );
+    }
+
+    /// Objective: Verify that ConditionalRelease from Borrowed is an error.
+    /// Invariants: Borrowed resources cannot be released at all.
+    #[test]
+    fn test_conditional_release_from_borrowed_is_error() {
+        let mut instance = ResourceInstance::new_borrowed(1, FamilyId::C_HEAP);
+        let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 42 });
+        assert!(
+            result.is_err(),
+            "ConditionalRelease from Borrowed must fail"
+        );
+    }
+
+    /// Objective: Verify that ConditionalRelease from Escaped transitions
+    ///            to Released (same semantics as unconditional Release).
+    /// Invariants: Escaped + ConditionalRelease → Released.
+    #[test]
+    fn test_conditional_release_from_escaped_to_released() {
+        let mut instance =
+            ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
+        instance
+            .transition(OwnershipEvent::Escape {
+                kind: EscapeKind::RawPointer,
+            })
+            .expect("Escape must succeed");
+
+        let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 50 });
+        assert!(result.is_ok(), "ConditionalRelease from Escaped must succeed");
+        assert_eq!(instance.state, OwnershipState::Released);
+    }
+
+    // ── new_borrowed() factory method tests ──
+
+    /// Objective: Verify that new_borrowed() creates an instance in Borrowed
+    ///            state with Borrowed contract.
+    /// Invariants: state == Borrowed, contract == Borrowed.
+    #[test]
+    fn test_new_borrowed_factory() {
+        let instance = ResourceInstance::new_borrowed(42, FamilyId::C_HEAP);
+        assert_eq!(instance.id, 42);
+        assert_eq!(instance.family, FamilyId::C_HEAP);
+        assert_eq!(instance.state, OwnershipState::Borrowed);
+        assert_eq!(instance.contract, PointerContract::Borrowed);
+        assert!(
+            !instance.is_leak_candidate(),
+            "Borrowed resource is NOT a leak candidate"
         );
     }
 

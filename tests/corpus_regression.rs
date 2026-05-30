@@ -12,7 +12,7 @@
 //!
 //! The JSON output is printed to stdout for capture by CI scripts.
 
-use omniscope_ir::IRLoader;
+use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
 use std::path::PathBuf;
 
@@ -74,23 +74,26 @@ fn test_corpus_regression() {
         let file_name = ll_file.file_name().unwrap().to_string_lossy().to_string();
 
         // Load the IR module
-        let mut loader = IRLoader::new();
-        if loader.load_from_file(ll_file).is_err() {
-            println!("  [SKIP] {} — could not load IR", file_name);
-            results.push(CorpusStats {
-                file: file_name,
-                candidate_count: 0,
-                reportable_count: 0,
-                suppressed_count: 0,
-                total_nodes: 0,
-                pass_count: 0,
-            });
-            continue;
-        }
+        let module = match IRModule::load_from_file(ll_file) {
+            Ok(m) => m,
+            Err(_) => {
+                println!("  [SKIP] {} — could not load IR", file_name);
+                results.push(CorpusStats {
+                    file: file_name,
+                    candidate_count: 0,
+                    reportable_count: 0,
+                    suppressed_count: 0,
+                    total_nodes: 0,
+                    pass_count: 0,
+                });
+                continue;
+            }
+        };
 
         // Build and run pipeline
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
+        pipeline.set_ir_module(module);
 
         let pipeline_result = pipeline.run().unwrap_or_else(|e| {
             eprintln!("  [ERROR] {} — pipeline failed: {}", file_name, e);

@@ -73,17 +73,13 @@ fn bench_parse_fixture_files(c: &mut Criterion) {
 
     for fixture in fixtures() {
         let ir = fixture.ir;
-        group.bench_with_input(
-            BenchmarkId::new("parse", fixture.name),
-            ir,
-            |b, ir_text| {
-                b.iter(|| {
-                    let module = IRModule::parse_from_text(black_box(ir_text));
-                    black_box(module.functions.len());
-                    black_box(module.calls.len());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("parse", fixture.name), ir, |b, ir_text| {
+            b.iter(|| {
+                let module = IRModule::parse_from_text(black_box(ir_text));
+                black_box(module.functions.len());
+                black_box(module.calls.len());
+            });
+        });
     }
 
     group.finish();

@@ -1,5 +1,4 @@
 # OmniScope-rs .gitignore
-# Apache 2.0 License
 
 # Build artifacts
 /target/
@@ -7,22 +6,22 @@
 **/*.rs.bk
 *.pdb
 
-# Cargo
-Cargo.lock
+# Cargo (keep Cargo.lock for binary crate)
 **/Cargo.lock
 
 # IDE and Editor
 .vscode/
 .idea/
-.joycode/
-.CodeGraph/
-.claude/
-
+.fleet/
 *.swp
 *.swo
 *~
+
+# Tool directories
+.joycode/
+.claude/
 .codeartsdoer/
-.fleet/
+.codegraph/
 
 # macOS
 .DS_Store
@@ -36,16 +35,6 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Linux
-*~
-.fuse_hidden*
-.directory
-.Trash-*
-.nfs*
-
-# Documentation (keep aim/ in repo for now)
-# aim/
-
 # Test and Coverage
 /coverage/
 *.profraw
@@ -54,25 +43,30 @@ $RECYCLE.BIN/
 /cobertura.xml
 *.lcov
 
-# Benchmark
-/benches/target/
-/benches/*.svg
-
 # Profiling
 flamegraph.svg
 perf.data
 perf.data.old
 
-# Temporary files
+# Temporary and backup files
 *.tmp
 *.temp
 *.log
-
-# Backup files
 *.bak
 *.backup
+*.orig
+*.rej
 
-# Compressed files
+# LLVM build artifacts (NOT source .ll corpus files)
+*.bc
+*.o
+*.a
+*.lib
+*.obj
+pass/build/
+tests/integration/
+
+# Compressed archives
 *.zip
 *.tar.gz
 *.tar.bz2
@@ -81,29 +75,17 @@ perf.data.old
 # Dependency directories
 node_modules/
 
-# Python (if used for scripts)
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 .Python
-*.so
 
-# LLVM
-*.ll
-*.bc
-*.s
-*.o
-*.a
-*.lib
-*.obj
-
-# Output files
+# Output/cache
 /output/
 /results/
 *.json.bak
 *.toml.bak
-
-# Cache
 .cache/
 *.cache
 
@@ -115,27 +97,13 @@ __pycache__/
 secrets/
 credentials/
 
-# Database
+# Database files
 *.db
 *.sqlite
 *.sqlite3
 
-# Jupyter notebooks
+# Jupyter
 .ipynb_checkpoints/
 
-# Docker
-.docker/
-
-# Kubernetes
-*.kubeconfig
-
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-
-# Other
-*.orig
-*.rej
-
+# aim (ML experiment tracking)
 aim/

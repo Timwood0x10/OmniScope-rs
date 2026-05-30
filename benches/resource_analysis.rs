@@ -8,9 +8,7 @@
 //! Run: `cargo bench --bench resource_analysis`
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use omniscope_pass::{
-    ContractEdge, ContractGraph, OwnershipSolverPass, Pass, PassContext,
-};
+use omniscope_pass::{ContractEdge, ContractGraph, OwnershipSolverPass, Pass, PassContext};
 use omniscope_types::{Effect, FamilyId};
 
 // ========================================================================
@@ -119,10 +117,7 @@ fn build_multi_family_graph(n: usize) -> ContractGraph {
         graph.add_edge(ContractEdge {
             source: instance_id,
             target: 0,
-            effect: Effect::Release {
-                family,
-                arg: 0,
-            },
+            effect: Effect::Release { family, arg: 0 },
             function: (i as u64) + 1,
             function_name: format!("release_{i}"),
             caller_name: format!("func_{}", i % 10),

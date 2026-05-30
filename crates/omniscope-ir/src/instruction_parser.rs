@@ -77,6 +77,16 @@ pub struct IRInstruction {
     pub icmp_pred: Option<String>,
     /// Raw text of the instruction line (for evidence/debugging)
     pub raw_text: String,
+    /// Result type of the instruction (e.g., "i64", "ptr", "void").
+    /// Populated by the llvm-sys adapter; `None` for the text parser.
+    pub result_type: Option<String>,
+    /// Element type for load/store/GEP instructions.
+    /// For `load T, ptr %p`, this is `T`; for `getelementptr T, ...`, this is `T`.
+    /// Populated by the llvm-sys adapter; `None` for the text parser.
+    pub element_type: Option<String>,
+    /// Function signature for call instructions (e.g., "i32 (ptr, i32)").
+    /// Populated by the llvm-sys adapter; `None` for the text parser.
+    pub function_signature: Option<String>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -139,6 +149,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -152,6 +165,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -165,6 +181,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -179,6 +198,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -192,6 +214,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: Some("cmpxchg".to_string()),
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -205,6 +230,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -219,6 +247,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -233,6 +264,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -246,6 +280,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -264,6 +301,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                 atomic_op: None,
                 icmp_pred: None,
                 raw_text,
+                result_type: None,
+                element_type: None,
+                function_signature: None,
             });
         }
         // Check for indirect call: pattern like "call ... %reg(...)"
@@ -278,6 +318,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                 atomic_op: None,
                 icmp_pred: None,
                 raw_text,
+                result_type: None,
+                element_type: None,
+                function_signature: None,
             });
         }
         // Unknown call format — still emit as Call to avoid silently dropping
@@ -289,6 +332,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -302,6 +348,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -315,6 +364,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -328,6 +380,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             atomic_op: None,
             icmp_pred: None,
             raw_text,
+            result_type: None,
+            element_type: None,
+            function_signature: None,
         });
     }
 
@@ -355,6 +410,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                     atomic_op: None,
                     icmp_pred: None,
                     raw_text,
+                    result_type: None,
+                    element_type: None,
+                    function_signature: None,
                 });
             }
         }
@@ -375,6 +433,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                 atomic_op: None,
                 icmp_pred: None,
                 raw_text,
+                result_type: None,
+                element_type: None,
+                function_signature: None,
             });
         }
     }
@@ -389,6 +450,9 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
         atomic_op: None,
         icmp_pred: None,
         raw_text,
+        result_type: None,
+        element_type: None,
+        function_signature: None,
     })
 }
 

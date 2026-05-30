@@ -313,23 +313,41 @@ impl IRModule {
         Ok(module)
     }
 
-    /// Parse datalayout information to extract pointer size and endianness
-    fn parse_datalayout_info(&mut self) {
+    /// Parse datalayout information to extract pointer size and endianness.
+    ///
+    /// This is also called from [`crate::ir_model`] during model-to-module
+    /// conversion so that pointer size and endianness are derived from the
+    /// data layout string populated by the C++ pass.
+    pub(crate) fn parse_datalayout_info(&mut self) {
         if let Some(ref layout) = self.data_layout.data_layout {
             // Parse endianness (first character: 'e' = little, 'E' = big)
             if let Some(first_char) = layout.chars().next() {
                 self.data_layout.little_endian = Some(first_char == 'e');
             }
 
-            // Parse pointer size (format: p:64:64 or p0:64:64)
+            // Parse pointer size for the default address space (0).
+            // Format: "p:64:64", "p0:64:64", or "p270:32:32" (address-space-specific).
+            // Only the generic pointer (no address space or `p0:`) sets pointer_size.
             for part in layout.split('-') {
-                if part.starts_with('p') {
-                    // Extract pointer size from format like "p:64:64" or "p0:64:64"
-                    let parts: Vec<&str> = part.split(':').collect();
-                    if parts.len() >= 2 {
-                        if let Ok(size) = parts[1].parse::<u32>() {
-                            self.data_layout.pointer_size = Some(size);
-                            break;
+                if let Some(rest) = part.strip_prefix('p') {
+                    // Generic pointer: "p:64:64" (no address space number)
+                    if rest.starts_with(':') {
+                        let parts: Vec<&str> = rest.split(':').collect();
+                        if parts.len() >= 2 {
+                            if let Ok(size) = parts[1].parse::<u32>() {
+                                self.data_layout.pointer_size = Some(size);
+                                break;
+                            }
+                        }
+                    }
+                    // Address space 0: "p0:64:64"
+                    if let Some(as_rest) = rest.strip_prefix("0:") {
+                        let parts: Vec<&str> = as_rest.split(':').collect();
+                        if !parts.is_empty() {
+                            if let Ok(size) = parts[0].parse::<u32>() {
+                                self.data_layout.pointer_size = Some(size);
+                                break;
+                            }
                         }
                     }
                 }

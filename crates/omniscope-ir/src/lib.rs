@@ -1,45 +1,41 @@
 //! OmniScope IR - LLVM IR abstraction layer
 //!
-//! This crate provides safe abstractions over LLVM IR for analysis,
-//! including:
+//! This crate provides IR parsing and model conversion for analysis:
 //!
-//! - IR loading from .ll and .bc files
-//! - Safe wrappers for LLVM types
-//! - Debug information extraction
+//! - IR loading from `.ll` files (text parser)
+//! - IR loading via C++ SafetyExportPass JSON (Plan A)
+//! - IR loading via llvm-sys C API (Plan C, stub)
 //! - Source location tracking
-//! - IR view abstractions
-//! - IR text format parsing
-//! - Platform-specific filtering
+//! - Rich IR model with full type information
 //!
 //! # Example
 //!
 //! ```rust,no_run
-//! use omniscope_ir::IRLoader;
-//! use std::path::Path;
+//! use omniscope_ir::IRModule;
 //!
-//! let mut loader = IRLoader::new();
-//! // loader.load_from_file(Path::new("test.ll")).unwrap();
+//! let module = IRModule::parse_from_text("define void @foo() { ret void }");
 //! ```
 
-pub mod debug_info;
 pub mod instruction_parser;
-pub mod loader;
+pub mod ir_model;
+#[cfg(feature = "llvm-backend")]
+pub mod llvm_sys_adapter;
+pub mod loader_v2;
 pub mod location;
 pub mod parser;
 pub mod platform;
-pub mod safe_wrappers;
-pub mod view;
 
 // Re-exports
-pub use debug_info::{DebugInfoExtractor, TypeInfo};
-pub use loader::IRLoader;
+pub use ir_model::{
+    load_from_json, parse_from_json, IRBasicBlock, IRDeclaration, IRFunction, IRGlobalVariable,
+    IRInstructionModel, IRModuleModel,
+};
+pub use loader_v2::{load_ir, LoadStrategy};
 pub use location::{LocationManager, SourceLocation};
 pub use parser::{
     CallInstruction, Function, FunctionBody, IRInstruction, IRInstructionKind, IRModule,
 };
 pub use platform::{Architecture, Platform, PlatformFilterRegistry, PlatformInfo};
-pub use safe_wrappers::{SafeBasicBlock, SafeFunction, SafeInstruction};
-pub use view::{BasicBlockView, FunctionView, InstructionView, ModuleView};
 
 #[cfg(test)]
 mod tests {
@@ -47,9 +43,6 @@ mod tests {
 
     #[test]
     fn test_ir_module_exports() {
-        // Test that all exports are available
-        let _loader = IRLoader::new();
-        let _debug_info = DebugInfoExtractor::new();
         let _location_manager = LocationManager::new();
     }
 }

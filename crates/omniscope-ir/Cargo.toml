@@ -10,15 +10,21 @@ repository = "https://github.com/Timwood0x10/OmniScope-rs"
 keywords = ["static-analysis", "llvm", "ir", "parser", "ffi"]
 categories = ["development-tools", "development-tools::debugging", "parser-implementations"]
 
+[features]
+default = []
+llvm-backend = ["llvm-sys"]
+
 [dependencies]
 omniscope-core = { path = "../omniscope-core" }
 omniscope-types = { path = "../omniscope-types" }
 
-inkwell = { workspace = true }
+anyhow = { workspace = true }
+llvm-sys = { version = "221", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true }
-tempfile = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

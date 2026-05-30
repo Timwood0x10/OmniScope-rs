@@ -84,176 +84,121 @@ impl Pass for OwnershipSolverPass {
                     Effect::Acquire { .. } => {
                         // Already handled above.
                     }
-                    Effect::Release { arg, .. } | Effect::ConditionalRelease { arg, .. } => {
-                        // The source field holds the instance ID for release edges.
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            let instance = &mut instances[idx];
-                            // If the instance is already released, the transition will
-                            // return DoubleRelease error — we record it but don't fail.
-                            match instance.transition(OwnershipEvent::Release {
+                    Effect::Release { .. } => {
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Release {
                                 function: edge.function,
-                            }) {
-                                Ok(()) => {}
-                                Err(omniscope_semantics::OwnershipError::DoubleRelease {
-                                    ..
-                                }) => {
-                                    tracing::debug!(
-                                        "DoubleRelease detected for instance {} in function {}",
-                                        edge.source,
-                                        edge.function_name
-                                    );
-                                    // Keep the instance in Released state — the candidate
-                                    // builder will generate a DoubleRelease candidate from
-                                    // the contract graph edge count.
-                                }
-                                Err(omniscope_semantics::OwnershipError::ReleaseBorrowed {
-                                    ..
-                                }) => {
-                                    tracing::debug!(
-                                        "ReleaseBorrowed detected for instance {} in function {}",
-                                        edge.source,
-                                        edge.function_name
-                                    );
-                                }
-                                Err(omniscope_semantics::OwnershipError::InvalidTransition {
-                                    from_state,
-                                    event,
-                                    ..
-                                }) => {
-                                    tracing::debug!(
-                                        "Invalid Release transition for instance {} from {:?} \
-                                         in function {} (event: {})",
-                                        edge.source,
-                                        from_state,
-                                        edge.function_name,
-                                        event
-                                    );
-                                }
-                            }
-                        }
-                        let _ = arg; // suppress unused warning
+                            },
+                            &edge.function_name,
+                        );
+                    }
+                    Effect::ConditionalRelease { .. } => {
+                        // ConditionalRelease uses a distinct event so the state
+                        // machine can model refcount semantics correctly:
+                        // Retained + ConditionalRelease → Acquired (refcount > 0)
+                        // Acquired + ConditionalRelease → Released (last ref)
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::ConditionalRelease {
+                                function: edge.function,
+                            },
+                            &edge.function_name,
+                        );
                     }
                     Effect::Retain { .. } => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Retain) {
-                                tracing::debug!(
-                                    "Retain transition error for instance {}: {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Retain,
+                            &edge.function_name,
+                        );
                     }
                     Effect::ReturnsOwned { .. } => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Escape {
                                 kind: EscapeKind::ReturnToCaller,
-                            }) {
-                                tracing::debug!(
-                                    "Escape(ReturnToCaller) transition error for instance {}: \
-                                     {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                            },
+                            &edge.function_name,
+                        );
                     }
                     Effect::ReturnsBorrowed => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Borrow) {
-                                tracing::debug!(
-                                    "Borrow transition error for instance {}: {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Borrow,
+                            &edge.function_name,
+                        );
                     }
                     Effect::ConsumesArg { .. } => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Transfer) {
-                                tracing::debug!(
-                                    "Transfer transition error for instance {}: {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Transfer,
+                            &edge.function_name,
+                        );
                     }
                     Effect::StoresArgToOwner { .. } => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Escape {
                                 kind: EscapeKind::FieldStore,
-                            }) {
-                                tracing::debug!(
-                                    "Escape(FieldStore) transition error for instance {}: \
-                                     {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                            },
+                            &edge.function_name,
+                        );
                     }
                     Effect::StoresArgToGlobal { .. } => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Escape {
                                 kind: EscapeKind::GlobalStore,
-                            }) {
-                                tracing::debug!(
-                                    "Escape(GlobalStore) transition error for instance {}: \
-                                     {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                            },
+                            &edge.function_name,
+                        );
                     }
                     Effect::InitializesOutParam { .. } => {
-                        if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Escape {
                                 kind: EscapeKind::OutParam,
-                            }) {
-                                tracing::debug!(
-                                    "Escape(OutParam) transition error for instance {}: \
-                                     {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
-                        }
+                            },
+                            &edge.function_name,
+                        );
                     }
                     Effect::EscapesToCallback { .. } => {
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
-                                kind: EscapeKind::Callback,
-                            }) {
-                                tracing::debug!(
-                                    "Escape(Callback) transition error for instance {}: \
-                                     {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
-                            }
+                            apply_transition_at(
+                                &mut instances,
+                                idx,
+                                OwnershipEvent::Escape {
+                                    kind: EscapeKind::Callback,
+                                },
+                                &edge.function_name,
+                            );
                         } else {
                             // Stack/borrowed userdata: no prior Acquire, so create a
                             // Borrowed instance directly. This models the case where
                             // a stack-allocated pointer escapes to a C callback.
-                            // Note: ResourceInstance::new() always starts in Acquired,
-                            // so we must explicitly transition to Borrowed.
-                            let mut instance = ResourceInstance::new(
+                            let mut instance = ResourceInstance::new_borrowed(
                                 edge.source,
                                 edge.family.unwrap_or(FamilyId::C_HEAP),
-                                PointerContract::Borrowed,
                             );
-                            instance.state = OwnershipState::Borrowed;
                             instance.function_name = edge.caller_name.clone();
                             if let std::collections::hash_map::Entry::Vacant(entry) =
                                 instance_map.entry(edge.source)
@@ -263,60 +208,51 @@ impl Pass for OwnershipSolverPass {
                             } else {
                                 tracing::warn!(
                                     instance_id = edge.source,
-                                    "duplicate instance_id in callback escape edge — first instance kept, duplicate dropped"
+                                    "duplicate instance_id in callback escape edge — \
+                                     first instance kept, duplicate dropped"
                                 );
                             }
                         }
                     }
-                    Effect::OwnershipEscape { .. } => {
+                    Effect::OwnershipEscape { result, .. } => {
                         // into_raw: ownership escapes to raw pointer.
                         // The instance is still allocated but ownership is now
                         // tracked outside Rust's type system.
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            if let Err(e) = instances[idx].transition(OwnershipEvent::Escape {
-                                kind: EscapeKind::RawPointer,
-                            }) {
-                                tracing::debug!(
-                                    "Escape(RawPointer) transition error for instance {}: \
-                                     {:?} in function {}",
-                                    edge.source,
-                                    e,
-                                    edge.function_name
-                                );
+                            apply_transition_at(
+                                &mut instances,
+                                idx,
+                                OwnershipEvent::Escape {
+                                    kind: EscapeKind::RawPointer,
+                                },
+                                &edge.function_name,
+                            );
+                            // Register the raw-pointer value ID so downstream
+                            // passes can trace data flow through the escaped
+                            // pointer. The escaped instance retains its original
+                            // ID; `result` is an alias.
+                            if let std::collections::hash_map::Entry::Vacant(entry) =
+                                instance_map.entry(result)
+                            {
+                                entry.insert(idx);
                             }
                         }
                     }
                     Effect::OwnershipReclaim { family, result } => {
                         // from_raw: ownership reclaimed from raw pointer.
-                        // Transition the escaped instance out of Escaped state so that
-                        // subsequent reclaim edges targeting the same escape do not
-                        // produce a false DoubleReclaim, and the reclaimed instance
-                        // does not start orphaned (false ConditionalLeak).
+                        // Transition the escaped instance out of Escaped state so
+                        // that subsequent reclaim edges targeting the same escape
+                        // do not produce a false DoubleReclaim, and the reclaimed
+                        // instance does not start orphaned (false ConditionalLeak).
                         if let Some(&idx) = instance_map.get(&edge.source) {
-                            match instances[idx].transition(OwnershipEvent::Release {
-                                function: edge.function,
-                            }) {
-                                Ok(()) => {}
-                                Err(omniscope_semantics::OwnershipError::DoubleRelease {
-                                    ..
-                                }) => {
-                                    tracing::debug!(
-                                        "DoubleRelease detected for escaped instance {} \
-                                         during reclaim in function {}",
-                                        edge.source,
-                                        edge.function_name
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        "Release transition error for escaped instance {} \
-                                         during reclaim in function {}: {:?}",
-                                        edge.source,
-                                        edge.function_name,
-                                        e
-                                    );
-                                }
-                            }
+                            apply_transition_at(
+                                &mut instances,
+                                idx,
+                                OwnershipEvent::Release {
+                                    function: edge.function,
+                                },
+                                &edge.function_name,
+                            );
                         }
                         // Create a new ResourceInstance for the reclaimed resource.
                         let mut instance =
@@ -346,6 +282,38 @@ impl Pass for OwnershipSolverPass {
             .with_duration(start.elapsed().as_millis() as u64);
 
         Ok(result)
+    }
+}
+
+/// Applies an ownership transition event to the instance identified by
+/// `instance_id`, logging errors at debug level without failing the pass.
+fn apply_transition(
+    instances: &mut [ResourceInstance],
+    instance_map: &std::collections::HashMap<u64, usize>,
+    instance_id: u64,
+    event: OwnershipEvent,
+    function_name: &str,
+) {
+    if let Some(&idx) = instance_map.get(&instance_id) {
+        apply_transition_at(instances, idx, event, function_name);
+    }
+}
+
+/// Applies an ownership transition event to the instance at the given
+/// index, logging errors at debug level without failing the pass.
+fn apply_transition_at(
+    instances: &mut [ResourceInstance],
+    idx: usize,
+    event: OwnershipEvent,
+    function_name: &str,
+) {
+    if let Err(e) = instances[idx].transition(event) {
+        tracing::debug!(
+            "Transition error for instance {} in {}: {:?}",
+            instances[idx].id,
+            function_name,
+            e
+        );
     }
 }
 

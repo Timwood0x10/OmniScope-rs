@@ -11,6 +11,10 @@ readme = "README.md"
 keywords = ["static-analysis", "llvm", "ffi", "security", "analyzer"]
 categories = ["development-tools", "development-tools::debugging"]
 
+[features]
+default = []
+llvm-backend = ["omniscope-ir/llvm-backend"]
+
 [dependencies]
 chrono = { workspace = true }
 
@@ -50,7 +54,8 @@ members = [
 
 [workspace.dependencies]
 # === LLVM Bindings ===
-inkwell = { version = "0.9.0", features = ["llvm12-0"] }
+# llvm-sys is optional — only pulled when llvm-backend feature is enabled.
+# Defined in omniscope-ir/Cargo.toml directly, not in workspace.
 
 # === Serialization ===
 serde = { version = "1.0", features = ["derive"] }
