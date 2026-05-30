@@ -240,24 +240,20 @@ impl ResourceInstance {
                     }
                     // Already released — double release regardless of
                     // conditionality.
-                    OwnershipState::Released => {
-                        Err(OwnershipError::DoubleRelease {
-                            instance: self.id,
-                            family: self.family,
-                        })
-                    }
+                    OwnershipState::Released => Err(OwnershipError::DoubleRelease {
+                        instance: self.id,
+                        family: self.family,
+                    }),
                     OwnershipState::Borrowed => {
                         Err(OwnershipError::ReleaseBorrowed { instance: self.id })
                     }
                     OwnershipState::Transferred
                     | OwnershipState::Untracked
-                    | OwnershipState::Unknown => {
-                        Err(OwnershipError::InvalidTransition {
-                            instance: self.id,
-                            from_state: self.state,
-                            event: "ConditionalRelease",
-                        })
-                    }
+                    | OwnershipState::Unknown => Err(OwnershipError::InvalidTransition {
+                        instance: self.id,
+                        from_state: self.state,
+                        event: "ConditionalRelease",
+                    }),
                 }
             }
         }
@@ -903,7 +899,10 @@ mod tests {
             .expect("Release must succeed");
 
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 41 });
-        assert!(result.is_err(), "ConditionalRelease from Released must fail");
+        assert!(
+            result.is_err(),
+            "ConditionalRelease from Released must fail"
+        );
         assert_eq!(
             instance.state,
             OwnershipState::Released,
@@ -928,8 +927,7 @@ mod tests {
     /// Invariants: Escaped + ConditionalRelease → Released.
     #[test]
     fn test_conditional_release_from_escaped_to_released() {
-        let mut instance =
-            ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
+        let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Escape {
                 kind: EscapeKind::RawPointer,
@@ -937,7 +935,10 @@ mod tests {
             .expect("Escape must succeed");
 
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 50 });
-        assert!(result.is_ok(), "ConditionalRelease from Escaped must succeed");
+        assert!(
+            result.is_ok(),
+            "ConditionalRelease from Escaped must succeed"
+        );
         assert_eq!(instance.state, OwnershipState::Released);
     }
 

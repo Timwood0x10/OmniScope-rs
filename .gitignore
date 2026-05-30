@@ -64,6 +64,7 @@ perf.data.old
 *.lib
 *.obj
 pass/build/
+pass/compile_commands.json
 tests/integration/
 
 # Compressed archives

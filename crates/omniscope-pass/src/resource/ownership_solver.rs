@@ -11,7 +11,7 @@
 //! to detect leak candidates, double-release, and borrow-escape issues.
 
 use omniscope_core::Result;
-use omniscope_semantics::{OwnershipEvent, OwnershipState, ResourceInstance};
+use omniscope_semantics::{OwnershipEvent, ResourceInstance};
 use omniscope_types::{Effect, EscapeKind, FamilyId, PointerContract};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -328,7 +328,8 @@ mod tests {
     use super::*;
     use crate::pass::PassContext;
     use crate::resource::contract_graph_builder::ContractEdge;
-    use omniscope_types::FamilyId;
+    use omniscope_semantics::OwnershipState;
+    use omniscope_types::{EscapeKind, FamilyId};
 
     #[test]
     fn test_ownership_solver_creation() {
@@ -563,6 +564,344 @@ mod tests {
             reclaimed.state,
             OwnershipState::Acquired,
             "Reclaimed instance must start in Acquired state"
+        );
+    }
+
+    // ── ConditionalRelease solver integration tests ──
+
+    /// Objective: Verify that ConditionalRelease from Retained goes back to
+    ///            Acquired (Py_INCREF / Py_DECREF cycle, object stays alive).
+    /// Invariants: Retained + ConditionalRelease → Acquired, not Released.
+    #[test]
+    fn test_solver_conditional_release_from_retained() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+
+        // Acquire (e.g. PyObject_New)
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::PYTHON_OBJECT,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "PyObject_New".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_OBJECT),
+        });
+
+        // Retain (Py_INCREF)
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::Retain {
+                family: FamilyId::PYTHON_OBJECT,
+                arg: 0,
+            },
+            function: 1,
+            function_name: "Py_INCREF".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_OBJECT),
+        });
+
+        // ConditionalRelease (Py_DECREF — refcount > 0 after decrement)
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::ConditionalRelease {
+                family: FamilyId::PYTHON_OBJECT,
+                arg: 0,
+            },
+            function: 2,
+            function_name: "Py_DECREF".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_OBJECT),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = states.expect("ownership_states must be stored");
+        let inst = &states[0];
+
+        assert_eq!(
+            inst.state,
+            OwnershipState::Acquired,
+            "Py_INCREF + Py_DECREF cycle must return to Acquired, not Released"
+        );
+        assert!(
+            inst.is_leak_candidate(),
+            "Acquired after Py_DECREF cycle is still a leak candidate"
+        );
+    }
+
+    /// Objective: Verify that ConditionalRelease from Acquired transitions
+    ///            to Released (only reference, so decrement is definitive).
+    /// Invariants: Acquired + ConditionalRelease → Released.
+    #[test]
+    fn test_solver_conditional_release_from_acquired() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+
+        // Acquire (e.g. PyObject_New)
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::PYTHON_OBJECT,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "PyObject_New".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_OBJECT),
+        });
+
+        // ConditionalRelease (Py_DECREF — only reference, so it's definitive)
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::ConditionalRelease {
+                family: FamilyId::PYTHON_OBJECT,
+                arg: 0,
+            },
+            function: 1,
+            function_name: "Py_DECREF".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_OBJECT),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let inst = &states.expect("ownership_states must be stored")[0];
+
+        assert_eq!(
+            inst.state,
+            OwnershipState::Released,
+            "ConditionalRelease from Acquired (only ref) must transition to Released"
+        );
+    }
+
+    // ── ReturnsOwned solver integration test ──
+
+    /// Objective: Verify that ReturnsOwned transitions the instance to
+    ///            Escaped(ReturnToCaller).
+    /// Invariants: Acquired + ReturnsOwned → Escaped(ReturnToCaller).
+    #[test]
+    fn test_solver_returns_owned_escape() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+
+        // Acquire
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::C_HEAP,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        // ReturnsOwned
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::ReturnsOwned {
+                family: FamilyId::C_HEAP,
+            },
+            function: 1,
+            function_name: "create_buffer".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let inst = &states.expect("ownership_states must be stored")[0];
+
+        assert_eq!(
+            inst.state,
+            OwnershipState::Escaped(EscapeKind::ReturnToCaller),
+            "ReturnsOwned must transition to Escaped(ReturnToCaller)"
+        );
+        assert!(
+            !inst.is_leak_candidate(),
+            "Escaped resource is NOT a leak candidate"
+        );
+    }
+
+    // ── ConsumesArg solver integration test ──
+
+    /// Objective: Verify that ConsumesArg transitions the instance to
+    ///            Transferred.
+    /// Invariants: Acquired + ConsumesArg → Transferred.
+    #[test]
+    fn test_solver_consumes_arg_transfer() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+
+        // Acquire
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::C_HEAP,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        // ConsumesArg
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::ConsumesArg {
+                arg: 0,
+                family: Some(FamilyId::C_HEAP),
+            },
+            function: 1,
+            function_name: "queue_push".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let inst = &states.expect("ownership_states must be stored")[0];
+
+        assert_eq!(
+            inst.state,
+            OwnershipState::Transferred,
+            "ConsumesArg must transition to Transferred"
+        );
+    }
+
+    // ── OwnershipEscape result mapping test ──
+
+    /// Objective: Verify that the raw-pointer value ID (result) from
+    ///            OwnershipEscape is registered in the instance map, enabling
+    ///            downstream passes to trace data flow.
+    /// Invariants: Both the original ID and the result ID resolve to the
+    ///             same instance.
+    #[test]
+    fn test_solver_ownership_escape_registers_result() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+        let raw_ptr_id = graph.alloc_instance();
+
+        // Acquire
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::RUST_RAW_OWNERSHIP,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "Box::new".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+        });
+
+        // OwnershipEscape — result is the raw pointer value ID
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::OwnershipEscape {
+                family: FamilyId::RUST_RAW_OWNERSHIP,
+                result: raw_ptr_id,
+            },
+            function: 1,
+            function_name: "Box::into_raw".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = states.expect("ownership_states must be stored");
+        // Only 1 instance — raw_ptr_id is an alias, not a new instance.
+        assert_eq!(states.len(), 1, "Must have 1 instance (original only)");
+        let inst = &states[0];
+        assert_eq!(inst.id, instance_id);
+        assert_eq!(
+            inst.state,
+            OwnershipState::Escaped(EscapeKind::RawPointer),
+            "OwnershipEscape must transition to Escaped(RawPointer)"
+        );
+    }
+
+    // ── EscapesToCallback with new_borrowed test ──
+
+    /// Objective: Verify that an EscapesToCallback edge with no prior
+    ///            Acquire creates a Borrowed instance via new_borrowed().
+    /// Invariants: instance.state == Borrowed, contract == Borrowed.
+    #[test]
+    fn test_solver_escapes_to_callback_creates_borrowed() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let stack_id = graph.alloc_instance();
+
+        // No Acquire edge — stack userdata.
+
+        // EscapesToCallback
+        graph.add_edge(ContractEdge {
+            source: stack_id,
+            target: 0,
+            effect: Effect::EscapesToCallback { arg: 0 },
+            function: 0,
+            function_name: "register_callback".to_string(),
+            caller_name: "test_func".to_string(),
+            family: None,
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = states.expect("ownership_states must be stored");
+        assert_eq!(states.len(), 1, "Must have 1 borrowed instance");
+
+        let inst = &states[0];
+        assert_eq!(inst.state, OwnershipState::Borrowed);
+        assert_eq!(inst.contract, PointerContract::Borrowed);
+        assert!(
+            !inst.is_leak_candidate(),
+            "Borrowed instance is NOT a leak candidate"
         );
     }
 }

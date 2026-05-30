@@ -19,6 +19,15 @@ CARGO_CLIPPY := cargo clippy
 CARGO_TEST   := cargo test
 CARGO_BUILD  := cargo build
 
+# C++ pass configuration
+PASS_DIR      := pass
+PASS_BUILD    := $(PASS_DIR)/build
+PASS_SRC      := $(PASS_DIR)/SafetyExportPass.cpp
+LLVM_PREFIX   := $(shell llvm-config --prefix 2>/dev/null)
+CLANG_TIDY    := $(shell which clang-tidy 2>/dev/null)
+CLANG_FORMAT  := $(shell which clang-format 2>/dev/null)
+NPROC         := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
+
 # Default target
 .DEFAULT_GOAL := help
 
@@ -64,11 +73,12 @@ test-release:
 	@echo "$(BLUE)Running tests in release mode...$(NC)"
 	$(CARGO) test --workspace --release --all-features
 
-## check: Run clippy checks (must show 0 errors)
+## check: Run clippy + C++ lint checks
 .PHONY: check
 check:
 	@echo "$(BLUE)Running clippy checks...$(NC)"
 	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all -W clippy::perf -W clippy::style -W clippy::complexity -W clippy::suspicious -W clippy::correctness -A clippy::too_many_arguments -A clippy::type_complexity
+	@$(MAKE) --no-print-directory pass-check
 
 
 ## check-strict: Run clippy with all pedantic lints
@@ -89,10 +99,72 @@ fmt-check:
 	@echo "$(BLUE)Checking code formatting...$(NC)"
 	$(CARGO) fmt --all -- --check
 
-## clean: Clean build artifacts
+# ── C++ pass targets ──────────────────────────────────────────────────
+
+## pass-lint: Run clang-tidy on SafetyExportPass.cpp
+.PHONY: pass-lint
+pass-lint:
+ifndef CLANG_TIDY
+	@echo "$(YELLOW)clang-tidy not found — skipping C++ lint$(NC)"
+else
+	@echo "$(BLUE)Running clang-tidy on $(PASS_SRC)...$(NC)"
+	"$(CLANG_TIDY)" -p "$(PASS_BUILD)" \
+		--extra-arg-before=-I"$(LLVM_PREFIX)/include" \
+		$(PASS_SRC)
+	@echo "$(GREEN)✓ clang-tidy passed$(NC)"
+endif
+
+## pass-format: Format SafetyExportPass.cpp with clang-format
+.PHONY: pass-format
+pass-format:
+ifndef CLANG_FORMAT
+	@echo "$(YELLOW)clang-format not found — skipping C++ format$(NC)"
+else
+	@echo "$(BLUE)Formatting $(PASS_SRC)...$(NC)"
+	"$(CLANG_FORMAT)" -i $(PASS_SRC)
+	@echo "$(GREEN)✓ clang-format done$(NC)"
+endif
+
+## pass-format-check: Check C++ formatting without modifying files
+.PHONY: pass-format-check
+pass-format-check:
+ifndef CLANG_FORMAT
+	@echo "$(YELLOW)clang-format not found — skipping C++ format check$(NC)"
+else
+	@echo "$(BLUE)Checking C++ formatting...$(NC)"
+	"$(CLANG_FORMAT)" --dry-run --Werror $(PASS_SRC)
+	@echo "$(GREEN)✓ C++ formatting OK$(NC)"
+endif
+
+## pass-build: Build the SafetyExportPass LLVM plugin
+.PHONY: pass-build
+pass-build:
+ifndef LLVM_PREFIX
+	@echo "$(RED)Error: llvm-config not found. Install LLVM and ensure llvm-config is on PATH.$(NC)"
+	@exit 1
+endif
+	@echo "$(BLUE)Building SafetyExportPass plugin...$(NC)"
+	cmake -B "$(PASS_BUILD)" -S "$(PASS_DIR)" \
+		-DLLVM_DIR="$(LLVM_PREFIX)/lib/cmake/llvm" \
+		-DCMAKE_BUILD_TYPE=Release
+	cmake --build "$(PASS_BUILD)" --config Release -j$(NPROC)
+	@ln -sf "$(PASS_BUILD)/compile_commands.json" "$(PASS_DIR)/compile_commands.json"
+	@echo "$(GREEN)✓ Plugin built: $(PASS_BUILD)/SafetyExportPass.dylib$(NC)"
+
+## pass-clean: Remove C++ pass build artifacts
+.PHONY: pass-clean
+pass-clean:
+	@echo "$(YELLOW)Cleaning C++ pass build...$(NC)"
+	rm -rf "$(PASS_BUILD)"
+
+## pass-check: Run all C++ checks (format-check + lint)
+.PHONY: pass-check
+pass-check: pass-format-check pass-lint
+
+## clean: Clean all build artifacts (Rust + C++)
 .PHONY: clean
-clean:
-	@echo "$(YELLOW)Cleaning build artifacts...$(NC)"
+clean: pass-clean
+	@echo "$(YELLOW)Cleaning Rust build artifacts...$(NC)"
 	$(CARGO) clean
 
 ## doc: Generate documentation
@@ -143,14 +215,14 @@ install-tools:
 	@echo "$(BLUE)Installing development tools...$(NC)"
 	$(CARGO) install cargo-audit cargo-outdated cargo-tree
 
-## ci: Run all CI checks (fmt, check, test)
+## ci: Run all CI checks (fmt, check, test, pass-check)
 .PHONY: ci
-ci: fmt-check check test
+ci: fmt-check pass-format-check check test
 	@echo "$(GREEN)All CI checks passed!$(NC)"
 
 ## dev: Development workflow (fmt, check, test)
 .PHONY: dev
-dev: fmt check test
+dev: fmt pass-format check test
 	@echo "$(GREEN)Development workflow completed!$(NC)"
 
 ## watch: Watch for changes and rebuild
