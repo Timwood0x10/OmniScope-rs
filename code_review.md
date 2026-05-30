@@ -146,33 +146,49 @@ let icmp_pred = if kind == IRInstructionKind::Icmp {
 
 ---
 
-## BUG-19: CallGraphPass / SurfaceClassifierPass / DangerSurfacePass 未注册到 Pipeline [严重]
+## BUG-19: CallGraphPass / SurfaceClassifierPass / DangerSurfacePass 未注册到 Pipeline [严重] [已修复]
 
-**位置:** `crates/omniscope-pipeline/src/pipeline.rs:56-73`
+> **状态 (2026-05-30):** ✅ 已修复。该 3 个 pass 现已注册到 `pipeline.rs:59-64`。
+
+---
+
+## BUG-21: RaiiDropPass / InteriorMutabilityPass 仍未注册 [严重]
+
+**位置:** `crates/omniscope-pass/src/analysis/raii_drop.rs` 和 `interior_mutability.rs`
 
 **问题:**
-3 个完全实现的 Pass 结构体（实现 `Pass` trait，含完整的 `run()` 实现）**从未**在 `Pipeline::register_default_passes()` 中注册：
+`RaiiDropPass` 和 `InteriorMutabilityPass` 是完全实现的 Pass（实现 `Pass` trait，有完整的 `run()` 方法），但在 `Pipeline::register_default_passes()` 中从未注册。也未从 `omniscope-pass/src/lib.rs` 公开导出。
 
-| Pass | 文件位置 | 功能 |
-|------|---------|------|
-| `CallGraphPass` | `crates/omniscope-pass/src/analysis/call_graph.rs:27` | 构建调用图、检测跨语言边界 |
-| `SurfaceClassifierPass` | `crates/omniscope-pass/src/analysis/surface_classifier_pass.rs:24` | L1+L2+L3 函数表面分类 |
-| `DangerSurfacePass` | `crates/omniscope-pass/src/analysis/danger_surface.rs:22` | 危险表面分析 |
+**影响:**
+- R-3 (RAII Drop Release) 语义决议从未产生 — `SemanticKind::RaiiDropRelease` 永远不会出现在 SRT 中
+- R-2 (Interior Mutability) 语义决议从未产生 — `SemanticKind::InteriorMutability` 永远不会出现在 SRT 中
+- IssueGate 中 R-2/R-3 对应的抑制逻辑 (`SuppressInteriorMut`, `SuppressRaii`) 永远无法触发
+- NoiseReduction SRT 层 (`should_suppress_by_srt`) 中 `RaiiDropRelease` 检查永远为 false
 
-**影响链:**
-```
-CallGraphPass 未注册
-  → cross_lang_edges 始终为空
-  → SurfaceClassifierPass 的 L3 升级 (第84-117行) 永远收不到 FFI 边界数据
-  → function_surfaces 缺少 Boundary 分类
-  → NoiseReduction 的 SRT 层 (should_suppress_by_srt) 无有效输入
-  
-CallGraphPass 未注册
-  → FFIBoundaryPass 依赖的 cross_lang_edges 为空
-  → FFI 边界检测退化到 name-based 启发式
-```
+**修复:** 
+1. 在 `omniscope-pass/src/lib.rs` 中添加 `pub use analysis::RaiiDropPass;` 和 `pub use analysis::InteriorMutabilityPass;`
+2. 在 `pipeline.rs:register_default_passes()` 中注册这两个 pass
 
-**影响:** 约 30% 的 pass 功能是死代码。Pipeline 在 `test_pipeline_with_default_passes` 中断言 `pass_count() == 11`，加上这 3 个 pass 后应为 14。
+---
+
+## BUG-22: BorrowEscapePass / HeapProvenancePass / WriteToImmutablePass 也未注册 [中]
+
+**位置:** `crates/omniscope-pass/src/analysis/`
+
+**问题:**
+另外 3 个分析 pass 也未注册到 pipeline：
+
+| Pass | 功能 |
+|------|------|
+| `BorrowEscapePass` | 检测借用指针逃逸 |
+| `HeapProvenancePass` | 检测堆来源证据 |
+| `WriteToImmutablePass` | 检测写入不可变内存（BUG-6 已修复）|
+
+**影响:** 
+- `WriteToImmutablePass` 的修复实现在 BUG-6 中已完成但 pass 本身不运行，修复无意义
+- `BorrowEscapePass` 和 `HeapProvenancePass` 的 name-based 启发式（BUG-5）目前已不参与分析
+
+**修复:** 同理注册到 pipeline，或移除这些死代码 pass
 
 ---
 
@@ -223,9 +239,9 @@ CallGraphPass 未注册
 
 | 严重性 | 数量 | BUG-ID |
 |--------|------|--------|
-| 严重 (Critical) | 4 | BUG-1, BUG-2, BUG-3, BUG-19 |
+| 严重 (Critical) | 5 | BUG-1, BUG-2, BUG-3, BUG-19, BUG-21 |
 | 高 (High) | 5 | BUG-5, BUG-6, BUG-7, BUG-8, BUG-17 |
-| 中 (Medium) | 6 | BUG-9, BUG-10, BUG-11, BUG-12, BUG-13, BUG-20 |
+| 中 (Medium) | 7 | BUG-9, BUG-10, BUG-11, BUG-12, BUG-13, BUG-20, BUG-22 |
 | 低 (Low) | 2 | BUG-15, BUG-16 |
 | 勘误 (误报) | 2 | ~~BUG-4~~, ~~BUG-14~~ |
 
@@ -239,6 +255,6 @@ CallGraphPass 未注册
 
 3. **并行模式不可用** — PassManager 的并行模式存在根本性的数据隔离问题（BUG-2 已修复 — `ctx.clone()` + `#[derive(Clone)]`）。
 
-4. **Pass 注册缺失 → 大量死代码** — `CallGraphPass`、`SurfaceClassifierPass`、`DangerSurfacePass` 完全实现但从未注册到 Pipeline（BUG-19）。`NoiseReduction` 的 FP 抑制逻辑从未在生产中调用（BUG-20）。这是目前最严重的架构问题，约 30% pass 功能不可达。
+4. **Pass 注册缺失 → 大量死代码** — 最初有 6 个分析 pass 未注册。其中 `CallGraphPass`、`SurfaceClassifierPass`、`DangerSurfacePass` 已修复（BUG-19）。仍有 `RaiiDropPass`、`InteriorMutabilityPass`（BUG-21）、`BorrowEscapePass`、`HeapProvenancePass`、`WriteToImmutablePass`（BUG-22）未注册。加上 `NoiseReduction` 的 SRT 代码从未在生产中调用（BUG-20），约 50% 的 semantic resolution 功能不可达。
 
 5. **文档与实现不同步** — 多处函数注释描述的行为与实际代码实现不一致（BUG-8 已修复）。

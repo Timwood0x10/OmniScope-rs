@@ -57,7 +57,11 @@ impl Pass for BorrowEscapePass {
         // Build semantic tree for R-0~R-8 pattern suppression
         let mut semantic_tree = SemanticTree::new();
 
-        // Scan for FFI calls that might pass stack pointers
+        // Scan for FFI calls that might pass stack pointers.
+        // Only flag calls where we have POSITIVE evidence of stack provenance
+        // (alloca or address-of-local patterns), not just "external call + no
+        // heap pattern". Without positive stack evidence, the default should
+        // be silent — name-based heuristics are too noisy for a default-on pass.
         for call in &module.calls {
             nodes_analyzed += 1;
 
@@ -71,7 +75,13 @@ impl Pass for BorrowEscapePass {
                 continue;
             }
 
-            // Analyze the call for potential borrow escape
+            // Check for positive stack provenance evidence:
+            // the caller name suggests a local/stack-allocated variable
+            // passed across the FFI boundary.
+            if !self.has_stack_provenance(&call.caller) {
+                continue;
+            }
+
             let call_symbol = format!("{}->{}", call.caller, call.callee);
 
             self.analyze_ffi_call(
@@ -188,6 +198,19 @@ impl BorrowEscapePass {
     fn has_global_provenance(&self, caller: &str) -> bool {
         // Heuristic: global/static values
         caller.contains("static") || caller.contains("global") || caller.starts_with("@")
+    }
+
+    /// Checks if a caller function has positive stack provenance evidence.
+    ///
+    /// Unlike the absence of heap/global provenance, this requires POSITIVE
+    /// evidence that the value originates from the stack (alloca or local
+    /// address patterns). Without positive evidence, we default to silence
+    /// rather than flagging every external call as a potential escape.
+    fn has_stack_provenance(&self, caller: &str) -> bool {
+        caller.contains("alloca")
+            || caller.contains("stack_addr")
+            || caller.contains("local_buf")
+            || caller.contains("_on_stack")
     }
 
     /// Checks if a symbol represents a function parameter.

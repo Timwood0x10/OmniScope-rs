@@ -122,7 +122,7 @@ static llvm::json::Object serializeInstruction(const llvm::Instruction &I,
       IdxObj["value"] = valueToString(IdxVal);
       IdxList.push_back(IdxVal);
 
-      llvm::Type *CurrentFieldTy =
+      const llvm::Type *CurrentFieldTy =
           llvm::GetElementPtrInst::getIndexedType(SourceElemTy, IdxList);
       IdxObj["field_type"] =
           CurrentFieldTy ? typeToString(CurrentFieldTy) : "unknown";
@@ -215,7 +215,7 @@ static llvm::json::Object serializeBasicBlock(
 static llvm::json::Object serializeFunction(const llvm::Function &F) {
   llvm::json::Object Obj;
 
-  std::string Name = F.getName().str();
+  const std::string Name = F.getName().str();
   Obj["name"] = Name;
   Obj["demangled"] = llvm::demangle(Name);
   Obj["is_declaration"] = F.isDeclaration();
@@ -249,7 +249,7 @@ static llvm::json::Object serializeFunction(const llvm::Function &F) {
 /// Serialize a function declaration (no body — extern / intrinsics).
 static llvm::json::Object serializeDeclaration(const llvm::Function &F) {
   llvm::json::Object Obj;
-  std::string Name = F.getName().str();
+  const std::string Name = F.getName().str();
   Obj["name"] = Name;
   Obj["demangled"] = llvm::demangle(Name);
   Obj["return_type"] = typeToString(F.getReturnType());
@@ -264,12 +264,12 @@ static llvm::json::Object serializeDeclaration(const llvm::Function &F) {
 
 /// Check whether a function should be excluded from the output.
 static bool shouldSkipFunction(const llvm::Function &F) {
-  llvm::StringRef Name = F.getName();
+  const llvm::StringRef Name = F.getName();
 
   if (Name.starts_with("llvm."))
     return true;
 
-  static const char *SkipList[] = {
+  static const char *const SkipList[] = {
       "__chkstk",    "__stack_chk", "_GLOBAL_", "__cxa_", "__gmon_",
       "__sanitizer", "__asan",      "__msan",   "__tsan", "__ubsan",
   };
@@ -294,7 +294,7 @@ static llvm::json::Object serializeNamedStructs(const llvm::Module &M) {
     for (unsigned i = 0; i < ST->getNumElements(); ++i)
       Elems.push_back(typeToString(ST->getElementType(i)));
 
-    std::string Key = ST->getName().str();
+    const std::string Key = ST->getName().str();
     Structs[Key] = std::move(Elems);
   }
   return Structs;

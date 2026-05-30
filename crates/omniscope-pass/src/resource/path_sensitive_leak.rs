@@ -100,8 +100,13 @@ impl Pass for LeakDetectionPass {
         let mut candidate_id: u64 = 1;
 
         // Group facts by function to do per-function path analysis.
-        let alloc_sites: Vec<&RawResourceFact> =
-            raw_facts.iter().filter(|f| f.is_acquire).collect();
+        // Skip facts with no caller — these are external declarations
+        // (malloc, free, etc.) that cannot "leak" by definition.
+        // They are allocation primitives, not resource consumers.
+        let alloc_sites: Vec<&RawResourceFact> = raw_facts
+            .iter()
+            .filter(|f| f.is_acquire && !f.caller_name.is_empty())
+            .collect();
 
         for alloc in &alloc_sites {
             let family = alloc.family.unwrap_or(FamilyId::C_HEAP);
@@ -121,8 +126,8 @@ impl Pass for LeakDetectionPass {
                 );
                 candidate = candidate.with_alloc_contract(alloc.contract);
                 candidate = candidate.with_description(format!(
-                    "allocation in '{}' of family {:?} has no same-family release on any analyzed path",
-                    alloc.function_name, family
+                    "allocation in '{}' of family {} has no same-family release on any analyzed path",
+                    alloc.function_name, family.display_name()
                 ));
 
                 // Attach evidence about the missing release.
@@ -130,8 +135,9 @@ impl Pass for LeakDetectionPass {
                     Evidence::new(
                         EvidenceKind::Insufficient,
                         format!(
-                            "no {:?}-family release found for allocation in '{}'",
-                            family, alloc.function_name
+                            "no {}-family release found for allocation in '{}'",
+                            family.display_name(),
+                            alloc.function_name
                         ),
                     )
                     .with_family(family),

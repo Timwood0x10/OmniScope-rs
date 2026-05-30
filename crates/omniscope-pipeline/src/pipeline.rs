@@ -6,10 +6,11 @@ use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_pass::{
-    CallGraphPass, ContractGraphBuilderPass, DangerSurfacePass, FFIBoundaryPass,
-    FfiReturnCheckPass, IRBehaviorSummaryPass, IssueCandidateBuilderPass, IssueVerifierPass,
-    LeakDetectionPass, OwnershipSolverPass, PassManager, RawFactCollectorPass,
-    StructuralInferencePass, SummaryBuilderPass, SurfaceClassifierPass,
+    BorrowEscapePass, CallGraphPass, ContractGraphBuilderPass, DangerSurfacePass, FFIBoundaryPass,
+    FfiReturnCheckPass, HeapProvenancePass, IRBehaviorSummaryPass, InteriorMutabilityPass,
+    IssueCandidateBuilderPass, IssueVerifierPass, LeakDetectionPass, OwnershipSolverPass,
+    PassManager, RaiiDropPass, RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
+    SurfaceClassifierPass, WriteToImmutablePass,
 };
 use omniscope_types::AnalysisConfig;
 use std::time::Instant;
@@ -74,6 +75,18 @@ impl Pipeline {
         self.pass_manager.register(IssueVerifierPass::new());
         self.pass_manager.register(LeakDetectionPass::new());
 
+        // Semantic analysis passes (depend on RawFactCollector)
+        // R-3: RAII drop detection — suppresses FP use-after-free
+        self.pass_manager.register(RaiiDropPass::new());
+        // R-2: Interior mutability — suppresses FP write-to-immutable
+        self.pass_manager.register(InteriorMutabilityPass::new());
+        // R-1: Heap provenance — classifies pointer origin
+        self.pass_manager.register(HeapProvenancePass::new());
+        // Borrow escape — stack pointer escape across FFI
+        self.pass_manager.register(BorrowEscapePass::new());
+        // Write-to-immutable — stores to immutable memory
+        self.pass_manager.register(WriteToImmutablePass::new());
+
         // FFI nullable return check pass
         self.pass_manager.register(FfiReturnCheckPass::new());
     }
@@ -129,7 +142,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
 
-        assert_eq!(pipeline.pass_count(), 14);
+        assert_eq!(pipeline.pass_count(), 19);
     }
 
     #[test]

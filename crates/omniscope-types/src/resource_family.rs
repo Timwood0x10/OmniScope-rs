@@ -75,6 +75,33 @@ impl FamilyId {
 
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
+
+    /// Returns a human-readable name for well-known family IDs.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            FamilyId::C_HEAP => "C_HEAP",
+            FamilyId::CPP_NEW_SCALAR => "CPP_NEW_SCALAR",
+            FamilyId::CPP_NEW_ARRAY => "CPP_NEW_ARRAY",
+            FamilyId::RUST_GLOBAL => "RUST_GLOBAL",
+            FamilyId::PYTHON_OBJECT => "PYTHON_OBJECT",
+            FamilyId::PYTHON_MEM => "PYTHON_MEM",
+            FamilyId::PYTHON_MEM_RAW => "PYTHON_MEM_RAW",
+            FamilyId::JAVA_LOCAL_REF => "JAVA_LOCAL_REF",
+            FamilyId::JAVA_GLOBAL_REF => "JAVA_GLOBAL_REF",
+            FamilyId::CSHARP_HGLOBAL => "CSHARP_HGLOBAL",
+            FamilyId::CSHARP_COTASK => "CSHARP_COTASK",
+            FamilyId::GO_GC => "GO_GC",
+            FamilyId::ZIG_ALLOCATOR => "ZIG_ALLOCATOR",
+            FamilyId::ZLIB_STREAM => "ZLIB_STREAM",
+            FamilyId::OPENSSL_RESOURCE => "OPENSSL_RESOURCE",
+            FamilyId::SQLITE_RESOURCE => "SQLITE_RESOURCE",
+            FamilyId::GO_CGO => "GO_CGO",
+            FamilyId::MIMALLOC => "MIMALLOC",
+            FamilyId::CSHARP_COM => "CSHARP_COM",
+            FamilyId::RUST_RAW_OWNERSHIP => "RUST_RAW_OWNERSHIP",
+            _ => "unknown",
+        }
+    }
 }
 
 /// Kind of resource family, used to classify the management model.

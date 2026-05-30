@@ -3,6 +3,7 @@
 Date: 2026-05-30
 Scope: Full workspace (8 crates + C++ pass)
 Method: 8 parallel review agents, no code changes
+Verification: 2 follow-up agents confirmed/denied findings with exact line numbers
 
 ---
 
@@ -175,3 +176,37 @@ The following items from the initial concern list were verified as already handl
 - **GEP decomposition**: Lines 108-133 extract source element type, in-bounds flag, per-index field types via `getIndexedType`
 - **Intrinsic filtering**: `shouldSkipFunction` (line 266) catches `llvm.*`, `llvm.dbg.*`, `llvm.lifetime.*`, `__chkstk`, sanitizer runtimes
 - **Demangling at function level**: Lines 220, 254 call `llvm::demangle()` correctly (only call-site level is inconsistent -- see MEDIUM #7)
+
+---
+
+## Verification Round (2 agents)
+
+### HIGH findings re-check
+
+| # | Issue | Status | Fix Effort | Notes |
+|---|-------|--------|------------|-------|
+| 1 | llvm_sys walk_global_variables no-op | Confirmed | Medium | llvm-sys backend data gap |
+| 2 | llvm_sys operands always empty | Confirmed | Medium | llvm-sys backend data gap |
+| 3 | DashMap with &mut self | Confirmed | **Trivial** | Mechanical `DashMap` → `HashMap` swap |
+| 4 | add_edge no endpoint validation | Confirmed (low impact) | Easy | All callers construct edges correctly in practice |
+| 5 | Entry/exit self-loop heuristic | Confirmed (theoretical) | Easy | Dataflow used for abstract semantic nodes, not LLVM CFG |
+| 6 | path_sensitive_leak.rs is stub | Confirmed | **Hard** | No CFG infrastructure exists; greenfield implementation |
+| 7 | Parallel swallows errors | Confirmed | **Easy** | Collect errors alongside results, propagate after level |
+| 8 | No issue deduplication | **Partially wrong** | Easy | Production path (`with_issues`) already deduplicates via HashSet. Only `from_pass_results` (test-only) lacks dedup |
+| 9 | Issue.symbol defaults empty | Confirmed | Easy | |
+| 10 | FamilyRegistry per-invocation | **Already fixed** | -- | `semantic_engine.rs:156` uses `LazyLock`. Two other sites (`analysis/mod.rs:78`, `danger_surface.rs:46`) still allocate fresh |
+| 11 | SARIF invalid timestamps | Confirmed | Easy | |
+
+### MEDIUM findings re-check
+
+| # | Issue | Status | Fix Effort | Notes |
+|---|-------|--------|------------|-------|
+| 11 | `contains("_free")` false positives | Confirmed | Easy | Conservative direction (false negative, not false positive). Matches `"my_freeze"`, `"my_freedom"` etc. |
+| 14 | `ir_module.take()` non-idempotent | Confirmed | **Trivial** | `.take()` → `.clone()`, or guard against re-entry |
+
+### Priority-ordered fix roadmap
+
+1. **Trivial** (do now): DashMap→HashMap (graph.rs), ir_module.take()→clone (pipeline.rs)
+2. **Easy** (do now): Parallel error propagation (manager.rs), dedup in from_pass_results (result.rs), contains("_free") word-boundary (semantic_engine.rs), iteration bound (analysis.rs)
+3. **Medium** (plan): llvm_sys global variables + operands population, FamilyRegistry singleton reuse
+4. **Hard** (backlog): Path-sensitive leak detection (needs CFG infrastructure)

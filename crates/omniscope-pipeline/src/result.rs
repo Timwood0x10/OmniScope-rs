@@ -47,15 +47,30 @@ impl PipelineResult {
     }
 
     /// Creates a pipeline result with explicit issues (from context collection).
+    ///
+    /// Deduplicates issues by (kind, symbol, description) before counting.
+    /// This prevents the same bug from being reported multiple times when
+    /// multiple passes emit overlapping findings.
     pub fn with_issues(
         pass_results: Vec<PassResult>,
         duration: Duration,
         issues: Vec<Issue>,
     ) -> Self {
-        let total_issues = issues.len();
         let total_nodes = pass_results.iter().map(|r| r.nodes_analyzed).sum();
 
         let stats = PipelineStats::from_pass_results(&pass_results);
+
+        // Deduplicate: same (kind, symbol, description) → keep first occurrence.
+        let mut seen = std::collections::HashSet::new();
+        let deduped: Vec<Issue> = issues
+            .into_iter()
+            .filter(|issue| {
+                let key = (issue.kind, issue.symbol.clone(), issue.description.clone());
+                seen.insert(key)
+            })
+            .collect();
+
+        let total_issues = deduped.len();
 
         Self {
             pass_results,
@@ -63,7 +78,7 @@ impl PipelineResult {
             total_nodes,
             duration,
             stats,
-            issues,
+            issues: deduped,
         }
     }
 

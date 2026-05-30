@@ -1,0 +1,15 @@
+---
+# Only report diagnostics from our own source files, not from LLVM/system headers.
+HeaderFilterRegex: 'SafetyExportPass\.cpp'
+
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  misc-*,
+  -clang-analyzer-security.ArrayBound,
+  -clang-analyzer-core.uninitialized.Assign,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -misc-include-cleaner,
+  -misc-use-anonymous-namespace

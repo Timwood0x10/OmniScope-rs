@@ -223,6 +223,10 @@ impl RichFormatter {
 
         let mut detail = issue.description.clone();
 
+        // Sanitize IR-level variable names (%call, %0, etc.) to be
+        // more readable for end users.
+        detail = sanitize_ir_vars(&detail);
+
         // Append language arrow for resource contract issues
         if let Some(arrow) = self.language_arrow_for_issue(issue) {
             detail = format!("{} [{}]", detail, arrow);
@@ -343,6 +347,44 @@ fn lang_label(lang: omniscope_types::Language) -> &'static str {
     }
 }
 
+/// Sanitizes LLVM IR variable names in display text.
+///
+/// Replaces `%call`, `%call2`, etc. with "return value" and
+/// `%0`, `%1` with "<ir-reg>" so end users don't see raw IR.
+fn sanitize_ir_vars(text: &str) -> String {
+    let result = text.to_string();
+    // Replace %call, %call2, %call3, etc. → return value
+    let mut i = 0;
+    let mut out = String::with_capacity(result.len());
+    let bytes = result.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 1 < bytes.len() {
+            // Check for %call pattern
+            if result[i..].starts_with("%call") {
+                out.push_str("return value");
+                i += 5;
+                // Skip optional trailing digits
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                continue;
+            }
+            // Check for %digit pattern (SSA register like %0, %42)
+            if bytes[i + 1].is_ascii_digit() {
+                out.push_str("<ir-reg>");
+                i += 2;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
 /// Converts a LanguageHint to a short display label.
 fn language_label_str(hint: LanguageHint) -> &'static str {
     match hint {
@@ -419,5 +461,17 @@ mod tests {
         assert_eq!(lang_label(omniscope_types::Language::Rust), "Rust");
         assert_eq!(lang_label(omniscope_types::Language::Python), "Python");
         assert_eq!(lang_label(omniscope_types::Language::Unknown), "?");
+    }
+
+    #[test]
+    fn test_sanitize_ir_vars() {
+        assert_eq!(sanitize_ir_vars("'%call'"), "'return value'");
+        assert_eq!(sanitize_ir_vars("'%call2'"), "'return value'");
+        assert_eq!(sanitize_ir_vars("'%0'"), "'<ir-reg>'");
+        assert_eq!(sanitize_ir_vars("no IR vars"), "no IR vars");
+        assert_eq!(
+            sanitize_ir_vars("'%call' and '%1'"),
+            "'return value' and '<ir-reg>'"
+        );
     }
 }
