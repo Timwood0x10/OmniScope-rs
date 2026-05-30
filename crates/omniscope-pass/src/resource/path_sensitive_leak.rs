@@ -36,8 +36,10 @@ const DEFAULT_MAX_PATH_LENGTH: usize = 256;
 /// - Some paths leak → `ConditionalLeak` (lower confidence)
 pub struct LeakDetectionPass {
     /// Maximum number of paths to explore per allocation.
+    /// NOTE: Not yet used in `run()` — reserved for path-sensitive upgrade.
     path_budget: usize,
     /// Maximum path length before giving up.
+    /// NOTE: Not yet used in `run()` — reserved for path-sensitive upgrade.
     max_path_length: usize,
 }
 
@@ -275,6 +277,11 @@ fn check_release_in_summaries(store: &SummaryStore, alloc: &RawResourceFact) -> 
 ///
 /// Used internally for path slicing. In a full implementation,
 /// this would carry actual CFG node IDs.
+///
+/// **Stub note**: The current `LeakDetectionPass::run()` uses a simpler
+/// per-function release check instead of full path enumeration. This type
+/// is retained as a placeholder for the planned path-sensitive upgrade.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LeakPath {
     /// The allocation site (function ID).
@@ -308,6 +315,10 @@ impl LeakPath {
 }
 
 /// Result of path-sensitive analysis for one allocation site.
+///
+/// **Stub note**: Retained as a placeholder for the planned path-sensitive
+/// upgrade. The current implementation uses simpler per-function checks.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PathAnalysisResult {
     /// Total paths explored.

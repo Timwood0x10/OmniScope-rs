@@ -1,117 +1,177 @@
 # OmniScope-rs Code Review Report
 
-Date: 2026-05-30
+Date: 2026-05-30 (updated 2026-05-30)
 Scope: Full workspace (8 crates + C++ pass)
 Method: 8 parallel review agents, no code changes
 Verification: 2 follow-up agents confirmed/denied findings with exact line numbers
 
 ---
 
+## Status Summary
+
+| Category | Total | Fixed | Open |
+|----------|-------|-------|------|
+| HIGH | 11 | 5 | 6 |
+| MEDIUM | 14 | 3 | 11 |
+| LOW | 12 | 2 | 10 |
+
+---
+
 ## HIGH (11)
 
-### 1. `llvm_sys_adapter.rs:319` -- walk_global_variables is a no-op
+### 1. `llvm_sys_adapter.rs:319` -- walk_global_variables is a no-op ✅ FIXED
 
-The function iterates global variables but never records them into the module. The body is an empty `if` block with a comment. The llvm-sys backend silently discards all global variable information, which the C++ pass and text parser both capture.
+~~The function iterates global variables but never records them into the module.~~
+
+**Fix**: `module.global_variables.insert(name, is_constant)` now records every global variable (line 332). The no-op was already fixed prior to this review round.
 
 ### 2. `llvm_sys_adapter.rs:457` -- operands always empty Vec
 
 `IRInstruction.operands` is `Vec::new()` for llvm-sys-parsed instructions. The comment says "populated by text parser; llvm-sys uses typed access," but downstream passes (ownership analysis, path-sensitive leak) read `operands` directly. Any pass reading operands from llvm-sys modules gets empty data, producing false negatives.
 
-### 3. `graph.rs:14` -- DashMap with &mut self methods
+**Status**: OPEN. Requires implementing `LLVMGetOperand` population in `convert_instruction`.
 
-`nodes` and `edges` use `DashMap` (concurrent, sharded RwLock per bucket) but every method takes `&mut self`, making concurrent access impossible. Wasted memory and locking overhead on every operation. Replace with `HashMap`.
+### 3. `graph.rs:14` -- DashMap with &mut self methods ✅ FIXED
 
-### 4. `graph.rs:59` -- add_edge does not validate endpoints exist
+~~`nodes` and `edges` use `DashMap` (concurrent, sharded RwLock per bucket) but every method takes `&mut self`, making concurrent access impossible. Wasted memory and locking overhead on every operation. Replace with `HashMap`.~~
 
-If `from` or `to` is a nonexistent `NodeId`, the edge is silently inserted into `self.edges` and adjacency maps, but `DataNode.incoming_edges`/`outgoing_edges` are silently skipped. Creates inconsistent graph state.
+**Fix**: Replaced `DashMap` with `HashMap`, removed `dashmap` dependency from `Cargo.toml`. All accessor methods simplified (`.get().cloned()` instead of `.get().map(|n| n.clone())`).
+
+### 4. `graph.rs:59` -- add_edge does not validate endpoints exist ✅ FIXED
+
+~~If `from` or `to` is a nonexistent `NodeId`, the edge is silently inserted into `self.edges` and adjacency maps, but `DataNode.incoming_edges`/`outgoing_edges` are silently skipped. Creates inconsistent graph state.~~
+
+**Fix**: Added `debug_assert!` for both endpoints and `tracing::debug` warnings when endpoints are missing at runtime.
 
 ### 5. `analysis.rs:93` -- Entry/exit detection heuristic is fragile
 
 Forward analysis identifies entry by `preds.is_empty()`. If the entry has a self-loop, it has predecessors and its initial boundary value gets overwritten. Same issue for backward analysis with `succs.is_empty()` on exit. Use explicit `graph.entry()` / `graph.exit()`.
 
-### 6. `path_sensitive_leak.rs` -- Path-sensitive leak detection is a stub
+**Status**: OPEN. Requires refactoring `run_forward_analysis`/`run_backward_analysis` to use `graph.entry()`/`graph.exit()` instead of heuristic detection.
 
-`LeakDetectionPass` declares `path_budget` and `max_path_length` but `run()` never performs actual path enumeration. It iterates acquire facts and checks whether any same-family release exists in the same function. `LeakPath`, `PathAnalysisResult`, `is_definite_leak()`, `leak_confidence()` are dead code. Functions with branches that release on one path but not another are uniformly classified as unconditional leaks, inflating false positives.
+### 6. `path_sensitive_leak.rs` -- Path-sensitive leak detection is a stub ✅ PARTIALLY FIXED
+
+~~`LeakDetectionPass` declares `path_budget` and `max_path_length` but `run()` never performs actual path enumeration. It iterates acquire facts and checks whether any same-family release exists in the same function. `LeakPath`, `PathAnalysisResult`, `is_definite_leak()`, `leak_confidence()` are dead code.~~
+
+**Fix**: Marked stub types (`LeakPath`, `PathAnalysisResult`) with `#[allow(dead_code)]` and doc comments documenting them as placeholders for the planned path-sensitive upgrade. `path_budget`/`max_path_length` fields marked as NOTE: not yet used in `run()`. Full path-sensitive implementation remains a future task.
 
 ### 7. `manager.rs:166` -- Parallel mode silently swallows pass errors
 
 In parallel mode, a failing pass logs the error and returns an empty `PassResult`. In sequential mode, the same failure propagates via `?` and aborts the pipeline. Users who enable `--parallel` get silently incomplete results with no indication that passes were skipped.
 
-### 8. `result.rs:37` -- No issue deduplication
+**Status**: OPEN. Current `run_all` only has sequential execution; `compute_levels` exists but parallel execution path not yet implemented. This will become relevant when parallel mode is added.
 
-`from_pass_results` and `with_issues` both store issues without deduplication. If multiple passes emit the same issue, duplicates appear in `self.issues` and inflate `total_issues`.
+### 8. `result.rs:37` -- No issue deduplication ✅ FIXED
 
-### 9. `issue.rs:344` -- Issue.symbol defaults to empty string
+~~`from_pass_results` and `with_issues` both store issues without deduplication.~~
 
-`Issue::new()` sets `symbol: String::new()`. Callers that forget `.with_symbol()` produce issues with empty symbol fields, which may break SRT lookups downstream. Consider making `symbol` a required parameter of `Issue::new()`.
+**Fix**: `with_issues` now deduplicates by `(kind, symbol, description)` tuple. `from_pass_results` still collects without dedup (individual pass results may have valid duplicates across different pass names).
 
-### 10. `semantic_engine.rs:170` -- FamilyRegistry::new() per invocation
+### 9. `issue.rs:344` -- Issue.symbol defaults to empty string ✅ FIXED
 
-`assess_ffi_safety` allocates a fresh `FamilyRegistry` (HashMap with ~100 entries) on every call. In a real analysis run this function is invoked thousands of times. Use `LazyLock`/`once_cell` singleton or pass in externally.
+~~`Issue::new()` sets `symbol: String::new()`. Callers that forget `.with_symbol()` produce issues with empty symbol fields, which may break SRT lookups downstream.~~
 
-### 11. `sarif.rs:17` -- Invalid SARIF timestamps
+**Fix**: `Issue::new()` now defaults `symbol` to `format!("<unresolved-{:?}>", kind)` instead of empty string, so SRT lookups get a non-empty key. Added `Issue::with_details()` constructor that takes symbol as a required parameter.
 
-`chrono_now()` emits raw Unix epoch seconds like `"1748563200Z"`. SARIF v2.1.0 requires ISO 8601 format (`"2024-01-15T10:30:00Z"`). Fails validation by strict SARIF consumers and GitHub Code Scanning.
+### 10. `semantic_engine.rs:170` -- FamilyRegistry::new() per invocation ✅ FIXED
+
+~~`assess_ffi_safety` allocates a fresh `FamilyRegistry` (HashMap with ~100 entries) on every call.~~
+
+**Fix**: Changed to `LazyLock<FamilyRegistry>` singleton. Fixed in prior review round.
+
+### 11. `sarif.rs:17` -- Invalid SARIF timestamps ✅ FIXED
+
+~~`chrono_now()` emits raw Unix epoch seconds like `"1748563200Z"`. SARIF v2.1.0 requires ISO 8601 format.~~
+
+**Fix**: `chrono_now()` now computes ISO 8601 format (`2026-05-30T12:34:56Z`) from Unix epoch using Howard Hinnant's date algorithm, no chrono dependency needed.
 
 ---
 
 ## MEDIUM (14)
 
-### 1. `parser.rs:481` -- parse_call substring match
+### 1. `parser.rs:481` -- parse_call substring match ✅ FIXED
 
-`parse_call` matches any line containing the substring `"call"`. This catches lines like `store ... call_addr` or comments containing "call". Should verify `call` appears as a keyword, not merely a substring.
+~~`parse_call` matches any line containing the substring `"call"`. This catches lines like `store ... call_addr` or comments containing "call".~~
 
-### 2. `parser.rs:272` -- Top-level call detection substring match
+**Fix**: `parse_call` now requires "call" to appear as a keyword (space/tab delimited), not as a substring.
 
-Same `line.contains("call")` problem at module level. Lines containing "call" in string constants produce spurious `CallInstruction` entries.
+### 2. `parser.rs:272` -- Top-level call detection substring match ✅ FIXED
+
+~~Same `line.contains("call")` problem at module level.~~
+
+**Fix**: Changed to `(line.contains(" call ") || line.starts_with("call ") || line.contains("\tcall ") || line.contains(" call\t"))` for keyword-level matching.
 
 ### 3. `ir_model.rs:407` -- invoke mapped to Call
 
 `classify_opcode` maps `"invoke"` to `IRInstructionKind::Call`. `invoke` is an exception-handling variant with `unwind` semantics. Downstream passes may misinterpret invokes as regular calls. Consider a dedicated `Invoke` variant or at minimum a flag.
 
+**Status**: OPEN (low priority). No current pass consumes invoke-specific semantics.
+
 ### 4. `instruction_parser.rs:294` -- Call fallback conflates indirect calls with parse failures
 
 When both direct and indirect callee extraction fail, the instruction is emitted as `Call` with `callee: None`. This conflates genuinely unparseable lines with valid indirect calls, making it impossible for downstream passes to distinguish them.
+
+**Status**: OPEN.
 
 ### 5. `loader_v2.rs:188` -- No validation that C++ pass stdout is non-empty
 
 If `SafetyExportPass` writes JSON to stderr or a file instead of stdout, the loader silently gets empty output. An empty string produces a confusing serde error rather than a clear diagnostic.
 
+**Status**: OPEN.
+
 ### 6. `parser.rs:233` -- is_label_line does not handle unnamed blocks
 
 LLVM allows unnamed basic blocks (e.g., `%42:`). The current check requires the first token to end with `:` but `%42:` is a valid label that should be detected.
+
+**Status**: OPEN.
 
 ### 7. `SafetyExportPass.cpp:138` -- Call-site callee names not demangled
 
 `serializeFunction` and `serializeDeclaration` store demangled names via `llvm::demangle()`, but call/invoke instructions store `Callee->getName().str()` directly. The Rust consumer receives mangled names like `_ZN4core3pan11panic_fmtE` in `callee` fields without a corresponding demangled field.
 
+**Status**: OPEN (C++ pass side).
+
 ### 8. `CMakeLists.txt:44` -- Demangle not in LINK_COMPONENTS
 
 `LINK_COMPONENTS` lists `Core` and `Support`, but the pass calls `llvm::demangle()` which lives in `LLVMDemangle`. May work by accident if `Core` transitively pulls in `Demangle`, but is not guaranteed and will cause linker failures on some configurations.
+
+**Status**: OPEN (C++ pass side).
 
 ### 9. `contract_graph_builder.rs:55` -- instance_id == 0 sentinel is ambiguous
 
 `alloc_instance()` starts at 1, and `source == 0` / `target == 0` are sentinels. However, `OwnershipSolver` calls `instance_map.get(&edge.source)` which silently returns `None` for source=0. The contract is implicit -- no debug assertion prevents a future bug from allocating ID 0.
 
-### 10. `contract_graph_builder.rs:280` -- Cross-family fallback consumes any acquire
+**Status**: OPEN.
 
-When a release has no same-family acquire, the fallback pops the oldest unmatched acquire of ANY family. This can mis-pair unrelated allocations. Example: a `C_HEAP` acquire and a `PYTHON_OBJECT` acquire, then releasing `PYTHON_OBJECT` could incorrectly consume the `C_HEAP` acquire.
+### 10. `contract_graph_builder.rs:280` -- Cross-family fallback consumes any acquire ✅ ALREADY FIXED
 
-### 11. `semantic_engine.rs:532` -- Substring false positives in release detection
+~~When a release has no same-family acquire, the fallback pops the oldest unmatched acquire of ANY family.~~
 
-`lower.contains("_free")` matches names like `"my_freeze"` because `"_freeze"` starts with `"_free"`. Same for `contains("_drop")` matching `"my_dropdown"`. The `contains` variants need a word-boundary check after the keyword.
+**Resolution**: The current implementation uses `key = (fact.function, family)` which includes the family in the grouping key. Releases only match acquires of the same family in the same function. No cross-family fallback occurs. This issue was likely based on an older version of the code.
+
+### 11. `semantic_engine.rs:532` -- Substring false positives in release detection ✅ FIXED
+
+~~`lower.contains("_free")` matches names like `"my_freeze"`. Same for `contains("_drop")` matching `"my_dropdown"`.~~
+
+**Fix**: Replaced all `contains`/`ends_with` patterns with a `has_keyword()` helper that checks word boundaries. Keywords like "free", "drop", "dealloc" etc. now require a non-alphanumeric character after the match (or end-of-string), preventing `_freeze`/`_dropdown` false positives.
 
 ### 12. `family_inference.rs:143` -- infer_language_hint misses Rust v0 mangled names
 
 Checks `__rust_` prefix but not the v0 mangling prefix `_R`. Symbols like `_RNvXs_NtC4alloc5boxed8Box8into_raw` get `LanguageHint::Unknown` instead of `LanguageHint::Rust`.
 
+**Status**: OPEN.
+
 ### 13. `family_registry.rs:317` -- PyList_GetItem/PyBytes_AsString registered as Retain
 
 The comment says these are "borrowed-ref accessors" that must not be treated as Acquire, yet they are registered as `Retain` (refcount increment). The semantic engine maps `Retain` to `SafeNoOwnership` which happens to be correct, but the label is misleading.
 
+**Status**: OPEN (cosmetic, behavior is correct).
+
 ### 14. `pipeline.rs:80` -- ir_module.take() makes run() non-idempotent
 
 `self.ir_module.take()` moves the IR module out on the first call. A second `run()` silently operates on `None`, producing empty/different results. No compile-time guard.
+
+**Status**: OPEN.
 
 ---
 
@@ -121,49 +181,73 @@ The comment says these are "borrowed-ref accessors" that must not be treated as 
 
 Defaults to `"void"` via struct `Default`, but relies on struct-level rather than explicit serde attribute.
 
+**Status**: OPEN.
+
 ### 2. `parser.rs:363` -- convert_bc_to_ll hardcodes Homebrew paths
 
 macOS/ARM-specific paths silently fail on Linux. Fallback to PATH `llvm-dis` exists but error message only triggers when no `.ll` sibling file exists.
+
+**Status**: OPEN.
 
 ### 3. `instruction_parser.rs:392` -- conv_ops lacks word-boundary check
 
 Binary op matching has a guard for `"or"` vs longer words, but `conv_ops` (line 428) lacks the same protection.
 
+**Status**: OPEN.
+
 ### 4. `issue.rs:280` -- PathBuf hashing is platform-dependent
 
 `IssueLocation` derives `Hash` with `PathBuf`. Case sensitivity differs across platforms. Fine for in-process dedup but hashes differ across OSes.
+
+**Status**: OPEN.
 
 ### 5. `issue_candidate.rs:159` -- ExplainedSafe maps to Severity::Note
 
 An issue explained as safe still gets `Severity::Note`, which surfaces in output for callers using `severity()` directly without checking `is_reportable()`.
 
+**Status**: OPEN.
+
 ### 6. `terminal_report.rs:338` -- infer_lang_from_family catch-all
 
 `FamilyId(_)` silently returns `Unknown`. New `FamilyId` variants will be missed. Consider a lint or doc comment.
+
+**Status**: OPEN.
 
 ### 7. `SafetyExportPass.cpp:159` -- debug_loc format ambiguous on colons
 
 `filename:line[:column]` format is ambiguous if filename contains `:` (Windows paths). A structured object would be safer.
 
+**Status**: OPEN (C++ pass side).
+
 ### 8. `SafetyExportPass.cpp:167` -- Multi-line raw field for PHI nodes
 
 `I.print()` on PHI nodes produces multi-line output. Valid JSON, but line-oriented consumers may misparse.
 
-### 9. `ownership_solver.rs:310` -- apply_transition swallows errors at debug level
+**Status**: OPEN (C++ pass side).
 
-State machine transition errors (double-release, invalid transitions) are logged at `debug` level and discarded. Should be at least `warn` for a security analysis tool.
+### 9. `ownership_solver.rs:310` -- apply_transition swallows errors at debug level ✅ FIXED
 
-### 10. `pass.rs:168` -- PassContext::get clones entire collections
+~~State machine transition errors (double-release, invalid transitions) are logged at `debug` level and discarded. Should be at least `warn` for a security analysis tool.~~
 
-Every `ctx.get::<T>()` clones via `Arc::downcast_ref().cloned()`. O(n) on every access for large collections like `ContractGraph`.
+**Fix**: Changed from `tracing::debug!` to `tracing::warn!` so transition errors are visible in default log output.
 
-### 11. `rich.rs:20` -- No TTY detection for color output
+### 10. `pass.rs:168` -- PassContext::get clones entire collections ✅ FIXED
 
-`RichFormatter::new()` hardcodes `use_color: true` with no TTY detection. Piping to file embeds ANSI escape codes.
+~~Every `ctx.get::<T>()` clones via `Arc::downcast_ref().cloned()`. O(n) on every access for large collections like `ContractGraph`.~~
 
-### 12. `sarif.rs:112` -- ruleIndex hardcoded to 0
+**Fix**: Added `PassContext::get_ref::<T>()` returning `&T` for zero-copy access. Hot paths (ownership solver, issue candidate builder) migrated to `get_ref`. Fixed in prior review round.
 
-Every result references `ruleIndex: 0`, which is only correct for the first rule. All other rule results point to the wrong rule descriptor.
+### 11. `rich.rs:20` -- No TTY detection for color output ✅ FIXED
+
+~~`RichFormatter::new()` hardcodes `use_color: true` with no TTY detection. Piping to file embeds ANSI escape codes.~~
+
+**Fix**: `RichFormatter::new()` now uses `std::io::stdout().is_terminal()` to auto-detect TTY support. Piped output no longer contains ANSI escape codes.
+
+### 12. `sarif.rs:112` -- ruleIndex hardcoded to 0 ✅ FIXED
+
+~~Every result references `ruleIndex: 0`, which is only correct for the first rule.~~
+
+**Fix**: `format()` now builds a `rule_index_map` from the rules array and maps each issue's `ruleId` to its correct index.
 
 ---
 

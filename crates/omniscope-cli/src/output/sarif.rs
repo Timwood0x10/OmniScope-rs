@@ -15,12 +15,41 @@ pub struct SarifFormatter;
 
 /// Returns current UTC time as ISO 8601 string for SARIF invocation.
 fn chrono_now() -> String {
-    // Use std::time for simplicity — no chrono dependency needed
+    // Compute ISO 8601 from std::time — no chrono dependency needed.
+    // Produces e.g. "2026-05-30T12:34:56Z" which SARIF v2.1.0 requires.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    format!("{}Z", secs)
+
+    // Convert Unix epoch seconds to date/time components
+    let days = secs / 86400;
+    let time_secs = secs % 86400;
+    let hour = time_secs / 3600;
+    let minute = (time_secs % 3600) / 60;
+    let second = time_secs % 60;
+
+    // Calculate year, month, day from days since epoch
+    // Algorithm from Howard Hinnant: https://howardhinnant.github.io/date_algorithms.html
+    let z = days as i64 + 719468;
+    let era = if z >= 0 {
+        z / 146097
+    } else {
+        (z - 146096) / 146097
+    };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yr = if m <= 2 { y + 1 } else { y };
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        yr, m, d, hour, minute, second
+    )
 }
 
 impl SarifFormatter {
@@ -30,7 +59,7 @@ impl SarifFormatter {
     }
 
     /// Builds a SARIF result object from an Issue.
-    fn build_result(issue: &Issue) -> Value {
+    fn build_result(issue: &Issue, rule_index: usize) -> Value {
         let rule_id = format!("OMNI/{}", issue_kind_label(&issue.kind));
 
         // Message
@@ -109,7 +138,7 @@ impl SarifFormatter {
 
         let mut result = json!({
             "ruleId": rule_id,
-            "ruleIndex": 0,
+            "ruleIndex": rule_index,
             "level": level,
             "message": { "text": message_text },
             "locations": [location],
@@ -203,7 +232,23 @@ impl SarifFormatter {
 
 impl OutputFormatter for SarifFormatter {
     fn format(&self, result: &PipelineResult) -> String {
-        let results: Vec<Value> = result.issues.iter().map(Self::build_result).collect();
+        // Build rule index map: kind label -> index in rules array
+        let rules = Self::build_rules();
+        let rule_index_map: std::collections::HashMap<String, usize> = rules
+            .iter()
+            .enumerate()
+            .filter_map(|(i, rule)| rule["id"].as_str().map(|id| (id.to_string(), i)))
+            .collect();
+
+        let results: Vec<Value> = result
+            .issues
+            .iter()
+            .map(|issue| {
+                let rule_id = format!("OMNI/{}", issue_kind_label(&issue.kind));
+                let rule_index = rule_index_map.get(&rule_id).copied().unwrap_or(0);
+                Self::build_result(issue, rule_index)
+            })
+            .collect();
 
         let sarif = json!({
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",

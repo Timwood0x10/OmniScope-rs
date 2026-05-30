@@ -3,7 +3,6 @@
 //! This module provides the core dataflow graph structure for tracking
 //! data dependencies and performing dataflow analysis.
 
-use dashmap::DashMap;
 use omniscope_types::{EdgeId, NodeId, ValueId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,9 +10,9 @@ use std::collections::HashMap;
 /// Data flow graph for analysis
 pub struct DataFlowGraph {
     /// All nodes in the graph
-    nodes: DashMap<NodeId, DataNode>,
+    nodes: HashMap<NodeId, DataNode>,
     /// All edges in the graph
-    edges: DashMap<EdgeId, DataEdge>,
+    edges: HashMap<EdgeId, DataEdge>,
     /// Entry node ID
     entry_node: Option<NodeId>,
     /// Exit node ID
@@ -32,8 +31,8 @@ impl DataFlowGraph {
     /// Creates a new dataflow graph
     pub fn new() -> Self {
         Self {
-            nodes: DashMap::new(),
-            edges: DashMap::new(),
+            nodes: HashMap::new(),
+            edges: HashMap::new(),
             entry_node: None,
             exit_node: None,
             next_node_id: 0,
@@ -55,7 +54,12 @@ impl DataFlowGraph {
         id
     }
 
-    /// Adds an edge to the graph
+    /// Adds an edge to the graph.
+    ///
+    /// Both endpoints must already exist as nodes; missing endpoints trigger
+    /// a debug-level warning and the edge is skipped for those nodes' edge
+    /// lists, but still stored in `self.edges` and adjacency maps for
+    /// diagnostic purposes.
     pub fn add_edge(&mut self, edge: DataEdge) -> EdgeId {
         let id = self.next_edge_id;
         self.next_edge_id += 1;
@@ -63,15 +67,37 @@ impl DataFlowGraph {
         let from = edge.from;
         let to = edge.to;
 
+        // Validate endpoints exist
+        debug_assert!(
+            self.nodes.contains_key(&from),
+            "add_edge: source node {} does not exist — edges should connect existing nodes",
+            from
+        );
+        debug_assert!(
+            self.nodes.contains_key(&to),
+            "add_edge: target node {} does not exist — edges should connect existing nodes",
+            to
+        );
+
         let mut edge = edge;
         edge.id = id;
 
         // Update node connectivity
-        if let Some(mut from_node) = self.nodes.get_mut(&from) {
+        if let Some(from_node) = self.nodes.get_mut(&from) {
             from_node.outgoing_edges.push(id);
+        } else {
+            tracing::debug!(
+                "add_edge: source node {} missing, skipping outgoing edge update",
+                from
+            );
         }
-        if let Some(mut to_node) = self.nodes.get_mut(&to) {
+        if let Some(to_node) = self.nodes.get_mut(&to) {
             to_node.incoming_edges.push(id);
+        } else {
+            tracing::debug!(
+                "add_edge: target node {} missing, skipping incoming edge update",
+                to
+            );
         }
 
         // Update adjacency lists for O(1) predecessor/successor lookup
@@ -84,12 +110,12 @@ impl DataFlowGraph {
 
     /// Gets a node by ID
     pub fn get_node(&self, id: NodeId) -> Option<DataNode> {
-        self.nodes.get(&id).map(|n| n.clone())
+        self.nodes.get(&id).cloned()
     }
 
     /// Gets an edge by ID
     pub fn get_edge(&self, id: EdgeId) -> Option<DataEdge> {
-        self.edges.get(&id).map(|e| e.clone())
+        self.edges.get(&id).cloned()
     }
 
     /// Sets the entry node
@@ -124,12 +150,12 @@ impl DataFlowGraph {
 
     /// Returns all nodes
     pub fn all_nodes(&self) -> Vec<DataNode> {
-        self.nodes.iter().map(|n| n.clone()).collect()
+        self.nodes.values().cloned().collect()
     }
 
     /// Returns all edges
     pub fn all_edges(&self) -> Vec<DataEdge> {
-        self.edges.iter().map(|e| e.clone()).collect()
+        self.edges.values().cloned().collect()
     }
 
     /// Returns predecessors of a node (O(k) where k = number of predecessors)

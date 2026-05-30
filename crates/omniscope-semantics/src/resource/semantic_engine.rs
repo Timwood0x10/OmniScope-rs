@@ -534,22 +534,42 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
 /// would slip through without this guard.
 fn callee_name_suggests_release(callee: &str) -> bool {
     let lower = callee.to_lowercase();
-    lower.contains("_free")
-        || lower.ends_with("free")
-        || lower.contains("_drop")
-        || lower.ends_with("drop")
-        || lower.contains("_dealloc")
-        || lower.ends_with("dealloc")
-        || lower.contains("_destroy")
-        || lower.ends_with("destroy")
-        || lower.contains("_release")
-        || lower.ends_with("release")
-        || lower.contains("_unref")
-        || lower.ends_with("unref")
-        || lower.contains("_cleanup")
-        || lower.ends_with("cleanup")
-        || lower.contains("_dispose")
-        || lower.ends_with("dispose")
+
+    /// Check that `keyword` appears at a word boundary in `s`.
+    /// A word boundary means the character before the keyword (if any) is `_` or
+    /// the start of the string, and the character after the keyword (if any) is
+    /// `_`, end of string, or not an alphanumeric character.
+    /// This prevents `_free` from matching `_freeze` and `_drop` from matching `_dropdown`.
+    fn has_keyword(s: &str, keyword: &str) -> bool {
+        let mut start = 0;
+        while let Some(pos) = s[start..].find(keyword) {
+            let abs_pos = start + pos;
+            let after = abs_pos + keyword.len();
+
+            // Before: must be start-of-string or preceded by '_'
+            let before_ok = abs_pos == 0 || s.as_bytes().get(abs_pos - 1) == Some(&b'_');
+
+            // After: must be end-of-string or followed by '_' or non-alphanumeric
+            let after_ok = after >= s.len()
+                || s.as_bytes().get(after) == Some(&b'_')
+                || !s.as_bytes()[after].is_ascii_alphanumeric();
+
+            if before_ok && after_ok {
+                return true;
+            }
+            start = abs_pos + 1;
+        }
+        false
+    }
+
+    has_keyword(&lower, "free")
+        || has_keyword(&lower, "drop")
+        || has_keyword(&lower, "dealloc")
+        || has_keyword(&lower, "destroy")
+        || has_keyword(&lower, "release")
+        || has_keyword(&lower, "unref")
+        || has_keyword(&lower, "cleanup")
+        || has_keyword(&lower, "dispose")
 }
 
 /// Derive FFI safety from the caller's instruction context.

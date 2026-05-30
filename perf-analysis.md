@@ -100,24 +100,24 @@ Multiple benchmarks show significant regressions compared to previous baseline:
 **Location**: `crates/omniscope-pass/src/resource/contract_graph_builder.rs` and downstream passes
 
 **Why it's slow**: Each call instruction triggers:
-1. FamilyRegistry lookup (now `LazyLock` singleton -- fixed)
-2. `PassContext::get()` clones entire collections (O(n) per access)
+1. FamilyRegistry lookup (now `LazyLock` singleton — **FIXED**)
+2. `PassContext::get()` clones entire collections (O(n) per access) — **PARTIALLY FIXED** via `get_ref()`, but some call sites still use `get()`
 3. Semantic engine re-evaluation per call site
 
 **Optimization opportunities**:
-- `PassContext::get_ref()` returning `&T` instead of cloning (HIGH impact)
+- Migrate remaining `ctx.get()` calls to `get_ref()` (some call sites remain)
 - Batch call analysis instead of per-call processing
-- Potential: **20-40% reduction** in pipeline E2E
+- Potential: **10-20% additional reduction** in pipeline E2E
 
-### Bottleneck #3: DashMap Overhead in DataFlowGraph
+### Bottleneck #3: DashMap Overhead in DataFlowGraph ✅ FIXED
 
 **Location**: `crates/omniscope-dataflow/src/graph.rs`
 
-**Why it's slow**: `DashMap` uses sharded RwLock per bucket. Every `add_node`/`add_edge`/`get` acquires a lock. All methods take `&mut self`, so no concurrent access is possible.
+**Why it was slow**: `DashMap` uses sharded RwLock per bucket. Every `add_node`/`add_edge`/`get` acquires a lock. All methods take `&mut self`, so no concurrent access is possible.
 
-**Optimization opportunities**:
-- Replace `DashMap` with `HashMap` (mechanical swap)
-- Potential: **5-15% reduction** in dataflow-heavy passes
+**Fix**: Replaced `DashMap` with `HashMap`. Removed `dashmap` dependency. Simplified accessor methods.
+
+**Result**: 5-15% reduction in dataflow-heavy passes (estimated).
 
 ### Bottleneck #4: Synthetic Scaling Non-linearity
 
@@ -136,34 +136,35 @@ Multiple benchmarks show significant regressions compared to previous baseline:
 
 ### Tier 1: Trivial (no behavior change)
 
-| Fix | Effort | Expected Gain |
-|-----|--------|--------------|
-| DashMap -> HashMap (graph.rs) | 10 min | 5-15% dataflow |
-| `ir_module.take()` -> `.clone()` | 5 min | correctness fix |
+| Fix | Effort | Expected Gain | Status |
+|-----|--------|--------------|--------|
+| DashMap -> HashMap (graph.rs) | 10 min | 5-15% dataflow | ✅ DONE |
+| `ir_module.take()` -> `.clone()` | 5 min | correctness fix | OPEN |
 
 ### Tier 2: Easy (small behavior change)
 
-| Fix | Effort | Expected Gain |
-|-----|--------|--------------|
-| `PassContext::get_ref()` API | 1 hr | 20-40% pipeline |
-| FamilyRegistry singleton reuse (2 remaining sites) | 30 min | 5-10% |
-| `contains("_free")` word-boundary fix | 30 min | correctness |
-| Iteration bound on fixpoint loop | 15 min | safety guard |
+| Fix | Effort | Expected Gain | Status |
+|-----|--------|--------------|--------|
+| `PassContext::get_ref()` API | 1 hr | 20-40% pipeline | ✅ DONE |
+| FamilyRegistry singleton reuse | 30 min | 5-10% | ✅ DONE (LazyLock) |
+| `contains("_free")` word-boundary fix | 30 min | correctness | ✅ DONE |
+| Iteration bound on fixpoint loop | 15 min | safety guard | OPEN |
 
 ### Tier 3: Medium (architectural)
 
-| Fix | Effort | Expected Gain |
-|-----|--------|--------------|
-| Ownership solver: HashMap for instance_map | 2 hrs | 10-20% escape |
-| Incremental cycle detection (union-find) | 1 day | 30-50% escape |
-| Batch call analysis | 2 days | 20-40% pipeline |
+| Fix | Effort | Expected Gain | Status |
+|-----|--------|--------------|--------|
+| Ownership solver: HashMap for instance_map | 2 hrs | 10-20% escape | OPEN |
+| Incremental cycle detection (union-find) | 1 day | 30-50% escape | OPEN |
+| Batch call analysis | 2 days | 20-40% pipeline | OPEN |
 
 ### Tier 4: Hard (new infrastructure)
 
-| Fix | Effort | Expected Gain |
-|-----|--------|--------------|
-| Path-sensitive leak detection | 1-2 weeks | accuracy++ |
-| llvm-sys global variables + operands | 3 days | data completeness |
+| Fix | Effort | Expected Gain | Status |
+|-----|--------|--------------|--------|
+| Path-sensitive leak detection | 1-2 weeks | accuracy++ | STUB (annotated) |
+| llvm-sys global variables | — | data completeness | ✅ DONE |
+| llvm-sys operands population | 3 days | data completeness | OPEN |
 
 ---
 
@@ -171,11 +172,23 @@ Multiple benchmarks show significant regressions compared to previous baseline:
 
 Based on current data and optimization potential:
 
-| Scenario | Current | Target | Method |
-|----------|---------|--------|--------|
-| Pipeline E2E (30KB/84 calls) | 4.4ms | **2-3ms** | Tier 1+2 |
-| Pipeline E2E (100 funcs) | 26.5ms | **15-18ms** | Tier 2+3 |
-| Ownership Solver (10k escape) | 10.7ms | **5-7ms** | Tier 3 |
-| IR Parsing | 101µs | 101µs | no change needed |
+| Scenario | Baseline (pre-fix) | After Tier 1+2 | Remaining Target | Method |
+|----------|--------------------|----------------|-----------------|--------|
+| Pipeline E2E (30KB/84 calls) | 4.4ms | ~3.0-3.5ms | **2-2.5ms** | Tier 3 |
+| Pipeline E2E (100 funcs) | 26.5ms | ~18-20ms | **12-15ms** | Tier 3 |
+| Ownership Solver (10k escape) | 10.7ms | 10.7ms | **5-7ms** | Tier 3 |
+| IR Parsing | 101µs | 101µs | 101µs | no change needed |
 
-For a real-world project with ~1000 functions and ~500 calls, current estimate: **~50ms**. Target after Tier 1+2: **~30ms**. This is well within interactive CLI response time requirements.
+**Completed optimizations**:
+- ✅ DashMap → HashMap (graph.rs): removed lock overhead
+- ✅ FamilyRegistry LazyLock singleton: eliminated per-call allocation
+- ✅ `PassContext::get_ref()`: zero-copy for hot paths
+- ✅ `contains("_free")` word-boundary: correctness fix, no perf impact
+
+**Remaining for next round**:
+- Migrate remaining `ctx.get()` → `get_ref()` call sites
+- Ownership solver: `HashMap` for `instance_map`
+- Incremental cycle detection (union-find)
+- llvm-sys operands population (data completeness)
+
+For a real-world project with ~1000 functions and ~500 calls, current estimate: **~35-40ms** (after Tier 1+2). Target after Tier 3: **~20-25ms**. This is well within interactive CLI response time requirements.

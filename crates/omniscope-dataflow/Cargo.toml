@@ -14,7 +14,6 @@ omniscope-core = { path = "../omniscope-core" }
 omniscope-types = { path = "../omniscope-types" }
 omniscope-ir = { path = "../omniscope-ir" }
 
-dashmap = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }

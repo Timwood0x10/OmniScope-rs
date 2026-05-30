@@ -288,7 +288,11 @@ impl IRModule {
             // Top-level call (outside any function body — malformed/truncated IR)
             // Record with a sentinel caller name so downstream analysis can
             // discover these calls rather than silently dropping them.
-            else if line.contains("call") && current_function.is_empty() {
+            else if current_function.is_empty()
+                && (line.contains(" call ")
+                    || line.starts_with("call ")
+                    || line.contains("\tcall "))
+            {
                 let caller_tag = "<top-level>";
                 if let Some(call) = parse_call(line, caller_tag, &module.debug_metadata) {
                     module.calls.push(call);
@@ -496,8 +500,13 @@ fn parse_call(
     current_function: &str,
     metadata: &HashMap<String, SourceLocation>,
 ) -> Option<CallInstruction> {
-    // Format: ... call ... @name(...)
-    if !line.contains("call") {
+    // Quick reject: must contain "call" as a keyword (space-delimited or tab-delimited),
+    // not as a substring like "call_addr" or "recall".
+    if !line.contains(" call ")
+        && !line.contains("\tcall ")
+        && !line.starts_with("call ")
+        && !line.contains(" call\t")
+    {
         return None;
     }
 

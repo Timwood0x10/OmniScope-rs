@@ -231,13 +231,13 @@ fn load_via_text(path: &Path) -> Result<IRModule> {
 
 /// Find the `opt` binary path.
 ///
-/// Search order:
-/// 1. `LLVM_OPT` environment variable
-/// 2. `llvm-config --bindir` + `/opt`
-/// 3. `which opt`
-/// 4. Common Homebrew paths (newest LLVM first)
+/// Search order (prefers the newest LLVM version):
+/// 1. `LLVM_OPT` environment variable (explicit override)
+/// 2. Common Homebrew paths (newest LLVM first: 22, 21, 20, ...)
+/// 3. `llvm-config --bindir` + `/opt` (may be an older version on PATH)
+/// 4. `which opt` (last resort, often an older version)
 pub fn find_opt() -> Option<PathBuf> {
-    // 1. Environment variable
+    // 1. Environment variable — explicit override always wins
     if let Ok(path) = std::env::var("LLVM_OPT") {
         let p = PathBuf::from(&path);
         if p.is_file() {
@@ -246,7 +246,17 @@ pub fn find_opt() -> Option<PathBuf> {
         }
     }
 
-    // 2. llvm-config --bindir
+    // 2. Homebrew paths — prefer newest version (llvm@22 > llvm@21 > ...)
+    let candidates = homebrew_llvm_bin_dirs();
+    for dir in candidates {
+        let p = dir.join("opt");
+        if p.is_file() {
+            debug!(path = %p.display(), "Found opt via Homebrew path");
+            return Some(p);
+        }
+    }
+
+    // 3. llvm-config --bindir
     if let Some(dir) = llvm_config_bindir() {
         let p = dir.join("opt");
         if p.is_file() {
@@ -255,20 +265,10 @@ pub fn find_opt() -> Option<PathBuf> {
         }
     }
 
-    // 3. which opt
+    // 4. which opt — last resort
     if let Some(p) = which("opt") {
         debug!(path = %p.display(), "Found opt via PATH");
         return Some(p);
-    }
-
-    // 4. Common Homebrew paths
-    let candidates = homebrew_llvm_bin_dirs();
-    for dir in candidates {
-        let p = dir.join("opt");
-        if p.is_file() {
-            debug!(path = %p.display(), "Found opt via Homebrew path");
-            return Some(p);
-        }
     }
 
     debug!("opt binary not found");

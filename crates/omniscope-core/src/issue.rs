@@ -347,6 +347,11 @@ pub struct Issue {
 
 impl Issue {
     /// Creates a new issue with the given kind, severity, and description.
+    ///
+    /// The `symbol` field defaults to a placeholder derived from the issue kind.
+    /// Callers should use `.with_symbol()` to set the actual symbol for SRT lookup.
+    /// A non-empty default prevents silent SRT lookup failures when `.with_symbol()`
+    /// is accidentally omitted.
     pub fn new(
         id: IssueId,
         kind: IssueKind,
@@ -364,8 +369,23 @@ impl Issue {
             ffi_boundary: None,
             trace: Vec::new(),
             cwe_id,
-            symbol: String::new(),
+            symbol: format!("<unresolved-{:?}>", kind),
         }
+    }
+
+    /// Creates a new issue with an explicit symbol for SRT lookup.
+    ///
+    /// Prefer this constructor when the symbol is known at construction time.
+    pub fn with_details(
+        id: IssueId,
+        kind: IssueKind,
+        severity: Severity,
+        description: impl Into<String>,
+        symbol: impl Into<String>,
+    ) -> Self {
+        let mut issue = Self::new(id, kind, severity, description);
+        issue.symbol = symbol.into();
+        issue
     }
 
     /// Sets the location.

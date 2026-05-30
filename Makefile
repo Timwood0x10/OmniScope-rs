@@ -23,7 +23,13 @@ CARGO_BUILD  := cargo build
 PASS_DIR      := pass
 PASS_BUILD    := $(PASS_DIR)/build
 PASS_SRC      := $(PASS_DIR)/SafetyExportPass.cpp
-LLVM_PREFIX   ?= $(shell llvm-config --prefix 2>/dev/null)
+# Prefer newest Homebrew LLVM (22 > 21 > ...), fall back to llvm-config on PATH
+LLVM_PREFIX   ?= $(shell \
+	for v in 22 21 20 19 18 17; do \
+		p="/opt/homebrew/opt/llvm@$$v"; \
+		if [ -d "$$p" ]; then echo "$$p"; exit 0; fi; \
+	done; \
+	llvm-config --prefix 2>/dev/null)
 CLANG_TIDY    := $(shell which clang-tidy 2>/dev/null)
 CLANG_FORMAT  := $(shell which clang-format 2>/dev/null)
 NPROC         := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)

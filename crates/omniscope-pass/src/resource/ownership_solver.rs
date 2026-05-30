@@ -308,7 +308,7 @@ fn apply_transition_at(
     function_name: &str,
 ) {
     if let Err(e) = instances[idx].transition(event) {
-        tracing::debug!(
+        tracing::warn!(
             "Transition error for instance {} in {}: {:?}",
             instances[idx].id,
             function_name,

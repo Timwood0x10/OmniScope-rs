@@ -17,7 +17,10 @@ pub struct RichFormatter {
 impl RichFormatter {
     /// Creates a new rich formatter with auto-detected color support.
     pub fn new() -> Self {
-        Self { use_color: true }
+        use std::io::IsTerminal;
+        Self {
+            use_color: std::io::stdout().is_terminal(),
+        }
     }
 
     /// Creates a formatter with explicit color control (used in tests).
