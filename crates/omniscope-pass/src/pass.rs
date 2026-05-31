@@ -3,6 +3,7 @@
 //! This module defines the core pass infrastructure for OmniScope analysis.
 
 use omniscope_core::{Diagnostic, Fact, Issue, Result};
+use omniscope_ir::IRModule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -132,6 +133,10 @@ impl PassResult {
 /// Pass context for sharing data between passes
 #[derive(Clone)]
 pub struct PassContext {
+    /// The IR module being analyzed — stored separately from `shared` so that
+    /// passes can obtain a `&IRModule` reference without cloning, while still
+    /// being able to call `store()` / `emit_issue()` later in the same `run()`.
+    ir_module: Option<Arc<IRModule>>,
     /// Shared data between passes
     shared: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,
     /// Diagnostics produced by passes
@@ -150,6 +155,7 @@ impl PassContext {
     /// Creates a new pass context
     pub fn new() -> Self {
         Self {
+            ir_module: None,
             shared: HashMap::new(),
             diagnostics: Vec::new(),
             facts: Vec::new(),
@@ -157,6 +163,32 @@ impl PassContext {
             suppressed_issues: Vec::new(),
             next_issue_id: 1,
         }
+    }
+
+    /// Sets the IR module for analysis.
+    ///
+    /// This is the primary input for almost every analysis pass.
+    /// Stored in a dedicated field (not `shared`) so that passes can
+    /// obtain `&IRModule` via `get_ir_module()` without cloning, even
+    /// when they also need to call `store()` / `emit_issue()` later.
+    pub fn set_ir_module(&mut self, module: IRModule) {
+        self.ir_module = Some(Arc::new(module));
+    }
+
+    /// Returns a reference to the IR module, if one has been set.
+    ///
+    /// This is the zero-clone alternative to `ctx.get::<IRModule>("ir_module")`.
+    /// Because `ir_module` lives in a dedicated `Option<Arc<IRModule>>` field
+    /// rather than the `shared` HashMap, the borrow on `self.ir_module` does
+    /// not conflict with subsequent `&mut self` calls to `store()` or
+    /// `emit_issue()`.
+    pub fn get_ir_module(&self) -> Option<&IRModule> {
+        self.ir_module.as_deref()
+    }
+
+    /// Returns `true` if an IR module has been set in this context.
+    pub fn has_ir_module(&self) -> bool {
+        self.ir_module.is_some()
     }
 
     /// Stores shared data
@@ -283,6 +315,29 @@ impl PassContext {
         self.issues.len()
     }
 
+    /// Creates a lightweight clone for parallel execution.
+    ///
+    /// This method creates a new PassContext that shares the read-only data
+    /// (ir_module and shared) with the original context via Arc references,
+    /// but has empty collections for write-only data (diagnostics, facts,
+    /// issues, suppressed_issues). The `next_issue_id` is copied from the
+    /// original context.
+    ///
+    /// This is more efficient than a full clone when running passes in parallel,
+    /// as it avoids copying potentially large vectors of diagnostics, facts,
+    /// and issues that are only written to by individual passes.
+    pub fn clone_for_parallel(&self) -> Self {
+        Self {
+            ir_module: self.ir_module.clone(), // Arc clone (cheap)
+            shared: self.shared.clone(),       // HashMap clone, but values are Arc (cheap)
+            diagnostics: Vec::new(),           // Empty - pass will produce its own
+            facts: Vec::new(),                 // Empty - pass will produce its own
+            issues: Vec::new(),                // Empty - pass will produce its own
+            suppressed_issues: Vec::new(),     // Empty - pass will produce its own
+            next_issue_id: self.next_issue_id, // Copy starting ID
+        }
+    }
+
     /// Merges another PassContext into this one.
     ///
     /// Used by the parallel pass manager to collect results from
@@ -303,6 +358,11 @@ impl PassContext {
         // Merge shared data (later writer wins for duplicate keys)
         for (key, value) in other.shared {
             self.shared.insert(key, value);
+        }
+
+        // Inherit ir_module if we don't have one yet
+        if self.ir_module.is_none() {
+            self.ir_module = other.ir_module;
         }
 
         // Advance issue ID counter past the highest used ID

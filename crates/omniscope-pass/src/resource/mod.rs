@@ -25,3 +25,4 @@ pub mod raw_fact_collector;
 pub mod risk_scoring;
 pub mod structural_inference_pass;
 pub mod summary_builder;
+pub mod union_find;

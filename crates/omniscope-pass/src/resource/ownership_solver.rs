@@ -16,6 +16,7 @@ use omniscope_types::{Effect, EscapeKind, FamilyId, PointerContract};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
+use crate::resource::union_find::OwnershipCycleDetector;
 
 /// Ownership solver pass.
 ///
@@ -54,6 +55,10 @@ impl Pass for OwnershipSolverPass {
 
         // Load the contract graph from context (reference, no clone).
         let graph_ref = ctx.get_ref::<ContractGraph>("contract_graph");
+
+        // Initialize cycle detector for incremental escape-reclaim detection.
+        // This avoids redundant state transitions by tracking ownership chains.
+        let mut cycle_detector = OwnershipCycleDetector::new();
 
         if let Some(graph) = graph_ref {
             // Pre-allocate based on acquire edge count to avoid realloc.
@@ -244,6 +249,9 @@ impl Pass for OwnershipSolverPass {
                             {
                                 entry.insert(idx);
                             }
+                            // Track escape relationship in cycle detector for
+                            // incremental cycle detection.
+                            cycle_detector.record_escape(edge.source, result);
                         }
                     }
                     Effect::OwnershipReclaim { family, result } => {
@@ -277,9 +285,15 @@ impl Pass for OwnershipSolverPass {
                                 "duplicate instance_id in reclaim edge — first instance kept"
                             );
                         }
+                        // Track reclaim relationship in cycle detector for
+                        // incremental cycle detection.
+                        cycle_detector.record_reclaim(edge.source, result);
                     }
                 }
             }
+            // Store cycle detector for downstream passes to efficiently
+            // query ownership chain relationships.
+            ctx.store("ownership_cycle_detector", cycle_detector);
         }
 
         let instance_count = instances.len();
@@ -339,18 +353,37 @@ mod tests {
     use omniscope_semantics::OwnershipState;
     use omniscope_types::{EscapeKind, FamilyId};
 
+    /// Objective: Verify that OwnershipSolverPass is correctly initialized with expected properties.
+    /// Invariants: name() == "OwnershipSolver", kind() == PassKind::Analysis, dependencies() == ["ContractGraphBuilder"].
     #[test]
     fn test_ownership_solver_creation() {
         let pass = OwnershipSolverPass::new();
-        assert_eq!(pass.name(), "OwnershipSolver");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["ContractGraphBuilder"]);
+        assert_eq!(
+            pass.name(),
+            "OwnershipSolver",
+            "OwnershipSolverPass must have name 'OwnershipSolver'"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "OwnershipSolverPass must be an Analysis pass"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["ContractGraphBuilder"],
+            "OwnershipSolverPass must depend on ContractGraphBuilder"
+        );
     }
 
+    /// Objective: Verify that ownership state machine correctly handles escape transitions.
+    /// Invariants: Owned instance is leak candidate, Escaped instance is not leak candidate.
     #[test]
     fn test_ownership_state_machine_integration() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
-        assert!(instance.is_leak_candidate());
+        assert!(
+            instance.is_leak_candidate(),
+            "Owned instance must be a leak candidate before escape"
+        );
 
         // Simulate: malloc → escape (return to caller) → free
         instance
@@ -360,7 +393,7 @@ mod tests {
             .unwrap();
         assert!(
             !instance.is_leak_candidate(),
-            "Escaped via return is not a leak"
+            "Escaped via return is not a leak candidate"
         );
     }
 
@@ -413,7 +446,7 @@ mod tests {
         );
 
         // Check the ownership state
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         assert!(
             states.is_some(),
             "ownership_states must be stored in context"
@@ -461,9 +494,13 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let states = states.unwrap();
-        assert_eq!(states.len(), 1);
+        assert_eq!(
+            states.len(),
+            1,
+            "Must have exactly 1 instance for one Acquire edge"
+        );
 
         assert!(
             states[0].is_leak_candidate(),
@@ -471,17 +508,20 @@ mod tests {
         );
     }
 
+    /// Objective: Verify that double release does not crash the solver.
+    /// Invariants: After two releases, the instance stays in Released state
+    /// (the double-release is recorded but doesn't fail the pass).
     #[test]
     fn test_solver_double_release_error() {
-        // Objective: Verify that double release does not crash the solver.
-        // Invariants: After two releases, the instance stays in Released state
-        // (the double-release is recorded but doesn't fail the pass).
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 42 })
             .unwrap();
         let result = instance.transition(OwnershipEvent::Release { function: 43 });
-        assert!(result.is_err(), "Double release must be an error");
+        assert!(
+            result.is_err(),
+            "Double release must return an error to indicate contract violation"
+        );
     }
 
     #[test]
@@ -549,7 +589,7 @@ mod tests {
             "Solver must create exactly 2 instances (original + reclaimed)"
         );
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let states = states.expect("ownership_states must be stored in context");
         assert_eq!(states.len(), 2, "Must have 2 resource instances");
 
@@ -633,7 +673,7 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let states = states.expect("ownership_states must be stored");
         let inst = &states[0];
 
@@ -690,7 +730,7 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let inst = &states.expect("ownership_states must be stored")[0];
 
         assert_eq!(
@@ -743,7 +783,7 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let inst = &states.expect("ownership_states must be stored")[0];
 
         assert_eq!(
@@ -801,7 +841,7 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let inst = &states.expect("ownership_states must be stored")[0];
 
         assert_eq!(
@@ -858,12 +898,19 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let states = states.expect("ownership_states must be stored");
         // Only 1 instance — raw_ptr_id is an alias, not a new instance.
-        assert_eq!(states.len(), 1, "Must have 1 instance (original only)");
+        assert_eq!(
+            states.len(),
+            1,
+            "Must have 1 instance (original only), raw_ptr_id is an alias"
+        );
         let inst = &states[0];
-        assert_eq!(inst.id, instance_id);
+        assert_eq!(
+            inst.id, instance_id,
+            "Instance ID must match the original instance_id"
+        );
         assert_eq!(
             inst.state,
             OwnershipState::Escaped(EscapeKind::RawPointer),
@@ -900,13 +947,25 @@ mod tests {
         let pass = OwnershipSolverPass::new();
         pass.run(&mut ctx).unwrap();
 
-        let states: Option<Vec<ResourceInstance>> = ctx.get("ownership_states");
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
         let states = states.expect("ownership_states must be stored");
-        assert_eq!(states.len(), 1, "Must have 1 borrowed instance");
+        assert_eq!(
+            states.len(),
+            1,
+            "Must have 1 borrowed instance for EscapesToCallback edge"
+        );
 
         let inst = &states[0];
-        assert_eq!(inst.state, OwnershipState::Borrowed);
-        assert_eq!(inst.contract, PointerContract::Borrowed);
+        assert_eq!(
+            inst.state,
+            OwnershipState::Borrowed,
+            "EscapesToCallback must create a Borrowed instance"
+        );
+        assert_eq!(
+            inst.contract,
+            PointerContract::Borrowed,
+            "Borrowed instance must have Borrowed contract"
+        );
         assert!(
             !inst.is_leak_candidate(),
             "Borrowed instance is NOT a leak candidate"
