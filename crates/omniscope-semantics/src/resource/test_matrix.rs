@@ -19,12 +19,12 @@ use super::summary_inference::infer_summary_for_symbol;
 
 // ─── Same-family release: safe ───────────────────────────────────────
 
-/// Objective: 验证 malloc 和 free 是否正确注册在同一个家族中
+/// Objective: Verify that malloc and free are correctly registered in the same family
 ///
 /// Invariants:
-/// - malloc 和 free 必须有相同的 family_id（均为 C_HEAP）
-/// - is_compatible_release(malloc, free) 必须返回 true
-/// - 同一家族的候选者应有匹配的 alloc/release 家族
+/// - malloc and free must have the same family_id (both C_HEAP)
+/// - is_compatible_release(malloc, free) must return true
+/// - Same-family candidate should have matching alloc/release families
 #[test]
 fn test_matrix_malloc_free_same_family_safe() {
     let registry = FamilyRegistry::new();
@@ -59,17 +59,17 @@ fn test_matrix_malloc_free_same_family_safe() {
         candidate.alloc_family,
         candidate
             .release_family
-            .expect("test_matrix::test_matrix_malloc_free_same_family_safe: test_matrix: release_family should be set for cross-family candidate"),
+            .expect("test_matrix::test_matrix_malloc_free_same_family_safe: release_family should be set for cross-family candidate"),
         "Same-family candidate should have matching families"
     );
 }
 
-/// Objective: 验证 C++ new[] 和 delete[] 是否正确注册在同一个家族中
+/// Objective: Verify that C++ new[] and delete[] are correctly registered in the same family
 ///
 /// Invariants:
-/// - new[] 和 delete[] 必须有相同的 family_id（均为 CPP_NEW_ARRAY）
-/// - is_compatible_release(new[], delete[]) 必须返回 true
-/// - 同一家族的分配和释放操作应正确配对
+/// - new[] and delete[] must have the same family_id (both CPP_NEW_ARRAY)
+/// - is_compatible_release(new[], delete[]) must return true
+/// - Same-family alloc/release operations should be correctly paired
 #[test]
 fn test_matrix_new_array_delete_array_same_family_safe() {
     let registry = FamilyRegistry::new();
@@ -88,12 +88,12 @@ fn test_matrix_new_array_delete_array_same_family_safe() {
     );
 }
 
-/// Objective: 验证 Python 对象分配和释放函数是否正确注册在同一个家族中
+/// Objective: Verify that Python object allocation and release functions are correctly registered in the same family
 ///
 /// Invariants:
-/// - PyObject_New 和 PyObject_Free 必须有相同的 family_id（均为 PYTHON_OBJECT）
-/// - Python 对象的分配和释放操作应正确配对
-/// - 家族注册应支持跨语言（Python）的资源管理
+/// - PyObject_New and PyObject_Free must have the same family_id (both PYTHON_OBJECT)
+/// - Python object allocation and release operations should be correctly paired
+/// - Family registration should support cross-language (Python) resource management
 #[test]
 fn test_matrix_pyobject_new_pyobject_free_same_family_safe() {
     let registry = FamilyRegistry::new();
@@ -112,12 +112,12 @@ fn test_matrix_pyobject_new_pyobject_free_same_family_safe() {
 
 // ─── Cross-family mismatch: confirmed issue ──────────────────────────
 
-/// Objective: 验证 C malloc 和 C++ operator delete 是否正确识别为不同家族
+/// Objective: Verify that C malloc and C++ operator delete are correctly identified as different families
 ///
 /// Invariants:
-/// - malloc 和 operator delete 必须有不同的 family_id
-/// - is_compatible_release(malloc, delete) 必须返回 false
-/// - 跨家族的分配/释放操作应被标记为不兼容
+/// - malloc and operator delete must have different family_id
+/// - is_compatible_release(malloc, delete) must return false
+/// - Cross-family alloc/release operations should be marked as incompatible
 #[test]
 fn test_matrix_malloc_delete_cross_family_mismatch() {
     let registry = FamilyRegistry::new();
@@ -138,12 +138,12 @@ fn test_matrix_malloc_delete_cross_family_mismatch() {
     );
 }
 
-/// Objective: 验证 Rust 分配器和 C free 是否正确识别为不同家族
+/// Objective: Verify that Rust allocator and C free are correctly identified as different families
 ///
 /// Invariants:
-/// - __rust_alloc 和 free 必须有不同的 family_id
-/// - is_compatible_release(__rust_alloc, free) 必须返回 false
-/// - Rust 分配器与 C 标准库释放函数应被视为不兼容
+/// - __rust_alloc and free must have different family_id
+/// - is_compatible_release(__rust_alloc, free) must return false
+/// - Rust allocator and C standard library release function should be considered incompatible
 #[test]
 fn test_matrix_rust_alloc_free_cross_family_mismatch() {
     let registry = FamilyRegistry::new();
@@ -164,12 +164,12 @@ fn test_matrix_rust_alloc_free_cross_family_mismatch() {
     );
 }
 
-/// Objective: 验证 Python 内存分配和对象释放函数是否正确识别为不同家族
+/// Objective: Verify that Python memory allocation and object release functions are correctly identified as different families
 ///
 /// Invariants:
-/// - PyMem_Malloc 和 PyObject_Free 必须有不同的 family_id
-/// - Python 内存管理与对象管理应被视为不同的资源家族
-/// - 不同的 Python API 应有明确的家族边界
+/// - PyMem_Malloc and PyObject_Free must have different family_id
+/// - Python memory management and object management should be considered different resource families
+/// - Different Python APIs should have clear family boundaries
 #[test]
 fn test_matrix_pymem_malloc_pyobject_free_family_mismatch() {
     let registry = FamilyRegistry::new();
@@ -186,12 +186,12 @@ fn test_matrix_pymem_malloc_pyobject_free_family_mismatch() {
     );
 }
 
-/// Objective: 验证 JNI 本地引用和全局引用是否正确识别为不同家族
+/// Objective: Verify that JNI local references and global references are correctly identified as different families
 ///
 /// Invariants:
-/// - NewLocalRef 和 DeleteGlobalRef 必须有不同的 family_id
-/// - JNI 的本地引用和全局引用应被视为不同的资源类型
-/// - 不同的 JNI 引用类型应有明确的家族边界
+/// - NewLocalRef and DeleteGlobalRef must have different family_id
+/// - JNI local references and global references should be considered different resource types
+/// - Different JNI reference types should have clear family boundaries
 #[test]
 fn test_matrix_jni_local_global_ref_mismatch() {
     let registry = FamilyRegistry::new();
@@ -208,12 +208,12 @@ fn test_matrix_jni_local_global_ref_mismatch() {
     );
 }
 
-/// Objective: 验证 Windows HGlobal 和 CoTaskMem 是否正确识别为不同家族
+/// Objective: Verify that Windows HGlobal and CoTaskMem are correctly identified as different families
 ///
 /// Invariants:
-/// - AllocHGlobal 和 CoTaskMemFree 必须有不同的 family_id
-/// - Windows 的不同内存管理 API 应被视为不同的资源家族
-/// - 跨 Windows API 的分配/释放操作应被标记为不兼容
+/// - AllocHGlobal and CoTaskMemFree must have different family_id
+/// - Different Windows memory management APIs should be considered different resource families
+/// - Cross-Windows-API alloc/release operations should be marked as incompatible
 #[test]
 fn test_matrix_hglobal_cotask_mismatch() {
     let registry = FamilyRegistry::new();
@@ -232,13 +232,13 @@ fn test_matrix_hglobal_cotask_mismatch() {
 
 // ─── Refcount conditional release ─────────────────────────────────────
 
-/// Objective: 验证 Py_DECREF 是否正确识别为条件释放而非无条件释放
+/// Objective: Verify that Py_DECREF is correctly identified as conditional release rather than unconditional release
 ///
 /// Invariants:
-/// - Py_DECREF 必须有 ConditionalRelease 效果，而不是无条件 Release
-/// - Py_DECREF 必须属于 PYTHON_OBJECT 家族
-/// - 推断摘要必须产生 ConditionalRelease 效果
-/// - 条件释放不应被误报为内存泄漏
+/// - Py_DECREF must have ConditionalRelease effect, not unconditional Release
+/// - Py_DECREF must belong to PYTHON_OBJECT family
+/// - Inference summary must produce ConditionalRelease effect
+/// - Conditional release should not be falsely reported as memory leak
 #[test]
 fn test_matrix_py_decref_conditional_release_not_leak() {
     let registry = FamilyRegistry::new();
@@ -277,13 +277,13 @@ fn test_matrix_py_decref_conditional_release_not_leak() {
 
 // ─── Destructor-mediated release ──────────────────────────────────────
 
-/// Objective: 验证 Rust Drop 函数是否正确推断为析构器释放模式
+/// Objective: Verify that Rust Drop function is correctly inferred as destructor release pattern
 ///
 /// Invariants:
-/// - drop 函数必须被推断为析构器
-/// - 析构器摘要必须释放资源
-/// - 必须附加 DestructorRelease 证据
-/// - Rust Drop 调用 C free 应被识别为析构器中介释放
+/// - drop function must be inferred as destructor
+/// - Destructor summary must release resource
+/// - DestructorRelease evidence must be attached
+/// - Rust Drop calling C free should be identified as destructor-mediated release
 #[test]
 fn test_matrix_rust_drop_calling_c_free_is_destructor_mediated() {
     // Rust Drop calling C free is destructor-mediated release.
@@ -313,14 +313,14 @@ fn test_matrix_rust_drop_calling_c_free_is_destructor_mediated() {
 
 // ─── Bridge inference ─────────────────────────────────────────────────
 
-/// Objective: 验证 as_ptr 函数是否正确推断为桥接助手模式
+/// Objective: Verify that as_ptr function is correctly inferred as bridge helper pattern
 ///
 /// Invariants:
-/// - as_ptr 必须被推断为桥接助手
-/// - 必须产生 ReturnsBorrowed 效果
-/// - 不能产生 ReturnsOwned 效果
-/// - 必须附加 BridgeHelper 证据
-/// - 桥接助手应返回借用指针而非拥有指针
+/// - as_ptr must be inferred as bridge helper
+/// - Must produce ReturnsBorrowed effect
+/// - Must NOT produce ReturnsOwned effect
+/// - BridgeHelper evidence must be attached
+/// - Bridge helper should return borrowed pointer, not owned pointer
 #[test]
 fn test_matrix_as_ptr_bridge_returns_borrowed() {
     let registry = FamilyRegistry::new();
@@ -361,13 +361,13 @@ fn test_matrix_as_ptr_bridge_returns_borrowed() {
 
 // ─── Escape-based non-leak scenarios ─────────────────────────────────
 
-/// Objective: 验证返回拥有指针的函数不会被误报为本地泄漏
+/// Objective: Verify that functions returning owned pointers are not falsely reported as local leaks
 ///
 /// Invariants:
-/// - malloc 必须获取资源
-/// - malloc 必须产生 ReturnsOwned 效果
-/// - ReturnsOwned 是有效的逃逸机制，不应被视为泄漏
-/// - 注册表匹配的函数应有正确的资源获取效果
+/// - malloc must acquire resource
+/// - malloc must produce ReturnsOwned effect
+/// - ReturnsOwned is a valid escape mechanism, should not be considered leak
+/// - Registry-matched functions should have correct resource acquisition effect
 #[test]
 fn test_matrix_return_owned_not_local_leak() {
     // A function that returns owned pointer is not a local leak.
@@ -390,13 +390,13 @@ fn test_matrix_return_owned_not_local_leak() {
 
 // ─── Static lifetime sink ─────────────────────────────────────────────
 
-/// Objective: 验证全局静态初始化是否正确识别为静态生命周期
+/// Objective: Verify that global static initialization is correctly identified as static lifetime
 ///
 /// Invariants:
-/// - __cxx_global_var_init 必须有 StaticLifetimeSink 证据
-/// - 必须产生 StoresArgToGlobal 效果
-/// - 静态生命周期不应被误报为内存泄漏
-/// - 全局变量初始化应被视为静态生命周期接收器
+/// - __cxx_global_var_init must have StaticLifetimeSink evidence
+/// - Must produce StoresArgToGlobal effect
+/// - Static lifetime should not be falsely reported as memory leak
+/// - Global variable initialization should be considered static lifetime sink
 #[test]
 fn test_matrix_global_static_init_is_static_lifetime() {
     let registry = FamilyRegistry::new();
@@ -425,13 +425,13 @@ fn test_matrix_global_static_init_is_static_lifetime() {
 
 // ─── NeedsModel diagnostic ───────────────────────────────────────────
 
-/// Objective: 验证未知家族是否产生 NeedsModel 诊断而不是误报
+/// Objective: Verify that unknown families produce NeedsModel diagnostic rather than false positives
 ///
 /// Invariants:
-/// - 未知符号不应产生高置信度推断
-/// - 未知家族应产生 NeedsModel 类型候选
-/// - Diagnostic 判定不应可报告
-/// - 未知分配器应被标记为需要模型，而不是误报为问题
+/// - Unknown symbols should not produce high-confidence inference
+/// - Unknown families should produce NeedsModel type candidate
+/// - Diagnostic verdict should not be reportable
+/// - Unknown allocators should be flagged as needing model, not falsely reported as issues
 #[test]
 fn test_matrix_unknown_family_needs_model_diagnostic() {
     let registry = FamilyRegistry::new();
@@ -465,13 +465,13 @@ fn test_matrix_unknown_family_needs_model_diagnostic() {
 
 // ─── Verifier verdict gating ──────────────────────────────────────────
 
-/// Objective: 验证 ConfirmedIssue 判定是否正确标记为可报告
+/// Objective: Verify that ConfirmedIssue verdict is correctly marked as reportable
 ///
 /// Invariants:
-/// - ConfirmedIssue 判定必须可报告
-/// - 跨家族释放问题应被正确识别和标记
-/// - 判定门控应正确处理确认的问题
-/// - 可报告状态应基于判定类型
+/// - ConfirmedIssue verdict must be reportable
+/// - Cross-family release issues should be correctly identified and flagged
+/// - Verdict gating should correctly handle confirmed issues
+/// - Reportable status should be based on verdict type
 #[test]
 fn test_matrix_verdict_gating_confirmed_issue_reportable() {
     let candidate = IssueCandidate::new(
@@ -490,13 +490,13 @@ fn test_matrix_verdict_gating_confirmed_issue_reportable() {
     );
 }
 
-/// Objective: 验证 Diagnostic 判定是否正确标记为不可报告
+/// Objective: Verify that Diagnostic verdict is correctly marked as not reportable
 ///
 /// Invariants:
-/// - Diagnostic 判定必须不可报告
-/// - 需要模型的诊断不应产生误报
-/// - 判定门控应正确过滤诊断信息
-/// - 诊断信息应仅用于内部分析，不对外报告
+/// - Diagnostic verdict must not be reportable
+/// - Diagnostics requiring model should not produce false positives
+/// - Verdict gating should correctly filter diagnostic information
+/// - Diagnostic information should only be used for internal analysis, not reported externally
 #[test]
 fn test_matrix_verdict_gating_diagnostic_not_reportable() {
     let candidate = IssueCandidate::new(
@@ -513,13 +513,13 @@ fn test_matrix_verdict_gating_diagnostic_not_reportable() {
     );
 }
 
-/// Objective: 验证 ExplainedSafe 判定是否正确标记为不可报告
+/// Objective: Verify that ExplainedSafe verdict is correctly marked as not reportable
 ///
 /// Invariants:
-/// - ExplainedSafe 判定必须不可报告
-/// - 同一家族的分配/释放操作应被标记为安全
-/// - 已解释的安全模式不应产生误报
-/// - 判定门控应正确处理安全解释
+/// - ExplainedSafe verdict must not be reportable
+/// - Same-family alloc/release operations should be marked as safe
+/// - Explained safe patterns should not produce false positives
+/// - Verdict gating should correctly handle safe explanations
 #[test]
 fn test_matrix_verdict_gating_explained_safe_not_reportable() {
     let candidate = IssueCandidate::new(
@@ -540,14 +540,14 @@ fn test_matrix_verdict_gating_explained_safe_not_reportable() {
 
 // ─── End-to-end inference chain ───────────────────────────────────────
 
-/// Objective: 验证推断链优先级：注册表匹配 > 结构推断 > 桥接推断
+/// Objective: Verify inference chain priority: registry match > structural inference > bridge inference
 ///
 /// Invariants:
-/// - 注册表匹配的符号应有高置信度（> 0.9）
-/// - 不在注册表中的符号应回退到结构推断
-/// - drop 函数应通过结构推断识别为析构器
-/// - as_ptr 函数应通过结构推断识别为桥接助手
-/// - 推断链应按优先级顺序执行
+/// - Registry-matched symbols should have high confidence (> 0.9)
+/// - Symbols not in registry should fall back to structural inference
+/// - drop function should be identified as destructor via structural inference
+/// - as_ptr function should be identified as bridge helper via structural inference
+/// - Inference chain should execute in priority order
 #[test]
 fn test_matrix_inference_chain_priority() {
     let registry = FamilyRegistry::new();
