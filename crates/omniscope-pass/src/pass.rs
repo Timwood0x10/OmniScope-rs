@@ -2,7 +2,7 @@
 //!
 //! This module defines the core pass infrastructure for OmniScope analysis.
 
-use omniscope_core::{Diagnostic, Fact, Issue, Result};
+use omniscope_core::{Diagnostic, Fact, Issue, MemoryPool, Result};
 use omniscope_ir::IRModule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -130,15 +130,21 @@ impl PassResult {
     }
 }
 
-/// Pass context for sharing data between passes
-#[derive(Clone)]
+/// Pass context for sharing data between passes.
+///
+/// Uses `Arc<HashMap<...>>` for shared data to enable cheap cloning in parallel
+/// execution. When a pass needs to write to shared data, it performs a
+/// copy-on-write operation (clone the Arc).
+///
+/// Note: `Clone` is implemented manually because `MemoryPool` does not
+/// implement `Clone`. Each clone receives a fresh empty pool.
 pub struct PassContext {
     /// The IR module being analyzed — stored separately from `shared` so that
     /// passes can obtain a `&IRModule` reference without cloning, while still
     /// being able to call `store()` / `emit_issue()` later in the same `run()`.
     ir_module: Option<Arc<IRModule>>,
-    /// Shared data between passes
-    shared: HashMap<String, Arc<dyn std::any::Any + Send + Sync>>,
+    /// Shared data between passes (wrapped in Arc for cheap cloning)
+    shared: Arc<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>,
     /// Diagnostics produced by passes
     diagnostics: Vec<Diagnostic>,
     /// Facts produced by passes
@@ -149,6 +155,34 @@ pub struct PassContext {
     suppressed_issues: Vec<Issue>,
     /// Monotonic issue ID counter
     next_issue_id: u64,
+    /// Arena-based memory pool for temporary allocations during pass execution.
+    ///
+    /// Hot passes use this pool to reduce heap allocation overhead for
+    /// temporary strings and data structures. The pool is reset at the
+    /// start of each pass run to reclaim memory for the next pass.
+    pool: MemoryPool,
+}
+
+impl Clone for PassContext {
+    /// Clones the PassContext.
+    ///
+    /// This is a full clone that copies all data. For parallel execution,
+    /// prefer `clone_for_parallel()` which shares read-only data via Arc.
+    ///
+    /// Note: `MemoryPool` does not implement `Clone`, so each clone
+    /// receives a fresh empty pool.
+    fn clone(&self) -> Self {
+        Self {
+            ir_module: self.ir_module.clone(),
+            shared: self.shared.clone(),
+            diagnostics: self.diagnostics.clone(),
+            facts: self.facts.clone(),
+            issues: self.issues.clone(),
+            suppressed_issues: self.suppressed_issues.clone(),
+            next_issue_id: self.next_issue_id,
+            pool: MemoryPool::new(),
+        }
+    }
 }
 
 impl PassContext {
@@ -156,13 +190,48 @@ impl PassContext {
     pub fn new() -> Self {
         Self {
             ir_module: None,
-            shared: HashMap::new(),
+            shared: Arc::new(HashMap::new()),
             diagnostics: Vec::new(),
             facts: Vec::new(),
             issues: Vec::new(),
             suppressed_issues: Vec::new(),
             next_issue_id: 1,
+            pool: MemoryPool::new(),
         }
+    }
+
+    /// Returns a mutable reference to the arena-based memory pool.
+    ///
+    /// Passes should call `reset_pool()` before using the pool to ensure
+    /// it is empty. After use, the pool memory is reclaimed when the
+    /// pass finishes or when `reset_pool()` is called again.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use omniscope_pass::pass::PassContext;
+    ///
+    /// let mut ctx = PassContext::new();
+    /// ctx.reset_pool();
+    /// let s = ctx.pool_mut().alloc_str("hello");
+    /// assert_eq!(s, "hello");
+    /// ```
+    pub fn pool_mut(&mut self) -> &mut MemoryPool {
+        &mut self.pool
+    }
+
+    /// Resets the memory pool, deallocating all arena memory.
+    ///
+    /// Call this at the start of a pass run to reclaim memory from
+    /// the previous pass. All references previously allocated from
+    /// the pool become invalid after this call.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure no references derived from the pool are
+    /// in use when this method is called.
+    pub fn reset_pool(&mut self) {
+        self.pool.reset();
     }
 
     /// Sets the IR module for analysis.
@@ -192,8 +261,12 @@ impl PassContext {
     }
 
     /// Stores shared data
+    ///
+    /// Uses copy-on-write: if the shared HashMap is shared with other contexts,
+    /// it will be cloned before modification.
     pub fn store<T: 'static + Send + Sync>(&mut self, key: impl Into<String>, value: T) {
-        self.shared.insert(key.into(), Arc::new(value));
+        let shared = Arc::make_mut(&mut self.shared);
+        shared.insert(key.into(), Arc::new(value));
     }
 
     /// Retrieves shared data
@@ -326,6 +399,10 @@ impl PassContext {
     /// This is more efficient than a full clone when running passes in parallel,
     /// as it avoids copying potentially large vectors of diagnostics, facts,
     /// and issues that are only written to by individual passes.
+    ///
+    /// Each cloned context receives a fresh `MemoryPool` because the pool
+    /// is not thread-safe (`Send` but not `Sync`) — each parallel pass
+    /// needs its own arena.
     pub fn clone_for_parallel(&self) -> Self {
         Self {
             ir_module: self.ir_module.clone(), // Arc clone (cheap)
@@ -335,6 +412,7 @@ impl PassContext {
             issues: Vec::new(),                // Empty - pass will produce its own
             suppressed_issues: Vec::new(),     // Empty - pass will produce its own
             next_issue_id: self.next_issue_id, // Copy starting ID
+            pool: MemoryPool::new(),           // Fresh pool for this thread
         }
     }
 
@@ -346,6 +424,10 @@ impl PassContext {
     /// are all appended/overwritten. The `next_issue_id` counter is
     /// advanced past the highest ID in the merged context to avoid
     /// collisions.
+    ///
+    /// The `MemoryPool` is **not** merged — each context keeps its own
+    /// pool, and the `other` pool is dropped here, releasing its arena
+    /// memory.
     pub fn merge(&mut self, other: PassContext) {
         // Append issues and suppressed issues
         self.issues.extend(other.issues);
@@ -356,19 +438,23 @@ impl PassContext {
         self.facts.extend(other.facts);
 
         // Merge shared data (later writer wins for duplicate keys)
-        for (key, value) in other.shared {
-            self.shared.insert(key, value);
+        // Use Arc::make_mut to get mutable access to our shared HashMap
+        let shared = Arc::make_mut(&mut self.shared);
+        for (key, value) in other.shared.iter() {
+            shared.insert(key.clone(), Arc::clone(value));
         }
 
         // Inherit ir_module if we don't have one yet
         if self.ir_module.is_none() {
-            self.ir_module = other.ir_module;
+            self.ir_module = other.ir_module.clone();
         }
 
         // Advance issue ID counter past the highest used ID
         if other.next_issue_id > self.next_issue_id {
             self.next_issue_id = other.next_issue_id;
         }
+
+        // other.pool is dropped here — its arena memory is reclaimed.
     }
 }
 

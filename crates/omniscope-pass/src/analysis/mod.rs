@@ -29,6 +29,7 @@ struct FFIBoundaryInfo {
 pub mod borrow_escape;
 pub mod call_graph;
 pub mod danger_surface;
+pub mod ffi_boundary_detector;
 pub mod heap_provenance;
 pub mod interior_mutability;
 pub mod noise_reduction;

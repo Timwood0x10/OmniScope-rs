@@ -151,16 +151,25 @@ impl PassManager {
             // Group passes by dependency level for parallel execution.
             // Each pass gets its own local PassContext (parallel safety),
             // then results are merged back into the shared main context.
+            //
+            // Uses clone_for_parallel() for lightweight cloning: shared data
+            // (ir_module, shared HashMap) is shared via Arc, while write-only
+            // data (diagnostics, facts, issues) starts empty.
             let levels = self.compute_levels();
 
             for level in levels {
+                // Pre-clone contexts for each pass to avoid capturing &ctx in closures
+                let pass_count = level.len();
+                let mut local_contexts: Vec<PassContext> =
+                    (0..pass_count).map(|_| ctx.clone_for_parallel()).collect();
+
                 let level_results: Vec<(usize, PassContext, PassResult)> = level
                     .into_par_iter()
-                    .map(|idx| {
+                    .zip(local_contexts.par_drain(..))
+                    .map(|(idx, mut local_ctx)| {
                         let pass = &self.passes[idx];
-                        // Clone the main context so each parallel pass can read
-                        // upstream data produced by previous levels.
-                        let mut local_ctx = ctx.clone();
+                        // Use lightweight clone: shares read-only data via Arc,
+                        // only allocates empty vectors for write-only data.
                         let start = Instant::now();
 
                         let mut result = match pass.run(&mut local_ctx) {

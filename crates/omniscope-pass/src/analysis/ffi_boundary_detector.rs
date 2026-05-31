@@ -190,7 +190,10 @@ pub fn is_runtime_intrinsic(name: &str, language: Language) -> bool {
                 || name.starts_with("_Unwind_")
                 || name.starts_with("_tlv_")
         }
-        Language::Cpp => name.starts_with("_Z") || name.starts_with("__cxxabiv1"),
+        // Note: `_Z` prefix is standard C++ Itanium name mangling and covers ALL
+        // C++ functions (not just intrinsics). Only specific ABI/runtime patterns
+        // should be flagged as intrinsics.
+        Language::Cpp => name.starts_with("__cxxabiv1"),
         _ => false,
     }
 }
@@ -253,12 +256,12 @@ mod tests {
     }
 
     /// Objective: Verify C++ runtime intrinsics are correctly identified.
-    /// Invariants: _Z and __cxxabiv1 prefixes are intrinsics.
+    /// Invariants: __cxxabiv1 prefix is intrinsic; _Z is standard mangling (not intrinsic).
     #[test]
     fn test_cpp_runtime_intrinsics() {
         assert!(
-            is_runtime_intrinsic("_Z3fooi", Language::Cpp),
-            "_Z prefix must be recognized as C++ mangled intrinsic"
+            !is_runtime_intrinsic("_Z3fooi", Language::Cpp),
+            "_Z prefix is standard C++ mangling, not an intrinsic"
         );
         assert!(
             is_runtime_intrinsic("__cxxabiv1", Language::Cpp),
@@ -347,14 +350,24 @@ mod tests {
     fn test_aggressive_external_to_unknown() {
         let detector = FFIBoundaryDetector::new();
 
-        let result = detector.detect_aggressive_boundary("rust_main", "unknown_ext", true, false);
+        // Use a Rust function name (std prefix) so it's detected as Rust
+        let result =
+            detector.detect_aggressive_boundary("_ZN3std4main", "unknown_ext", true, false);
         assert!(
             result.is_some(),
             "Rust calling external unknown must be detected as FFI"
         );
         let info = result.unwrap();
-        assert_eq!(info.caller_lang, Language::Rust);
-        assert_eq!(info.callee_lang, Language::C);
+        assert_eq!(
+            info.caller_lang,
+            Language::Rust,
+            "Caller must be detected as Rust"
+        );
+        assert_eq!(
+            info.callee_lang,
+            Language::C,
+            "Callee must be resolved to C"
+        );
         assert!(info.is_ffi_boundary);
     }
 
@@ -418,12 +431,20 @@ mod tests {
     fn test_caller_lang_c_fallback() {
         let detector = FFIBoundaryDetector::new();
 
-        // Known Rust function → Rust regardless of caller_is_defined
-        let lang = detector.detect_caller_lang("_ZN4rust_main", true);
+        // Known Rust function (v0 mangling) → Rust regardless of caller_is_defined
+        let lang = detector.detect_caller_lang("_RINvNtCsdGVnYXsfTfsL_7example3fooIEC_", true);
         assert_eq!(
             lang,
             Language::Rust,
-            "Rust function must be detected as Rust"
+            "Rust v0 mangled function must be detected as Rust"
+        );
+
+        // Known Rust function (Itanium mangling with core prefix) → Rust
+        let lang = detector.detect_caller_lang("_ZN4core3ptr7drop_in_place", true);
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust Itanium mangled function with core prefix must be detected as Rust"
         );
 
         // Unknown function with caller_is_defined → C
@@ -467,6 +488,302 @@ mod tests {
         assert!(
             !detector.is_cross_language(Language::Rust, Language::Unknown),
             "Unknown callee must not be cross-language"
+        );
+    }
+
+    // ── Specific integration tests as requested ──
+
+    /// Objective: Verify C language detection from caller function name.
+    /// Invariants: C functions with typical naming patterns are detected as C;
+    ///             Unknown functions with caller_is_defined fallback to C.
+    #[test]
+    fn test_detect_caller_lang_c() {
+        let detector = FFIBoundaryDetector::new();
+
+        // C function with typical C naming (no language prefix)
+        let lang = detector.detect_caller_lang("c_function", true);
+        assert_eq!(
+            lang,
+            Language::C,
+            "Unknown defined function must fallback to C when caller_is_defined is true"
+        );
+
+        // C function with underscore prefix (common in C)
+        let lang = detector.detect_caller_lang("_c_function", true);
+        assert_eq!(
+            lang,
+            Language::C,
+            "Unknown defined function with underscore prefix must fallback to C"
+        );
+
+        // Non-defined C function should not fallback
+        let lang = detector.detect_caller_lang("c_function", false);
+        assert_eq!(
+            lang,
+            Language::Unknown,
+            "Unknown non-defined function must not fallback to C"
+        );
+    }
+
+    /// Objective: Verify C++ language detection from caller function name.
+    /// Invariants: C++ mangled names (_Z prefix) are correctly detected as C++.
+    #[test]
+    fn test_detect_caller_lang_cpp() {
+        let detector = FFIBoundaryDetector::new();
+
+        // C++ Itanium mangling (_ZN prefix)
+        let lang = detector.detect_caller_lang("_ZN3Foo3barEi", true);
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "C++ Itanium mangled name must be detected as C++"
+        );
+
+        // C++ short mangling (_Z prefix)
+        let lang = detector.detect_caller_lang("_Z3fooi", true);
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "C++ short mangled name must be detected as C++"
+        );
+
+        // C++ function with std:: namespace
+        let lang = detector.detect_caller_lang("std::vector::push_back", true);
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "Function with std:: namespace must be detected as C++"
+        );
+    }
+
+    /// Objective: Verify Rust language detection from caller function name.
+    /// Invariants: Rust v0 mangling (_R prefix) and Itanium mangling are detected.
+    #[test]
+    fn test_detect_caller_lang_rust() {
+        let detector = FFIBoundaryDetector::new();
+
+        // Rust v0 mangling (modern Rust)
+        let lang = detector.detect_caller_lang("_RINvNtCsdGVnYXsfTfsL_7example3fooIEC_", true);
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust v0 mangled name must be detected as Rust"
+        );
+
+        // Rust Itanium mangling (older Rust)
+        let lang = detector.detect_caller_lang("_ZN4core3ptr7drop_in_place", true);
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust Itanium mangled name must be detected as Rust"
+        );
+
+        // Rust alloc prefix
+        let lang = detector.detect_caller_lang("_ZN5alloc5alloc", true);
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust alloc prefix must be detected as Rust"
+        );
+    }
+
+    /// Objective: Verify callee language detection from function name.
+    /// Invariants: Various language-specific naming patterns are correctly detected.
+    #[test]
+    fn test_detect_callee_lang() {
+        let detector = FFIBoundaryDetector::new();
+
+        // C++ mangled name
+        let lang = detector.detect_callee_lang("_Z3fooi");
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "C++ mangled name must be detected as C++"
+        );
+
+        // Rust mangled name
+        let lang = detector.detect_callee_lang("_ZN4core3ptr7drop_in_place");
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust mangled name must be detected as Rust"
+        );
+
+        // Go function
+        let lang = detector.detect_callee_lang("main.myFunction");
+        assert_eq!(
+            lang,
+            Language::Go,
+            "Go function with main. prefix must be detected as Go"
+        );
+
+        // Zig function
+        let lang = detector.detect_callee_lang("zig.debug.print");
+        assert_eq!(
+            lang,
+            Language::Zig,
+            "Zig function with zig. prefix must be detected as Zig"
+        );
+
+        // Python function
+        let lang = detector.detect_callee_lang("PyObject_GetAttr");
+        assert_eq!(
+            lang,
+            Language::Python,
+            "Python function with Py prefix must be detected as Python"
+        );
+
+        // Unknown function
+        let lang = detector.detect_callee_lang("unknown_function");
+        assert_eq!(
+            lang,
+            Language::Unknown,
+            "Unknown function must be detected as Unknown"
+        );
+    }
+
+    /// Objective: Verify C++ mangled name detection and handling.
+    /// Invariants: _Z prefix indicates C++ mangling; handles various mangled name formats.
+    #[test]
+    fn test_cpp_mangled_name() {
+        let detector = FFIBoundaryDetector::new();
+
+        // Standard C++ Itanium mangling
+        let lang = detector.detect_callee_lang("_ZN3Foo3barEi");
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "Standard C++ Itanium mangled name must be detected as C++"
+        );
+
+        // Short C++ mangling
+        let lang = detector.detect_callee_lang("_Z3fooi");
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "Short C++ mangled name must be detected as C++"
+        );
+
+        // C++ local mangling
+        let lang = detector.detect_callee_lang("_ZS3foo");
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "C++ local mangling must be detected as C++"
+        );
+
+        // Verify aggressive detection catches C++ mangled names from C
+        let result = detector.detect_aggressive_boundary("c_main", "_Z3fooi", false, true);
+        assert!(
+            result.is_some(),
+            "C calling C++ mangled function must be detected as FFI boundary"
+        );
+        let info = result.unwrap();
+        assert_eq!(
+            info.callee_lang,
+            Language::Cpp,
+            "Callee must be detected as C++"
+        );
+    }
+
+    /// Objective: Verify unknown language handling.
+    /// Invariants: Unknown language calls are not treated as FFI boundaries;
+    ///             Unknown callers don't trigger cross-language detection.
+    #[test]
+    fn test_unknown_language() {
+        let detector = FFIBoundaryDetector::new();
+
+        // Unknown caller with defined function → C fallback
+        let lang = detector.detect_caller_lang("unknown_func", true);
+        assert_eq!(
+            lang,
+            Language::C,
+            "Unknown defined function must fallback to C"
+        );
+
+        // Unknown caller with non-defined function → Unknown
+        let lang = detector.detect_caller_lang("unknown_func", false);
+        assert_eq!(
+            lang,
+            Language::Unknown,
+            "Unknown non-defined function must stay Unknown"
+        );
+
+        // Unknown caller with known callee → not cross-language
+        assert!(
+            !detector.is_cross_language(Language::Unknown, Language::C),
+            "Unknown caller must not be cross-language"
+        );
+
+        // Unknown callee with known caller → not cross-language
+        assert!(
+            !detector.is_cross_language(Language::Rust, Language::Unknown),
+            "Unknown callee must not be cross-language"
+        );
+
+        // Unknown caller with Unknown callee → not FFI boundary
+        assert!(
+            !detector.is_ffi_boundary("unknown_func", Language::Unknown, Language::Unknown),
+            "Unknown languages must not be FFI boundary"
+        );
+
+        // Aggressive detection with non-external unknown → not FFI
+        let result =
+            detector.detect_aggressive_boundary("unknown_caller", "unknown_callee", false, false);
+        assert!(
+            result.is_none(),
+            "Non-external unknown call must not be detected as FFI"
+        );
+    }
+
+    /// Objective: Verify same language calls are not FFI boundaries.
+    /// Invariants: Same language calls (even with runtime intrinsics) are not FFI;
+    ///             Same language user functions are not FFI.
+    #[test]
+    fn test_same_language_not_ffi() {
+        let detector = FFIBoundaryDetector::new();
+
+        // Rust calling Rust user function → not FFI
+        assert!(
+            !detector.is_ffi_boundary("rust_function", Language::Rust, Language::Rust),
+            "Rust calling Rust user function must not be FFI boundary"
+        );
+
+        // C calling C user function → not FFI
+        assert!(
+            !detector.is_ffi_boundary("c_function", Language::C, Language::C),
+            "C calling C user function must not be FFI boundary"
+        );
+
+        // C++ calling C++ user function → not FFI
+        assert!(
+            !detector.is_ffi_boundary("cpp_function", Language::Cpp, Language::Cpp),
+            "C++ calling C++ user function must not be FFI boundary"
+        );
+
+        // Zig calling Zig user function → not FFI
+        assert!(
+            !detector.is_ffi_boundary("zig_function", Language::Zig, Language::Zig),
+            "Zig calling Zig user function must not be FFI boundary"
+        );
+
+        // Same language with runtime intrinsic → not FFI (even if it might be filtered)
+        assert!(
+            !detector.is_ffi_boundary("__rust_dealloc", Language::Rust, Language::Rust),
+            "Rust calling Rust runtime intrinsic must not be FFI boundary"
+        );
+
+        // Same language with libc function → not FFI
+        assert!(
+            !detector.is_ffi_boundary("malloc", Language::C, Language::C),
+            "C calling C libc function must not be FFI boundary"
+        );
+
+        // Verify aggressive detection also respects same language
+        let result = detector.detect_aggressive_boundary("rust_main", "rust_helper", false, true);
+        assert!(
+            result.is_none(),
+            "Aggressive detection must not flag same language calls as FFI"
         );
     }
 }

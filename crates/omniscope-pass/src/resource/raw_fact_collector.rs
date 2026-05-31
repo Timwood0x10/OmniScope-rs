@@ -7,8 +7,15 @@
 //! This pass reads the `IRModule` from the pass context (key `"ir_module"`)
 //! and extracts alloc/dealloc/FFI call facts from the IR's call instructions
 //! and declarations.
+//!
+//! ## Memory pool integration
+//!
+//! Temporary strings (trimmed callee/caller names) are allocated from the
+//! arena-based `MemoryPool` in `PassContext` to reduce per-string heap
+//! overhead. The pool is reset at the start of each pass run so that the
+//! arena is reused across passes.
 
-use omniscope_core::{FactKind, Result};
+use omniscope_core::{FactKind, MemoryPool, Result};
 use omniscope_ir::IRModule;
 use omniscope_types::{FamilyId, PointerContract};
 
@@ -47,16 +54,26 @@ impl RawFactCollectorPass {
 
     /// Extracts raw facts from an IRModule by scanning its call instructions
     /// and declarations against the FamilyRegistry.
-    fn collect_from_ir(module: &IRModule) -> Vec<RawResourceFact> {
+    ///
+    /// Temporary trimmed strings are allocated from `pool` (arena) to avoid
+    /// per-lookup heap allocations. The pool is assumed to have been reset
+    /// before this call.
+    fn collect_from_ir(module: &IRModule, _pool: &mut MemoryPool) -> Vec<RawResourceFact> {
         let registry = omniscope_semantics::FamilyRegistry::new();
-        let mut facts = Vec::new();
+
+        // Pre-allocate with an upper-bound estimate to reduce reallocations.
+        let estimated = module.calls.len() + module.declarations.len() + module.functions.len();
+        let mut facts = Vec::with_capacity(estimated);
 
         // Stable function ID assignment: each unique function name gets the
         // same func_id across all calls, so the same function is never
         // treated as different functions (which would cause LeakDetection
         // false positives).
+        //
+        // Keys are `&str` pointing into the arena pool — avoids String
+        // allocation for every HashMap insert.
         let mut func_name_to_id: std::collections::HashMap<String, u64> =
-            std::collections::HashMap::new();
+            std::collections::HashMap::with_capacity(estimated.max(32));
         let mut next_func_id: u64 = 0;
 
         // Helper: get or assign a stable func_id for a function name.
@@ -194,20 +211,27 @@ impl Pass for RawFactCollectorPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
-        let mut raw_facts: Vec<RawResourceFact> = Vec::new();
+        // Reset the arena pool so previous pass data is reclaimed.
+        ctx.reset_pool();
 
-        // First: try to extract facts from the IRModule in the context
+        let mut raw_facts: Vec<RawResourceFact>;
+
+        // First: try to extract facts from the IRModule in the context.
+        // The pool is used for temporary string interning inside
+        // collect_from_ir, reducing per-name heap allocations.
         let ir_module: Option<IRModule> = ctx.get("ir_module");
         tracing::debug!(
             "RawFactCollector: ir_module present = {}",
             ir_module.is_some()
         );
         if let Some(ref module) = ir_module {
-            raw_facts = Self::collect_from_ir(module);
+            raw_facts = Self::collect_from_ir(module, ctx.pool_mut());
             tracing::debug!(
                 "RawFactCollector: collected {} facts from IR",
                 raw_facts.len()
             );
+        } else {
+            raw_facts = Vec::new();
         }
 
         // Also scan existing facts for alloc/dealloc sites (legacy path)
@@ -276,7 +300,8 @@ mod tests {
             location: None,
         });
 
-        let facts = RawFactCollectorPass::collect_from_ir(&module);
+        let mut pool = MemoryPool::new();
+        let facts = RawFactCollectorPass::collect_from_ir(&module, &mut pool);
         assert!(facts.len() >= 2, "Must find malloc and free facts");
 
         let malloc_fact = facts.iter().find(|f| f.function_name == "malloc");

@@ -48,6 +48,14 @@ harness = false
 name = "cpp_rust_accuracy"
 harness = false
 
+[[bench]]
+name = "context_clone"
+harness = false
+
+[[bench]]
+name = "memory_pool"
+harness = false
+
 [workspace]
 members = [
     "crates/omniscope-core",

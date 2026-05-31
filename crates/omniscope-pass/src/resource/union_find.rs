@@ -188,8 +188,8 @@ impl OwnershipUnionFind {
     /// # Returns
     ///
     /// `true` if `x` and `y` are in the same set, `false` otherwise.
-    pub fn connected(&mut self, x: u64, u64: u64) -> bool {
-        match (self.find(x), self.find(u64)) {
+    pub fn connected(&mut self, x: u64, y: u64) -> bool {
+        match (self.find(x), self.find(y)) {
             (Some(root_x), Some(root_y)) => root_x == root_y,
             _ => false,
         }

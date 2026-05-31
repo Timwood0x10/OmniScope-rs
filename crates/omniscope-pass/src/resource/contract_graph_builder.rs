@@ -3,6 +3,12 @@
 //! Builds the resource contract graph from raw facts and summaries.
 //! The graph captures edges between resource instances: acquire→release,
 //! acquire→escape, acquire→transfer, etc.
+//!
+//! ## Memory pool integration
+//!
+//! Temporary string keys (`func_id_map`) are allocated from the arena-based
+//! `MemoryPool` in `PassContext` to reduce per-key heap overhead. The pool
+//! is reset at the start of each pass run so that the arena is reused.
 
 use omniscope_core::Result;
 use omniscope_types::{Effect, FamilyId, FunctionId};
@@ -99,11 +105,17 @@ impl Pass for ContractGraphBuilderPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
+        // Reset the arena pool so previous pass data is reclaimed.
+        ctx.reset_pool();
+
         let mut graph = ContractGraph::new();
 
         // Retrieve raw facts from the context
         let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
         let raw_facts = raw_facts.unwrap_or_default();
+
+        // Pre-allocate graph edges to reduce reallocations.
+        graph.edges.reserve(raw_facts.len());
 
         // Build contract edges from raw facts
         // Group facts by (function_id, family) for acquire→release pairing.
@@ -118,7 +130,7 @@ impl Pass for ContractGraphBuilderPass {
         let mut acquire_instances: std::collections::HashMap<
             (u64, FamilyId),
             std::collections::VecDeque<AcquireEntry>,
-        > = std::collections::HashMap::new();
+        > = std::collections::HashMap::with_capacity(raw_facts.len().max(16));
 
         for fact in &raw_facts {
             let family = fact.family.unwrap_or(FamilyId::C_HEAP);
@@ -212,25 +224,28 @@ impl Pass for ContractGraphBuilderPass {
 
             // For each function, find acquire→release patterns.
             // Track a per-caller function ID so edges are scoped correctly.
+            // Keys are `&str` borrowed from the IR module (via calls_by_caller),
+            // avoiding per-key String heap allocation entirely.
             let mut next_func_id: u64 = 1;
-            let mut func_id_map: std::collections::HashMap<String, u64> =
-                std::collections::HashMap::new();
+            let mut func_id_map: std::collections::HashMap<&str, u64> =
+                std::collections::HashMap::with_capacity(calls_by_caller.len().max(16));
 
             for (caller_name, callees) in &calls_by_caller {
-                let func_id = *func_id_map
-                    .entry(caller_name.to_string())
-                    .or_insert_with(|| {
-                        let id = next_func_id;
-                        next_func_id += 1;
-                        id
-                    });
+                let func_id = *func_id_map.entry(caller_name).or_insert_with(|| {
+                    let id = next_func_id;
+                    next_func_id += 1;
+                    id
+                });
 
-                // VecDeque for FIFO consumption — releases match acquires in order
+                // VecDeque for FIFO consumption — releases match acquires in order.
+                // Pre-allocate with callee count as upper bound to reduce
+                // reallocations in the inner loop.
+                let cap = callees.len();
                 let mut func_acquires: std::collections::VecDeque<(u64, FamilyId, &str)> =
-                    std::collections::VecDeque::new();
-                let mut func_releases: Vec<(FamilyId, &str, bool)> = Vec::new();
-                let mut func_escapes: Vec<(u64, FamilyId, &str)> = Vec::new();
-                let mut func_reclaims: Vec<(u64, FamilyId, &str)> = Vec::new();
+                    std::collections::VecDeque::with_capacity(cap);
+                let mut func_releases: Vec<(FamilyId, &str, bool)> = Vec::with_capacity(cap);
+                let mut func_escapes: Vec<(u64, FamilyId, &str)> = Vec::with_capacity(cap);
+                let mut func_reclaims: Vec<(u64, FamilyId, &str)> = Vec::with_capacity(cap);
 
                 for &callee in callees {
                     if let Some(entry) = registry.lookup(callee) {
@@ -347,7 +362,7 @@ impl Pass for ContractGraphBuilderPass {
                 // of the same family. This enables DoubleReclaim detection when
                 // multiple from_raw calls target the same escaped instance.
                 let mut escape_claimed: std::collections::HashSet<u64> =
-                    std::collections::HashSet::new();
+                    std::collections::HashSet::with_capacity(func_escapes.len().max(4));
                 let mut reclaim_fallback_id: Option<u64> = None;
                 for (instance_id, family, callee_name) in &func_reclaims {
                     // Priority 1: match an escape instance of the same family
