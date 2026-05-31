@@ -27,7 +27,7 @@ use std::collections::HashSet;
 /// for efficient O(1) lookups during analysis.
 pub struct AllocatorShimDetector {
     /// Known allocator prefixes (e.g., "mi_", "je_", "tc_").
-    known_prefixes: Vec<String>,
+    known_prefixes: HashSet<String>,
     /// Known allocator function names (exact matches).
     known_functions: HashSet<String>,
 }
@@ -40,7 +40,7 @@ impl AllocatorShimDetector {
     /// - System allocator functions
     /// - Rust allocator functions
     pub fn new() -> Self {
-        let known_prefixes = vec![
+        let known_prefixes: HashSet<String> = [
             "mi_".to_string(),       // mimalloc
             "je_".to_string(),       // jemalloc
             "tc_".to_string(),       // tcmalloc
@@ -50,7 +50,9 @@ impl AllocatorShimDetector {
             "jemalloc_".to_string(), // jemalloc (full name)
             "tcmalloc_".to_string(), // tcmalloc (full name)
             "mimalloc_".to_string(), // mimalloc (full name)
-        ];
+        ]
+        .into_iter()
+        .collect();
 
         let mut known_functions = HashSet::new();
 
@@ -183,9 +185,30 @@ impl AllocatorShimDetector {
             return true;
         }
 
-        // Check prefix matches
+        // Check prefix matches using optimized approach
+        // Extract short prefixes (2-3 chars) for fast lookup
+        let func_len = func_name.len();
+
+        // Check 2-character prefixes
+        if func_len >= 2 {
+            let short_prefix = &func_name[..2];
+            if self.known_prefixes.contains(short_prefix) {
+                return true;
+            }
+        }
+
+        // Check 3-character prefixes (most common: "mi_", "je_", "tc_")
+        if func_len >= 3 {
+            let medium_prefix = &func_name[..3];
+            if self.known_prefixes.contains(medium_prefix) {
+                return true;
+            }
+        }
+
+        // Check longer prefixes for full names (jemalloc_, tcmalloc_, mimalloc_)
         for prefix in &self.known_prefixes {
-            if func_name.starts_with(prefix) {
+            let prefix_len = prefix.len();
+            if prefix_len > 3 && func_len >= prefix_len && func_name.starts_with(prefix.as_str()) {
                 return true;
             }
         }

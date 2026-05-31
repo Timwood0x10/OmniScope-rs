@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
-project(SafetyExportPass LANGUAGES C CXX)
+
+# Export compile commands for IDE/clang-tidy integration
+# NOTE: This must be set before project() to ensure it takes effect
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Force the LLVM-bundled clang when LLVM_PREFIX is set (avoids version
 # mismatch between the system AppleClang and the Homebrew LLVM opt).
+# NOTE: This must be set before project() to ensure compile_commands.json
+# uses the correct compiler.
 if(DEFINED ENV{LLVM_PREFIX} OR DEFINED LLVM_PREFIX)
     file(TO_CMAKE_PATH "$ENV{LLVM_PREFIX}" _LLVM_PREFIX)
     if(NOT _LLVM_PREFIX AND DEFINED LLVM_PREFIX)
@@ -14,6 +19,8 @@ if(DEFINED ENV{LLVM_PREFIX} OR DEFINED LLVM_PREFIX)
         message(STATUS "Using LLVM-bundled compiler: ${_LLVM_PREFIX}/bin/clang++")
     endif()
 endif()
+
+project(SafetyExportPass LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,6 +52,3 @@ add_llvm_pass_plugin(SafetyExportPass
     Core
     Support
 )
-
-# Export compile commands for IDE/clang-tidy integration
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

@@ -30,8 +30,8 @@ LLVM_PREFIX   ?= $(shell \
 		if [ -d "$$p" ]; then echo "$$p"; exit 0; fi; \
 	done; \
 	llvm-config --prefix 2>/dev/null)
-CLANG_TIDY    := $(shell which clang-tidy 2>/dev/null)
-CLANG_FORMAT  := $(shell which clang-format 2>/dev/null)
+CLANG_TIDY    := $(shell if [ -x "$(LLVM_PREFIX)/bin/clang-tidy" ]; then echo "$(LLVM_PREFIX)/bin/clang-tidy"; else which clang-tidy 2>/dev/null; fi)
+CLANG_FORMAT  := $(shell if [ -x "$(LLVM_PREFIX)/bin/clang-format" ]; then echo "$(LLVM_PREFIX)/bin/clang-format"; else which clang-format 2>/dev/null; fi)
 NPROC         := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
 
 # Default target
