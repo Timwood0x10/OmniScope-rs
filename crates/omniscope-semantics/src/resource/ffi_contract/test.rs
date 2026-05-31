@@ -26,7 +26,9 @@ mod tests {
     #[test]
     fn test_openssl_malloc() {
         let db = FFIContractDB::new();
-        let c = db.lookup("OPENSSL_malloc").expect("OPENSSL_malloc not found");
+        let c = db
+            .lookup("OPENSSL_malloc")
+            .expect("OPENSSL_malloc not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert_eq!(c.source, ContractSource::OpenSSL);
         assert!(c.paired_release.contains(&"OPENSSL_free".to_string()));
@@ -67,9 +69,7 @@ mod tests {
             .lookup("CRYPTO_secure_malloc")
             .expect("CRYPTO_secure_malloc not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"CRYPTO_secure_free".to_string()));
+        assert!(c.paired_release.contains(&"CRYPTO_secure_free".to_string()));
     }
 
     #[test]
@@ -79,9 +79,7 @@ mod tests {
             .lookup("EVP_MD_CTX_new")
             .expect("EVP_MD_CTX_new not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"EVP_MD_CTX_free".to_string()));
+        assert!(c.paired_release.contains(&"EVP_MD_CTX_free".to_string()));
     }
 
     #[test]
@@ -108,9 +106,7 @@ mod tests {
     #[test]
     fn test_ssl_ctx() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("SSL_CTX_new")
-            .expect("SSL_CTX_new not found");
+        let c = db.lookup("SSL_CTX_new").expect("SSL_CTX_new not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert!(c.paired_release.contains(&"SSL_CTX_free".to_string()));
     }
@@ -136,9 +132,7 @@ mod tests {
     #[test]
     fn test_sqlite3_close() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("sqlite3_close")
-            .expect("sqlite3_close not found");
+        let c = db.lookup("sqlite3_close").expect("sqlite3_close not found");
         assert_eq!(c.contract_type, ContractType::Deallocator);
         assert_eq!(c.source, ContractSource::SQLite);
     }
@@ -146,9 +140,7 @@ mod tests {
     #[test]
     fn test_sqlite3_exec() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("sqlite3_exec")
-            .expect("sqlite3_exec not found");
+        let c = db.lookup("sqlite3_exec").expect("sqlite3_exec not found");
         assert_eq!(c.contract_type, ContractType::Borrower);
         assert_eq!(c.source, ContractSource::SQLite);
     }
@@ -160,9 +152,7 @@ mod tests {
             .lookup("sqlite3_prepare_v2")
             .expect("sqlite3_prepare_v2 not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"sqlite3_finalize".to_string()));
+        assert!(c.paired_release.contains(&"sqlite3_finalize".to_string()));
     }
 
     #[test]
@@ -188,9 +178,7 @@ mod tests {
     #[test]
     fn test_pyobject_new() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("PyObject_New")
-            .expect("PyObject_New not found");
+        let c = db.lookup("PyObject_New").expect("PyObject_New not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert_eq!(c.source, ContractSource::PythonCApi);
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
@@ -200,9 +188,7 @@ mod tests {
     #[test]
     fn test_py_buildvalue() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("Py_BuildValue")
-            .expect("Py_BuildValue not found");
+        let c = db.lookup("Py_BuildValue").expect("Py_BuildValue not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
@@ -230,9 +216,7 @@ mod tests {
     #[test]
     fn test_py_list() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("PyList_New")
-            .expect("PyList_New not found");
+        let c = db.lookup("PyList_New").expect("PyList_New not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
@@ -240,9 +224,7 @@ mod tests {
     #[test]
     fn test_py_dict() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("PyDict_New")
-            .expect("PyDict_New not found");
+        let c = db.lookup("PyDict_New").expect("PyDict_New not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
@@ -269,9 +251,7 @@ mod tests {
             .lookup("PyGILState_Ensure")
             .expect("PyGILState_Ensure not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"PyGILState_Release".to_string()));
+        assert!(c.paired_release.contains(&"PyGILState_Release".to_string()));
     }
 
     // === JNI tests ===
@@ -279,38 +259,26 @@ mod tests {
     #[test]
     fn test_jni_find_class() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("FindClass")
-            .expect("FindClass not found");
+        let c = db.lookup("FindClass").expect("FindClass not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert_eq!(c.source, ContractSource::JNI);
-        assert!(c
-            .paired_release
-            .contains(&"DeleteLocalRef".to_string()));
+        assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
     }
 
     #[test]
     fn test_jni_new_string() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("NewStringUTF")
-            .expect("NewStringUTF not found");
+        let c = db.lookup("NewStringUTF").expect("NewStringUTF not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"DeleteLocalRef".to_string()));
+        assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
     }
 
     #[test]
     fn test_jni_new_object() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("NewObject")
-            .expect("NewObject not found");
+        let c = db.lookup("NewObject").expect("NewObject not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"DeleteLocalRef".to_string()));
+        assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
     }
 
     #[test]
@@ -325,13 +293,9 @@ mod tests {
     #[test]
     fn test_jni_new_global_ref() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("NewGlobalRef")
-            .expect("NewGlobalRef not found");
+        let c = db.lookup("NewGlobalRef").expect("NewGlobalRef not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
-        assert!(c
-            .paired_release
-            .contains(&"DeleteGlobalRef".to_string()));
+        assert!(c.paired_release.contains(&"DeleteGlobalRef".to_string()));
     }
 
     // === POSIX tests ===
@@ -461,13 +425,9 @@ mod tests {
     #[test]
     fn test_g_object_ref() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("g_object_ref")
-            .expect("g_object_ref not found");
+        let c = db.lookup("g_object_ref").expect("g_object_ref not found");
         assert_eq!(c.contract_type, ContractType::Retainer);
-        assert!(c
-            .paired_release
-            .contains(&"g_object_unref".to_string()));
+        assert!(c.paired_release.contains(&"g_object_unref".to_string()));
     }
 
     #[test]
@@ -484,31 +444,23 @@ mod tests {
     #[test]
     fn test_uv_loop_init() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("uv_loop_init")
-            .expect("uv_loop_init not found");
+        let c = db.lookup("uv_loop_init").expect("uv_loop_init not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert_eq!(c.source, ContractSource::Libuv);
-        assert!(c
-            .paired_release
-            .contains(&"uv_loop_close".to_string()));
+        assert!(c.paired_release.contains(&"uv_loop_close".to_string()));
     }
 
     #[test]
     fn test_uv_loop_close() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("uv_loop_close")
-            .expect("uv_loop_close not found");
+        let c = db.lookup("uv_loop_close").expect("uv_loop_close not found");
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
     #[test]
     fn test_uv_tcp_init() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("uv_tcp_init")
-            .expect("uv_tcp_init not found");
+        let c = db.lookup("uv_tcp_init").expect("uv_tcp_init not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert!(c.paired_release.contains(&"uv_close".to_string()));
     }
@@ -516,9 +468,7 @@ mod tests {
     #[test]
     fn test_uv_timer_init() {
         let db = FFIContractDB::new();
-        let c = db
-            .lookup("uv_timer_init")
-            .expect("uv_timer_init not found");
+        let c = db.lookup("uv_timer_init").expect("uv_timer_init not found");
         assert_eq!(c.contract_type, ContractType::Allocator);
         assert!(c.paired_release.contains(&"uv_close".to_string()));
     }
@@ -536,10 +486,7 @@ mod tests {
     fn test_by_source_openssl() {
         let db = FFIContractDB::new();
         let contracts = db.by_source(ContractSource::OpenSSL);
-        assert!(
-            !contracts.is_empty(),
-            "Must have OpenSSL contracts"
-        );
+        assert!(!contracts.is_empty(), "Must have OpenSSL contracts");
         for c in contracts {
             assert_eq!(c.source, ContractSource::OpenSSL);
         }
@@ -549,10 +496,7 @@ mod tests {
     fn test_by_source_sqlite() {
         let db = FFIContractDB::new();
         let contracts = db.by_source(ContractSource::SQLite);
-        assert!(
-            !contracts.is_empty(),
-            "Must have SQLite contracts"
-        );
+        assert!(!contracts.is_empty(), "Must have SQLite contracts");
         for c in contracts {
             assert_eq!(c.source, ContractSource::SQLite);
         }
@@ -562,10 +506,7 @@ mod tests {
     fn test_by_source_python() {
         let db = FFIContractDB::new();
         let contracts = db.by_source(ContractSource::PythonCApi);
-        assert!(
-            !contracts.is_empty(),
-            "Must have Python/C API contracts"
-        );
+        assert!(!contracts.is_empty(), "Must have Python/C API contracts");
         for c in contracts {
             assert_eq!(c.source, ContractSource::PythonCApi);
         }
