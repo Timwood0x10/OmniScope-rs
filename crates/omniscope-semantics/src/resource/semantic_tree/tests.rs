@@ -3,6 +3,10 @@
 use super::*;
 use proptest::prelude::*;
 
+/// Objective: Verify that getenv is correctly classified as EnvironmentConfig syscall.
+///
+/// Invariants:
+/// - getenv function name should be classified as EnvironmentConfig
 #[test]
 fn test_syscall_classify_getenv() {
     assert_eq!(
@@ -11,6 +15,10 @@ fn test_syscall_classify_getenv() {
     );
 }
 
+/// Objective: Verify that strlen is correctly classified as DataQuery syscall.
+///
+/// Invariants:
+/// - strlen function name should be classified as DataQuery
 #[test]
 fn test_syscall_classify_strlen() {
     assert_eq!(
@@ -19,6 +27,10 @@ fn test_syscall_classify_strlen() {
     );
 }
 
+/// Objective: Verify that malloc is correctly classified as MemoryManagement syscall.
+///
+/// Invariants:
+/// - malloc function name should be classified as MemoryManagement
 #[test]
 fn test_syscall_classify_malloc() {
     assert_eq!(
@@ -27,6 +39,10 @@ fn test_syscall_classify_malloc() {
     );
 }
 
+/// Objective: Verify that free is correctly classified as MemoryManagement syscall.
+///
+/// Invariants:
+/// - free function name should be classified as MemoryManagement
 #[test]
 fn test_syscall_classify_free() {
     assert_eq!(
@@ -35,6 +51,10 @@ fn test_syscall_classify_free() {
     );
 }
 
+/// Objective: Verify that highway functions are correctly classified as ComputeAccelerated syscall.
+///
+/// Invariants:
+/// - highway_index_of_char function name should be classified as ComputeAccelerated
 #[test]
 fn test_syscall_classify_highway() {
     assert_eq!(
@@ -43,6 +63,10 @@ fn test_syscall_classify_highway() {
     );
 }
 
+/// Objective: Verify that Bun dispatch functions are correctly classified as InternalDispatch syscall.
+///
+/// Invariants:
+/// - __bun_dispatch__OutputSink__Sys__quiet_writer_write_all function name should be classified as InternalDispatch
 #[test]
 fn test_syscall_classify_bun_dispatch() {
     assert_eq!(
@@ -51,6 +75,10 @@ fn test_syscall_classify_bun_dispatch() {
     );
 }
 
+/// Objective: Verify that Bun string functions are correctly classified as InternalDispatch syscall.
+///
+/// Invariants:
+/// - BunString__fromBytes function name should be classified as InternalDispatch
 #[test]
 fn test_syscall_classify_bun_string() {
     assert_eq!(
@@ -59,6 +87,10 @@ fn test_syscall_classify_bun_string() {
     );
 }
 
+/// Objective: Verify that WTF destroy functions are correctly classified as InternalDispatch syscall.
+///
+/// Invariants:
+/// - Bun__WTFStringImpl__destroy function name should be classified as InternalDispatch
 #[test]
 fn test_syscall_classify_wtf_destroy() {
     assert_eq!(
@@ -67,6 +99,10 @@ fn test_syscall_classify_wtf_destroy() {
     );
 }
 
+/// Objective: Verify that Rust mangled names for interior mutability types are correctly detected.
+///
+/// Invariants:
+/// - Mangled name for std::sync::mutex::Mutex should be detected as InteriorMutability
 #[test]
 fn test_type_semantic_interior_mutability() {
     // Real mangled name from bun_core: std::sync::mutex::Mutex
@@ -77,18 +113,30 @@ fn test_type_semantic_interior_mutability() {
     );
 }
 
+/// Objective: Verify that Rust mangled names for Once types are correctly detected.
+///
+/// Invariants:
+/// - Mangled name for OnceBox should be detected as Once
 #[test]
 fn test_type_semantic_once() {
     let name = "_RINvMNtNtNtCsg1bLsEOY8ZL_3std3sys4sync8once_boxINtB3_7OnceBox";
     assert_eq!(TypeSemantic::from_mangled_name(name), TypeSemantic::Once);
 }
 
+/// Objective: Verify that Rust mangled names for drop_in_place are correctly detected.
+///
+/// Invariants:
+/// - Mangled name for drop_in_place should be detected as Drop
 #[test]
 fn test_type_semantic_drop() {
     let name = "_RINvNtCsgXhsEb1m4tm_4core3ptr13drop_in_place";
     assert_eq!(TypeSemantic::from_mangled_name(name), TypeSemantic::Drop);
 }
 
+/// Objective: Verify that non-Rust mangled names are correctly detected as Unknown.
+///
+/// Invariants:
+/// - Non-Rust mangled names like "Bun__atexit" should be detected as Unknown
 #[test]
 fn test_type_semantic_non_rust() {
     assert_eq!(
@@ -97,6 +145,10 @@ fn test_type_semantic_non_rust() {
     );
 }
 
+/// Objective: Verify that data query functions have high safety scores.
+///
+/// Invariants:
+/// - strlen call should have safety score > 0.8
 #[test]
 fn test_safety_score_data_query() {
     let node = SemanticNode::for_ffi_call(
@@ -113,6 +165,10 @@ fn test_safety_score_data_query() {
     );
 }
 
+/// Objective: Verify that memory management functions have lower safety scores.
+///
+/// Invariants:
+/// - free call should have safety score < 0.6
 #[test]
 fn test_safety_score_memory_management() {
     let node = SemanticNode::for_ffi_call(
@@ -129,6 +185,10 @@ fn test_safety_score_memory_management() {
     );
 }
 
+/// Objective: Verify that internal dispatch functions have moderate-high safety scores.
+///
+/// Invariants:
+/// - BunString__fromBytes call should have safety score > 0.6
 #[test]
 fn test_safety_score_internal_dispatch() {
     let node = SemanticNode::for_ffi_call(
@@ -145,6 +205,12 @@ fn test_safety_score_internal_dispatch() {
     );
 }
 
+/// Objective: Verify that semantic tree is correctly built from FFI calls.
+///
+/// Invariants:
+/// - Tree should contain 4 nodes for 4 FFI calls
+/// - Safe pattern count should be 2 (getenv + strlen)
+/// - Genuine concern count should be 0 (free score=0.54 >= 0.5)
 #[test]
 fn test_semantic_tree_build() {
     let ffi_calls = vec![
@@ -164,6 +230,11 @@ fn test_semantic_tree_build() {
     assert_eq!(tree.genuine_concern_count(), 0); // free score=0.54 >= 0.5
 }
 
+/// Objective: Verify that memory ownership filtering correctly identifies memory management nodes.
+///
+/// Invariants:
+/// - Memory ownership nodes should include malloc and free
+/// - All memory ownership nodes should have MemoryManagement syscall semantic
 #[test]
 fn test_memory_ownership_filtering() {
     let ffi_calls = vec![
@@ -182,6 +253,11 @@ fn test_memory_ownership_filtering() {
 }
 
 // ── Python semantic detection tests ──
+/// Objective: Verify that Python reference counting patterns are correctly detected.
+///
+/// Invariants:
+/// - Py_INCREF and Py_XINCREF should be detected as PythonRefcountInc
+/// - Py_DECREF and Py_XDECREF should be detected as PythonRefcountDec
 #[test]
 fn test_semantic_kind_from_function_name_python_refcount() {
     // Test Python reference counting patterns
@@ -203,6 +279,11 @@ fn test_semantic_kind_from_function_name_python_refcount() {
     );
 }
 
+/// Objective: Verify that Python borrowed and owned reference patterns are correctly detected.
+///
+/// Invariants:
+/// - PyList_GetItem, PyTuple_GetItem, PyDict_GetItem should be detected as PythonBorrowedRef
+/// - PyBytes_FromString, PyLong_FromLong, PyObject_Call should be detected as PythonOwnedRef
 #[test]
 fn test_semantic_kind_from_function_name_python_references() {
     // Test Python borrowed and owned references
@@ -232,6 +313,10 @@ fn test_semantic_kind_from_function_name_python_references() {
     );
 }
 
+/// Objective: Verify that Python GIL protection patterns are correctly detected.
+///
+/// Invariants:
+/// - PyGILState_Ensure and PyGILState_Release should be detected as PythonGilProtected
 #[test]
 fn test_semantic_kind_from_function_name_python_gil() {
     // Test Python GIL protection patterns
@@ -246,6 +331,13 @@ fn test_semantic_kind_from_function_name_python_gil() {
 }
 
 // ── Go semantic detection tests ──
+/// Objective: Verify that Go defer and CGO patterns are correctly detected.
+///
+/// Invariants:
+/// - defer C.free(ptr) should be detected as GoDeferCleanup
+/// - runtime.SetFinalizer should be detected as GoFinalizer
+/// - _Cgo_malloc and _cgo_free should be detected as GoCgoWrapper
+/// - runtime.mallocgc and runtime.newobject should be detected as GoRuntimeAlloc
 #[test]
 fn test_semantic_kind_from_function_name_go_patterns() {
     // Test Go defer and CGO patterns
@@ -276,6 +368,11 @@ fn test_semantic_kind_from_function_name_go_patterns() {
 }
 
 // ── C++ semantic detection tests ──
+/// Objective: Verify that C++ smart pointer patterns are correctly detected.
+///
+/// Invariants:
+/// - std::unique_ptr and make_unique should be detected as CppUniquePtr
+/// - std::shared_ptr and make_shared should be detected as CppSharedPtr
 #[test]
 fn test_semantic_kind_from_function_name_cpp_smart_pointers() {
     // Test C++ smart pointer patterns
@@ -297,6 +394,10 @@ fn test_semantic_kind_from_function_name_cpp_smart_pointers() {
     );
 }
 
+/// Objective: Verify that C++ destructor patterns are correctly detected.
+///
+/// Invariants:
+/// - ~MyClass and MyClass::~MyClass should be detected as CppDestructor
 #[test]
 fn test_semantic_kind_from_function_name_cpp_destructor() {
     // Test C++ destructor patterns
@@ -310,6 +411,10 @@ fn test_semantic_kind_from_function_name_cpp_destructor() {
     );
 }
 
+/// Objective: Verify that C++ exception handling patterns are correctly detected.
+///
+/// Invariants:
+/// - __cxa_throw, __cxa_begin_catch, __cxa_end_catch, __cxa_allocate_exception should be detected as CppExceptionPath
 #[test]
 fn test_semantic_kind_from_function_name_cpp_exception() {
     // Test C++ exception handling patterns
@@ -332,6 +437,12 @@ fn test_semantic_kind_from_function_name_cpp_exception() {
 }
 
 // ── C# semantic detection tests ──
+/// Objective: Verify that C# SafeHandle and P/Invoke patterns are correctly detected.
+///
+/// Invariants:
+/// - SafeHandle, ReleaseHandle, CriticalHandle should be detected as CsharpSafeHandle
+/// - Finalize should be detected as CsharpFinalizer
+/// - DllImport, Marshal.AllocHGlobal, Marshal.FreeHGlobal should be detected as CsharpPinvokeMarshal
 #[test]
 fn test_semantic_kind_from_function_name_csharp_patterns() {
     // Test C# SafeHandle and P/Invoke patterns
@@ -366,6 +477,12 @@ fn test_semantic_kind_from_function_name_csharp_patterns() {
 }
 
 // ── Java JNI semantic detection tests ──
+/// Objective: Verify that Java JNI reference patterns are correctly detected.
+///
+/// Invariants:
+/// - NewLocalRef, DeleteLocalRef should be detected as JavaLocalRef
+/// - NewGlobalRef, DeleteGlobalRef should be detected as JavaGlobalRef
+/// - NewWeakGlobalRef, DeleteWeakGlobalRef should be detected as JavaWeakRef
 #[test]
 fn test_semantic_kind_from_function_name_java_jni() {
     // Test Java JNI reference patterns
@@ -396,6 +513,15 @@ fn test_semantic_kind_from_function_name_java_jni() {
 }
 
 // ── Safety score tests ──
+/// Objective: Verify that semantic kinds have reasonable safety scores.
+///
+/// Invariants:
+/// - RAII drop should have safety score >= 0.9
+/// - C++ unique_ptr and shared_ptr should have safety score >= 0.8
+/// - C# SafeHandle should have safety score >= 0.8
+/// - Python borrowed ref should have safety score >= 0.7
+/// - Python refcount inc should have safety score <= 0.4
+/// - Java weak ref should have safety score <= 0.4
 #[test]
 fn test_semantic_kind_safety_scores() {
     // Test that safety scores are reasonable
@@ -430,6 +556,11 @@ fn test_semantic_kind_safety_scores() {
 }
 
 // ── Cleanup requirement tests ──
+/// Objective: Verify that cleanup requirements are correctly detected.
+///
+/// Invariants:
+/// - PythonRefcountInc, PythonOwnedRef, CppUniquePtr, CppSharedPtr, CsharpSafeHandle, JavaGlobalRef should require cleanup
+/// - PythonBorrowedRef, JavaLocalRef should not require cleanup
 #[test]
 fn test_semantic_kind_requires_cleanup() {
     // Test cleanup requirement detection
@@ -468,6 +599,11 @@ fn test_semantic_kind_requires_cleanup() {
 }
 
 // ── Borrowed/temporary reference tests ──
+/// Objective: Verify that borrowed/temporary references are correctly detected.
+///
+/// Invariants:
+/// - PythonBorrowedRef, PythonGilProtected, JavaLocalRef, FromParameter should be temporary
+/// - CppUniquePtr, JavaGlobalRef should not be temporary
 #[test]
 fn test_semantic_kind_is_borrowed_or_temporary() {
     // Test borrowed/temporary reference detection
@@ -498,6 +634,10 @@ fn test_semantic_kind_is_borrowed_or_temporary() {
 }
 
 // ── Suppression rule tests ──
+/// Objective: Verify that write_to_immutable suppression rules are correctly applied.
+///
+/// Invariants:
+/// - MutableParam, InteriorMutability, PythonGilProtected, CppUniquePtr, CppSharedPtr, CsharpSafeHandle should suppress write_to_immutable
 #[test]
 fn test_semantic_kind_suppresses_write_to_immutable() {
     // Test write_to_immutable suppression rules
@@ -527,6 +667,10 @@ fn test_semantic_kind_suppresses_write_to_immutable() {
     );
 }
 
+/// Objective: Verify that borrow_escape suppression rules are correctly applied.
+///
+/// Invariants:
+/// - HeapProvenance, GlobalProvenance, FromParameter, PythonBorrowedRef, PythonGilProtected, GoDeferCleanup, CppUniquePtr, CppSharedPtr, JavaLocalRef should suppress borrow_escape
 #[test]
 fn test_semantic_kind_suppresses_borrow_escape() {
     // Test borrow_escape suppression rules
@@ -568,6 +712,10 @@ fn test_semantic_kind_suppresses_borrow_escape() {
     );
 }
 
+/// Objective: Verify that use_after_free suppression rules are correctly applied.
+///
+/// Invariants:
+/// - RaiiDropRelease, PythonRefcountInc, PythonOwnedRef, GoDeferCleanup, CppUniquePtr, CppSharedPtr, CsharpSafeHandle, JavaGlobalRef should suppress use_after_free
 #[test]
 fn test_semantic_kind_suppresses_use_after_free() {
     // Test use_after_free suppression rules
@@ -605,6 +753,10 @@ fn test_semantic_kind_suppresses_use_after_free() {
     );
 }
 
+/// Objective: Verify that cross_language_free suppression rules are correctly applied.
+///
+/// Invariants:
+/// - IntoRawTransfer, FileOperation, NetworkOperation, ProcessOperation, LibraryRelease, PythonRefcountDec, PythonOwnedRef, GoDeferCleanup, CppUniquePtr, CppSharedPtr, CsharpSafeHandle, JavaGlobalRef should suppress cross_language_free
 #[test]
 fn test_semantic_kind_suppresses_cross_language_free() {
     // Test cross_language_free suppression rules
@@ -659,6 +811,10 @@ fn test_semantic_kind_suppresses_cross_language_free() {
 }
 
 // ── Unknown function detection test ──
+/// Objective: Verify that unknown functions are correctly detected as Unknown.
+///
+/// Invariants:
+/// - Random function names and empty strings should return Unknown
 #[test]
 fn test_semantic_kind_from_function_name_unknown() {
     // Test that unknown functions return Unknown

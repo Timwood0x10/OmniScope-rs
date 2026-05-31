@@ -335,7 +335,7 @@ mod tests {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 42 })
-            .unwrap();
+            .expect("ownership_state: first release transition should succeed in test_double_release_error");
         let result = instance.transition(OwnershipEvent::Release { function: 43 });
         assert!(result.is_err(), "Double release must be an error");
     }

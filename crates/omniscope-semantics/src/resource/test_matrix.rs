@@ -49,7 +49,9 @@ fn test_matrix_malloc_free_same_family_safe() {
     // Same family release → ExplainedSafe
     assert_eq!(
         candidate.alloc_family,
-        candidate.release_family.unwrap(),
+        candidate
+            .release_family
+            .expect("test_matrix: release_family should be set for cross-family candidate"),
         "Same-family candidate should have matching families"
     );
 }

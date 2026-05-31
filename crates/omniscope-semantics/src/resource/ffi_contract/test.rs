@@ -10,7 +10,11 @@ mod tests {
     use omniscope_types::FamilyId;
     use proptest::prelude::*;
 
-    /// Test that the database is properly populated with built-in contracts.
+    /// Objective: Verify that the FFIContractDB is properly populated with built-in contracts.
+    ///
+    /// Invariants:
+    /// - The database should contain more than 100 contracts after initialization
+    /// - All built-in contracts from various sources (OpenSSL, SQLite, Python/C API, etc.) should be registered
     #[test]
     fn test_database_populated() {
         let db = FFIContractDB::new();
@@ -23,6 +27,14 @@ mod tests {
 
     // === OpenSSL tests ===
 
+    /// Objective: Verify that OPENSSL_malloc is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - OPENSSL_malloc should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be OpenSSL
+    /// - Paired release should include OPENSSL_free
+    /// - Ownership semantics should be CallerOwns
     #[test]
     fn test_openssl_malloc() {
         let db = FFIContractDB::new();
@@ -35,6 +47,12 @@ mod tests {
         assert_eq!(c.ownership, OwnershipSemantics::CallerOwns);
     }
 
+    /// Objective: Verify that OPENSSL_free is correctly registered as an OpenSSL deallocator.
+    ///
+    /// Invariants:
+    /// - OPENSSL_free should be found in the database
+    /// - Contract type should be Deallocator
+    /// - Source should be OpenSSL
     #[test]
     fn test_openssl_free() {
         let db = FFIContractDB::new();
@@ -43,6 +61,12 @@ mod tests {
         assert_eq!(c.source, ContractSource::OpenSSL);
     }
 
+    /// Objective: Verify that OPENSSL_strdup is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - OPENSSL_strdup should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include OPENSSL_free
     #[test]
     fn test_openssl_strdup() {
         let db = FFIContractDB::new();
@@ -53,6 +77,11 @@ mod tests {
         assert!(c.paired_release.contains(&"OPENSSL_free".to_string()));
     }
 
+    /// Objective: Verify that OPENSSL_clear_free is correctly registered as an OpenSSL deallocator.
+    ///
+    /// Invariants:
+    /// - OPENSSL_clear_free should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_openssl_clear_free() {
         let db = FFIContractDB::new();
@@ -62,6 +91,12 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
+    /// Objective: Verify that CRYPTO_secure_malloc is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - CRYPTO_secure_malloc should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include CRYPTO_secure_free
     #[test]
     fn test_openssl_secure_malloc() {
         let db = FFIContractDB::new();
@@ -72,6 +107,12 @@ mod tests {
         assert!(c.paired_release.contains(&"CRYPTO_secure_free".to_string()));
     }
 
+    /// Objective: Verify that EVP_MD_CTX_new is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - EVP_MD_CTX_new should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include EVP_MD_CTX_free
     #[test]
     fn test_evp_md_ctx() {
         let db = FFIContractDB::new();
@@ -82,6 +123,12 @@ mod tests {
         assert!(c.paired_release.contains(&"EVP_MD_CTX_free".to_string()));
     }
 
+    /// Objective: Verify that EVP_CIPHER_CTX_new is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - EVP_CIPHER_CTX_new should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include EVP_CIPHER_CTX_free
     #[test]
     fn test_evp_cipher_ctx() {
         let db = FFIContractDB::new();
@@ -94,6 +141,12 @@ mod tests {
             .contains(&"EVP_CIPHER_CTX_free".to_string()));
     }
 
+    /// Objective: Verify that BIO_new is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - BIO_new should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include both BIO_free and BIO_free_all
     #[test]
     fn test_bio_new() {
         let db = FFIContractDB::new();
@@ -103,6 +156,12 @@ mod tests {
         assert!(c.paired_release.contains(&"BIO_free_all".to_string()));
     }
 
+    /// Objective: Verify that SSL_CTX_new is correctly registered as an OpenSSL allocator.
+    ///
+    /// Invariants:
+    /// - SSL_CTX_new should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include SSL_CTX_free
     #[test]
     fn test_ssl_ctx() {
         let db = FFIContractDB::new();
@@ -111,6 +170,11 @@ mod tests {
         assert!(c.paired_release.contains(&"SSL_CTX_free".to_string()));
     }
 
+    /// Objective: Verify that X509_free is correctly registered as an OpenSSL deallocator.
+    ///
+    /// Invariants:
+    /// - X509_free should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_x509_free() {
         let db = FFIContractDB::new();
@@ -120,6 +184,13 @@ mod tests {
 
     // === SQLite tests ===
 
+    /// Objective: Verify that sqlite3_open is correctly registered as a SQLite allocator.
+    ///
+    /// Invariants:
+    /// - sqlite3_open should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be SQLite
+    /// - Paired release should include sqlite3_close
     #[test]
     fn test_sqlite3_open() {
         let db = FFIContractDB::new();
@@ -129,6 +200,12 @@ mod tests {
         assert!(c.paired_release.contains(&"sqlite3_close".to_string()));
     }
 
+    /// Objective: Verify that sqlite3_close is correctly registered as a SQLite deallocator.
+    ///
+    /// Invariants:
+    /// - sqlite3_close should be found in the database
+    /// - Contract type should be Deallocator
+    /// - Source should be SQLite
     #[test]
     fn test_sqlite3_close() {
         let db = FFIContractDB::new();
@@ -137,6 +214,12 @@ mod tests {
         assert_eq!(c.source, ContractSource::SQLite);
     }
 
+    /// Objective: Verify that sqlite3_exec is correctly registered as a SQLite borrower.
+    ///
+    /// Invariants:
+    /// - sqlite3_exec should be found in the database
+    /// - Contract type should be Borrower
+    /// - Source should be SQLite
     #[test]
     fn test_sqlite3_exec() {
         let db = FFIContractDB::new();
@@ -145,6 +228,12 @@ mod tests {
         assert_eq!(c.source, ContractSource::SQLite);
     }
 
+    /// Objective: Verify that sqlite3_prepare_v2 is correctly registered as a SQLite allocator.
+    ///
+    /// Invariants:
+    /// - sqlite3_prepare_v2 should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include sqlite3_finalize
     #[test]
     fn test_sqlite3_prepare() {
         let db = FFIContractDB::new();
@@ -155,6 +244,11 @@ mod tests {
         assert!(c.paired_release.contains(&"sqlite3_finalize".to_string()));
     }
 
+    /// Objective: Verify that sqlite3_finalize is correctly registered as a SQLite deallocator.
+    ///
+    /// Invariants:
+    /// - sqlite3_finalize should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_sqlite3_finalize() {
         let db = FFIContractDB::new();
@@ -164,6 +258,11 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
+    /// Objective: Verify that sqlite3_column_text is correctly registered as a SQLite borrower.
+    ///
+    /// Invariants:
+    /// - sqlite3_column_text should be found in the database
+    /// - Contract type should be Borrower
     #[test]
     fn test_sqlite3_column_text() {
         let db = FFIContractDB::new();
@@ -175,6 +274,14 @@ mod tests {
 
     // === Python/C API tests ===
 
+    /// Objective: Verify that PyObject_New is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - PyObject_New should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be PythonCApi
+    /// - Paired release should include Py_DECREF
+    /// - Ownership semantics should be ReferenceCounted
     #[test]
     fn test_pyobject_new() {
         let db = FFIContractDB::new();
@@ -185,6 +292,12 @@ mod tests {
         assert_eq!(c.ownership, OwnershipSemantics::ReferenceCounted);
     }
 
+    /// Objective: Verify that Py_BuildValue is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - Py_BuildValue should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include Py_DECREF
     #[test]
     fn test_py_buildvalue() {
         let db = FFIContractDB::new();
@@ -193,6 +306,12 @@ mod tests {
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
 
+    /// Objective: Verify that PyUnicode_FromString is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - PyUnicode_FromString should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include Py_DECREF
     #[test]
     fn test_py_unicode() {
         let db = FFIContractDB::new();
@@ -203,6 +322,12 @@ mod tests {
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
 
+    /// Objective: Verify that PyBytes_FromString is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - PyBytes_FromString should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include Py_DECREF
     #[test]
     fn test_py_bytes() {
         let db = FFIContractDB::new();
@@ -213,6 +338,12 @@ mod tests {
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
 
+    /// Objective: Verify that PyList_New is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - PyList_New should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include Py_DECREF
     #[test]
     fn test_py_list() {
         let db = FFIContractDB::new();
@@ -221,6 +352,12 @@ mod tests {
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
 
+    /// Objective: Verify that PyDict_New is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - PyDict_New should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include Py_DECREF
     #[test]
     fn test_py_dict() {
         let db = FFIContractDB::new();
@@ -229,6 +366,12 @@ mod tests {
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
 
+    /// Objective: Verify that Py_INCREF is correctly registered as a Python/C API retainer.
+    ///
+    /// Invariants:
+    /// - Py_INCREF should be found in the database
+    /// - Contract type should be Retainer
+    /// - Paired release should include Py_DECREF
     #[test]
     fn test_py_incref() {
         let db = FFIContractDB::new();
@@ -237,6 +380,11 @@ mod tests {
         assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
     }
 
+    /// Objective: Verify that Py_DECREF is correctly registered as a Python/C API releaser.
+    ///
+    /// Invariants:
+    /// - Py_DECREF should be found in the database
+    /// - Contract type should be Releaser
     #[test]
     fn test_py_decref() {
         let db = FFIContractDB::new();
@@ -244,6 +392,12 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Releaser);
     }
 
+    /// Objective: Verify that PyGILState_Ensure is correctly registered as a Python/C API allocator.
+    ///
+    /// Invariants:
+    /// - PyGILState_Ensure should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include PyGILState_Release
     #[test]
     fn test_pygil_lock() {
         let db = FFIContractDB::new();
@@ -256,6 +410,13 @@ mod tests {
 
     // === JNI tests ===
 
+    /// Objective: Verify that FindClass is correctly registered as a JNI allocator.
+    ///
+    /// Invariants:
+    /// - FindClass should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be JNI
+    /// - Paired release should include DeleteLocalRef
     #[test]
     fn test_jni_find_class() {
         let db = FFIContractDB::new();
@@ -265,6 +426,12 @@ mod tests {
         assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
     }
 
+    /// Objective: Verify that NewStringUTF is correctly registered as a JNI allocator.
+    ///
+    /// Invariants:
+    /// - NewStringUTF should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include DeleteLocalRef
     #[test]
     fn test_jni_new_string() {
         let db = FFIContractDB::new();
@@ -273,6 +440,12 @@ mod tests {
         assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
     }
 
+    /// Objective: Verify that NewObject is correctly registered as a JNI allocator.
+    ///
+    /// Invariants:
+    /// - NewObject should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include DeleteLocalRef
     #[test]
     fn test_jni_new_object() {
         let db = FFIContractDB::new();
@@ -281,6 +454,11 @@ mod tests {
         assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
     }
 
+    /// Objective: Verify that DeleteLocalRef is correctly registered as a JNI deallocator.
+    ///
+    /// Invariants:
+    /// - DeleteLocalRef should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_jni_delete_local_ref() {
         let db = FFIContractDB::new();
@@ -290,6 +468,12 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
+    /// Objective: Verify that NewGlobalRef is correctly registered as a JNI allocator.
+    ///
+    /// Invariants:
+    /// - NewGlobalRef should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include DeleteGlobalRef
     #[test]
     fn test_jni_new_global_ref() {
         let db = FFIContractDB::new();
@@ -300,6 +484,14 @@ mod tests {
 
     // === POSIX tests ===
 
+    /// Objective: Verify that malloc is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - malloc should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be Posix
+    /// - Paired release should include free
+    /// - Ownership semantics should be CallerOwns
     #[test]
     fn test_malloc() {
         let db = FFIContractDB::new();
@@ -310,6 +502,12 @@ mod tests {
         assert_eq!(c.ownership, OwnershipSemantics::CallerOwns);
     }
 
+    /// Objective: Verify that free is correctly registered as a POSIX deallocator.
+    ///
+    /// Invariants:
+    /// - free should be found in the database
+    /// - Contract type should be Deallocator
+    /// - Source should be Posix
     #[test]
     fn test_free() {
         let db = FFIContractDB::new();
@@ -318,6 +516,12 @@ mod tests {
         assert_eq!(c.source, ContractSource::Posix);
     }
 
+    /// Objective: Verify that calloc is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - calloc should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include free
     #[test]
     fn test_calloc() {
         let db = FFIContractDB::new();
@@ -326,6 +530,12 @@ mod tests {
         assert!(c.paired_release.contains(&"free".to_string()));
     }
 
+    /// Objective: Verify that realloc is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - realloc should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include free
     #[test]
     fn test_realloc() {
         let db = FFIContractDB::new();
@@ -334,6 +544,12 @@ mod tests {
         assert!(c.paired_release.contains(&"free".to_string()));
     }
 
+    /// Objective: Verify that strdup is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - strdup should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include free
     #[test]
     fn test_strdup() {
         let db = FFIContractDB::new();
@@ -342,6 +558,12 @@ mod tests {
         assert!(c.paired_release.contains(&"free".to_string()));
     }
 
+    /// Objective: Verify that strndup is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - strndup should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include free
     #[test]
     fn test_strndup() {
         let db = FFIContractDB::new();
@@ -350,6 +572,12 @@ mod tests {
         assert!(c.paired_release.contains(&"free".to_string()));
     }
 
+    /// Objective: Verify that open is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - open should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include close
     #[test]
     fn test_open() {
         let db = FFIContractDB::new();
@@ -358,6 +586,11 @@ mod tests {
         assert!(c.paired_release.contains(&"close".to_string()));
     }
 
+    /// Objective: Verify that close is correctly registered as a POSIX deallocator.
+    ///
+    /// Invariants:
+    /// - close should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_close() {
         let db = FFIContractDB::new();
@@ -365,6 +598,12 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
+    /// Objective: Verify that socket is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - socket should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include close
     #[test]
     fn test_socket() {
         let db = FFIContractDB::new();
@@ -373,6 +612,12 @@ mod tests {
         assert!(c.paired_release.contains(&"close".to_string()));
     }
 
+    /// Objective: Verify that fopen is correctly registered as a POSIX allocator.
+    ///
+    /// Invariants:
+    /// - fopen should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include fclose
     #[test]
     fn test_fopen() {
         let db = FFIContractDB::new();
@@ -381,6 +626,11 @@ mod tests {
         assert!(c.paired_release.contains(&"fclose".to_string()));
     }
 
+    /// Objective: Verify that fclose is correctly registered as a POSIX deallocator.
+    ///
+    /// Invariants:
+    /// - fclose should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_fclose() {
         let db = FFIContractDB::new();
@@ -390,6 +640,13 @@ mod tests {
 
     // === GLib tests ===
 
+    /// Objective: Verify that g_malloc is correctly registered as a GLib allocator.
+    ///
+    /// Invariants:
+    /// - g_malloc should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be Glib
+    /// - Paired release should include g_free
     #[test]
     fn test_g_malloc() {
         let db = FFIContractDB::new();
@@ -399,6 +656,12 @@ mod tests {
         assert!(c.paired_release.contains(&"g_free".to_string()));
     }
 
+    /// Objective: Verify that g_new is correctly registered as a GLib allocator.
+    ///
+    /// Invariants:
+    /// - g_new should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include g_free
     #[test]
     fn test_g_new() {
         let db = FFIContractDB::new();
@@ -407,6 +670,12 @@ mod tests {
         assert!(c.paired_release.contains(&"g_free".to_string()));
     }
 
+    /// Objective: Verify that g_strdup is correctly registered as a GLib allocator.
+    ///
+    /// Invariants:
+    /// - g_strdup should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include g_free
     #[test]
     fn test_g_strdup() {
         let db = FFIContractDB::new();
@@ -415,6 +684,11 @@ mod tests {
         assert!(c.paired_release.contains(&"g_free".to_string()));
     }
 
+    /// Objective: Verify that g_free is correctly registered as a GLib deallocator.
+    ///
+    /// Invariants:
+    /// - g_free should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_g_free() {
         let db = FFIContractDB::new();
@@ -422,6 +696,12 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
+    /// Objective: Verify that g_object_ref is correctly registered as a GLib retainer.
+    ///
+    /// Invariants:
+    /// - g_object_ref should be found in the database
+    /// - Contract type should be Retainer
+    /// - Paired release should include g_object_unref
     #[test]
     fn test_g_object_ref() {
         let db = FFIContractDB::new();
@@ -430,6 +710,11 @@ mod tests {
         assert!(c.paired_release.contains(&"g_object_unref".to_string()));
     }
 
+    /// Objective: Verify that g_object_unref is correctly registered as a GLib releaser.
+    ///
+    /// Invariants:
+    /// - g_object_unref should be found in the database
+    /// - Contract type should be Releaser
     #[test]
     fn test_g_object_unref() {
         let db = FFIContractDB::new();
@@ -441,6 +726,13 @@ mod tests {
 
     // === libuv tests ===
 
+    /// Objective: Verify that uv_loop_init is correctly registered as a libuv allocator.
+    ///
+    /// Invariants:
+    /// - uv_loop_init should be found in the database
+    /// - Contract type should be Allocator
+    /// - Source should be Libuv
+    /// - Paired release should include uv_loop_close
     #[test]
     fn test_uv_loop_init() {
         let db = FFIContractDB::new();
@@ -450,6 +742,11 @@ mod tests {
         assert!(c.paired_release.contains(&"uv_loop_close".to_string()));
     }
 
+    /// Objective: Verify that uv_loop_close is correctly registered as a libuv deallocator.
+    ///
+    /// Invariants:
+    /// - uv_loop_close should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_uv_loop_close() {
         let db = FFIContractDB::new();
@@ -457,6 +754,12 @@ mod tests {
         assert_eq!(c.contract_type, ContractType::Deallocator);
     }
 
+    /// Objective: Verify that uv_tcp_init is correctly registered as a libuv allocator.
+    ///
+    /// Invariants:
+    /// - uv_tcp_init should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include uv_close
     #[test]
     fn test_uv_tcp_init() {
         let db = FFIContractDB::new();
@@ -465,6 +768,12 @@ mod tests {
         assert!(c.paired_release.contains(&"uv_close".to_string()));
     }
 
+    /// Objective: Verify that uv_timer_init is correctly registered as a libuv allocator.
+    ///
+    /// Invariants:
+    /// - uv_timer_init should be found in the database
+    /// - Contract type should be Allocator
+    /// - Paired release should include uv_close
     #[test]
     fn test_uv_timer_init() {
         let db = FFIContractDB::new();
@@ -473,6 +782,11 @@ mod tests {
         assert!(c.paired_release.contains(&"uv_close".to_string()));
     }
 
+    /// Objective: Verify that uv_close is correctly registered as a libuv deallocator.
+    ///
+    /// Invariants:
+    /// - uv_close should be found in the database
+    /// - Contract type should be Deallocator
     #[test]
     fn test_uv_close() {
         let db = FFIContractDB::new();
@@ -482,6 +796,11 @@ mod tests {
 
     // === Query method tests ===
 
+    /// Objective: Verify that by_source query returns only OpenSSL contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to OpenSSL
     #[test]
     fn test_by_source_openssl() {
         let db = FFIContractDB::new();
@@ -492,6 +811,11 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that by_source query returns only SQLite contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to SQLite
     #[test]
     fn test_by_source_sqlite() {
         let db = FFIContractDB::new();
@@ -502,6 +826,11 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that by_source query returns only Python/C API contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to PythonCApi
     #[test]
     fn test_by_source_python() {
         let db = FFIContractDB::new();
@@ -512,6 +841,11 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that by_source query returns only JNI contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to JNI
     #[test]
     fn test_by_source_jni() {
         let db = FFIContractDB::new();
@@ -522,6 +856,11 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that by_source query returns only POSIX contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to Posix
     #[test]
     fn test_by_source_posix() {
         let db = FFIContractDB::new();
@@ -532,6 +871,11 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that by_source query returns only GLib contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to Glib
     #[test]
     fn test_by_source_glib() {
         let db = FFIContractDB::new();
@@ -542,6 +886,11 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that by_source query returns only libuv contracts.
+    ///
+    /// Invariants:
+    /// - Query should return a non-empty list of contracts
+    /// - All returned contracts should have source set to Libuv
     #[test]
     fn test_by_source_libuv() {
         let db = FFIContractDB::new();
@@ -552,6 +901,10 @@ mod tests {
         }
     }
 
+    /// Objective: Verify that lookup returns None for non-existent function names.
+    ///
+    /// Invariants:
+    /// - Lookup of a non-existent function should return None
     #[test]
     fn test_lookup_nonexistent() {
         let db = FFIContractDB::new();
@@ -561,6 +914,10 @@ mod tests {
         );
     }
 
+    /// Objective: Verify that lookup returns None for empty string.
+    ///
+    /// Invariants:
+    /// - Lookup of an empty string should return None
     #[test]
     fn test_lookup_empty_string() {
         let db = FFIContractDB::new();
