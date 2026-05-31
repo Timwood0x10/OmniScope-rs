@@ -15,6 +15,7 @@ use omniscope_types::{Effect, FamilyId, FunctionId};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
+use omniscope_semantics::ffi_contract::{ContractType, FFIContractDB};
 
 /// FIFO queue entry: (instance_id, optional_alloc_family).
 type AcquireEntry = (u64, Option<FamilyId>);
@@ -212,6 +213,7 @@ impl Pass for ContractGraphBuilderPass {
         let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
         if let Some(ref module) = ir_module {
             let registry = omniscope_semantics::FamilyRegistry::new();
+            let ffi_db = FFIContractDB::new();
 
             // Group calls by caller function
             let mut calls_by_caller: std::collections::HashMap<&str, Vec<&str>> =
@@ -271,6 +273,39 @@ impl Pass for ContractGraphBuilderPass {
                                 func_escapes.push((id, entry.family_id, callee));
                             }
                             _ => {}
+                        }
+                    } else if let Some(contract) = ffi_db.lookup(callee) {
+                        // Use FFI contract database for functions not in FamilyRegistry
+                        match contract.contract_type {
+                            ContractType::Allocator => {
+                                let id = graph.alloc_instance();
+                                if let Some(family) = contract.family_id {
+                                    func_acquires.push_back((id, family, callee));
+                                }
+                            }
+                            ContractType::Deallocator => {
+                                if let Some(family) = contract.family_id {
+                                    func_releases.push((family, callee, false));
+                                }
+                            }
+                            ContractType::Retainer => {
+                                // Retainers don't create edges in the contract graph
+                            }
+                            ContractType::Releaser => {
+                                if let Some(family) = contract.family_id {
+                                    func_releases.push((family, callee, true));
+                                }
+                            }
+                            ContractType::Borrower => {
+                                // Borrowers don't create edges in the contract graph
+                            }
+                            ContractType::Transfer => {
+                                // Transfers are handled as escapes
+                                if let Some(family) = contract.family_id {
+                                    let id = graph.alloc_instance();
+                                    func_escapes.push((id, family, callee));
+                                }
+                            }
                         }
                     }
                 }

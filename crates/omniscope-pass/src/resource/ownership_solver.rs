@@ -16,6 +16,7 @@ use omniscope_types::{Effect, EscapeKind, FamilyId, PointerContract};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
+use crate::resource::rust_drop_tracker::RustDropTracker;
 use crate::resource::union_find::OwnershipCycleDetector;
 
 /// Ownership solver pass.
@@ -60,6 +61,10 @@ impl Pass for OwnershipSolverPass {
         // This avoids redundant state transitions by tracking ownership chains.
         let mut cycle_detector = OwnershipCycleDetector::new();
 
+        // Initialize Rust Drop tracker for RAII cleanup detection.
+        // Tracks automatic Drop operations to reduce false positives.
+        let mut drop_tracker = RustDropTracker::new();
+
         if let Some(graph) = graph_ref {
             // Pre-allocate based on acquire edge count to avoid realloc.
             let acquire_count = graph
@@ -98,6 +103,12 @@ impl Pass for OwnershipSolverPass {
                         // Already handled above.
                     }
                     Effect::Release { .. } => {
+                        // Track potential Drop operations for RAII cleanup detection.
+                        drop_tracker.track_drop_call(
+                            edge.source,
+                            &edge.function_name,
+                            &edge.caller_name,
+                        );
                         apply_transition(
                             &mut instances,
                             &instance_map,
@@ -294,6 +305,9 @@ impl Pass for OwnershipSolverPass {
             // Store cycle detector for downstream passes to efficiently
             // query ownership chain relationships.
             ctx.store("ownership_cycle_detector", cycle_detector);
+
+            // Store Drop tracker for downstream passes to consider RAII semantics.
+            ctx.store("rust_drop_tracker", drop_tracker);
         }
 
         let instance_count = instances.len();
@@ -969,6 +983,87 @@ mod tests {
         assert!(
             !inst.is_leak_candidate(),
             "Borrowed instance is NOT a leak candidate"
+        );
+    }
+
+    // ── RustDropTracker integration test ──
+
+    /// Objective: Verify that RustDropTracker is correctly integrated into
+    ///            OwnershipSolverPass and tracks Drop operations.
+    /// Invariants: Drop tracker is stored in context, tracks RAII cleanup.
+    #[test]
+    fn test_solver_with_drop_tracker() {
+        let mut ctx = PassContext::new();
+        let mut graph = ContractGraph::new();
+        let instance_id = graph.alloc_instance();
+
+        // Acquire: create a resource instance.
+        graph.add_edge(ContractEdge {
+            source: 0,
+            target: instance_id,
+            effect: Effect::Acquire {
+                family: FamilyId::RUST_RAW_OWNERSHIP,
+                result: instance_id,
+            },
+            function: 0,
+            function_name: "Box::new".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+        });
+
+        // Release via drop_in_place (RAII cleanup).
+        graph.add_edge(ContractEdge {
+            source: instance_id,
+            target: 0,
+            effect: Effect::Release {
+                family: FamilyId::RUST_RAW_OWNERSHIP,
+                arg: 0,
+            },
+            function: 1,
+            function_name: "_ZN4core3ptr13drop_in_placeI3FooEEvPT_".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+        });
+
+        ctx.store("contract_graph", graph);
+
+        let pass = OwnershipSolverPass::new();
+        pass.run(&mut ctx).unwrap();
+
+        // Verify that the Drop tracker is stored.
+        let drop_tracker = ctx.get_ref::<RustDropTracker>("rust_drop_tracker");
+        assert!(
+            drop_tracker.is_some(),
+            "RustDropTracker must be stored in context"
+        );
+
+        let drop_tracker = drop_tracker.unwrap();
+        assert!(
+            drop_tracker.is_raii_cleanup(instance_id),
+            "Instance must be marked as RAII cleanup via drop_in_place"
+        );
+
+        let drop_info = drop_tracker.get_drop_info(instance_id);
+        assert!(drop_info.is_some(), "Drop info must exist for the instance");
+
+        let drop_info = drop_info.unwrap();
+        assert!(
+            drop_info.is_raii_cleanup,
+            "Drop info must indicate RAII cleanup"
+        );
+        assert!(
+            drop_info.drop_function.contains("drop_in_place"),
+            "Drop function must be drop_in_place"
+        );
+
+        // Verify that the resource is in Released state.
+        let states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
+        let states = states.expect("ownership_states must be stored");
+        let inst = &states[0];
+        assert_eq!(
+            inst.state,
+            OwnershipState::Released,
+            "Resource must be in Released state after drop_in_place"
         );
     }
 }

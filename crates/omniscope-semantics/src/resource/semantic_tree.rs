@@ -554,6 +554,73 @@ pub enum SemanticKind {
     /// Function parameter is not a stack escape — it's caller-provided pointer.
     /// Parameters are not stack escapes in the current function; caller owns the pointer.
     FromParameter,
+
+    // ── Python: Reference counting and GIL management ──
+    /// Python reference count increment (Py_INCREF, Py_XINCREF).
+    /// Indicates a borrowed reference that has been promoted to a strong reference.
+    PythonRefcountInc,
+    /// Python reference count decrement (Py_DECREF, Py_XDECREF).
+    /// Indicates a reference that is being released, potentially triggering deallocation.
+    PythonRefcountDec,
+    /// Python borrowed reference (PyList_GetItem, PyTuple_GetItem, PyDict_GetItem).
+    /// The reference is borrowed from the container and should not be decremented.
+    PythonBorrowedRef,
+    /// Python owned reference (PyBytes_FromString, PyLong_FromLong, PyObject_Call).
+    /// The caller owns the reference and is responsible for decrementing it.
+    PythonOwnedRef,
+    /// Python GIL-protected region (PyGILState_Ensure/Release).
+    /// Code within this region is thread-safe for Python operations.
+    PythonGilProtected,
+
+    // ── Go: Defer cleanup and CGO wrapper patterns ──
+    /// Go defer cleanup pattern (defer C.free(ptr), defer C.free(unsafe.Pointer)).
+    /// Indicates that a resource will be cleaned up when the function returns.
+    GoDeferCleanup,
+    /// Go finalizer pattern (runtime.SetFinalizer).
+    /// Indicates that a resource will be cleaned up by the garbage collector.
+    GoFinalizer,
+    /// Go CGO wrapper function (_Cgo_* prefix).
+    /// These are auto-generated wrappers for C function calls from Go.
+    GoCgoWrapper,
+    /// Go runtime allocation (runtime.mallocgc, runtime.newobject).
+    /// Memory allocated by Go's garbage collector runtime.
+    GoRuntimeAlloc,
+
+    // ── C++: Smart pointers and RAII patterns ──
+    /// C++ std::unique_ptr — exclusive ownership, no sharing.
+    /// Memory is automatically freed when the unique_ptr goes out of scope.
+    CppUniquePtr,
+    /// C++ std::shared_ptr — shared ownership with reference counting.
+    /// Memory is freed when the last shared_ptr is destroyed.
+    CSharedPtr,
+    /// C++ destructor pattern (~ClassName()).
+    /// Compiler-inserted cleanup when object goes out of scope.
+    CppDestructor,
+    /// C++ exception path (try/catch blocks).
+    /// Resources may be cleaned up differently on exception paths.
+    CppExceptionPath,
+
+    // ── C#: SafeHandle and P/Invoke patterns ──
+    /// C# SafeHandle pattern (SafeHandle.ReleaseHandle).
+    /// Provides deterministic cleanup of unmanaged resources.
+    CsharpSafeHandle,
+    /// C# finalizer pattern (~Destructor()).
+    /// Non-deterministic cleanup by the garbage collector.
+    CsharpFinalizer,
+    /// C# P/Invoke marshalling (DllImport, Marshal.AllocHGlobal).
+    /// Manages memory conversion between managed and unmanaged code.
+    CsharpPinvokeMarshal,
+
+    // ── Java: JNI reference types ──
+    /// Java JNI local reference (NewLocalRef).
+    /// Automatically freed when the JNI method returns.
+    JavaLocalRef,
+    /// Java JNI global reference (NewGlobalRef).
+    /// Must be explicitly deleted with DeleteGlobalRef.
+    JavaGlobalRef,
+    /// Java JNI weak global reference (NewWeakGlobalRef).
+    /// May be garbage collected; must check with IsSameObject before use.
+    JavaWeakRef,
 }
 
 impl SemanticKind {
@@ -561,7 +628,12 @@ impl SemanticKind {
     pub fn suppresses_write_to_immutable(&self) -> bool {
         matches!(
             self,
-            SemanticKind::MutableParam | SemanticKind::InteriorMutability
+            SemanticKind::MutableParam
+                | SemanticKind::InteriorMutability
+                | SemanticKind::PythonGilProtected
+                | SemanticKind::CppUniquePtr
+                | SemanticKind::CSharedPtr
+                | SemanticKind::CsharpSafeHandle
         )
     }
 
@@ -572,12 +644,35 @@ impl SemanticKind {
             SemanticKind::HeapProvenance
                 | SemanticKind::GlobalProvenance
                 | SemanticKind::FromParameter
+                | SemanticKind::PythonBorrowedRef
+                | SemanticKind::PythonGilProtected
+                | SemanticKind::GoDeferCleanup
+                | SemanticKind::GoFinalizer
+                | SemanticKind::GoRuntimeAlloc
+                | SemanticKind::CppUniquePtr
+                | SemanticKind::CSharedPtr
+                | SemanticKind::CppDestructor
+                | SemanticKind::CsharpSafeHandle
+                | SemanticKind::JavaLocalRef
         )
     }
 
     /// Returns true if this kind should suppress use_after_free issues.
     pub fn suppresses_use_after_free(&self) -> bool {
-        matches!(self, SemanticKind::RaiiDropRelease)
+        matches!(
+            self,
+            SemanticKind::RaiiDropRelease
+                | SemanticKind::PythonRefcountInc
+                | SemanticKind::PythonOwnedRef
+                | SemanticKind::GoDeferCleanup
+                | SemanticKind::GoFinalizer
+                | SemanticKind::CppUniquePtr
+                | SemanticKind::CSharedPtr
+                | SemanticKind::CppDestructor
+                | SemanticKind::CsharpSafeHandle
+                | SemanticKind::CsharpFinalizer
+                | SemanticKind::JavaGlobalRef
+        )
     }
 
     /// Returns true if this kind should suppress cross_language_free issues.
@@ -589,6 +684,231 @@ impl SemanticKind {
                 | SemanticKind::NetworkOperation
                 | SemanticKind::ProcessOperation
                 | SemanticKind::LibraryRelease
+                | SemanticKind::PythonRefcountDec
+                | SemanticKind::PythonOwnedRef
+                | SemanticKind::GoDeferCleanup
+                | SemanticKind::GoFinalizer
+                | SemanticKind::GoRuntimeAlloc
+                | SemanticKind::CppUniquePtr
+                | SemanticKind::CSharedPtr
+                | SemanticKind::CppDestructor
+                | SemanticKind::CsharpSafeHandle
+                | SemanticKind::CsharpFinalizer
+                | SemanticKind::CsharpPinvokeMarshal
+                | SemanticKind::JavaGlobalRef
+                | SemanticKind::JavaWeakRef
+        )
+    }
+
+    /// Detects the semantic kind from a function name.
+    ///
+    /// This method uses pattern matching to identify common patterns across
+    /// different programming languages. Each pattern is based on real API
+    /// conventions and naming patterns.
+    ///
+    /// # Arguments
+    /// * `func_name` - The function name to analyze
+    ///
+    /// # Returns
+    /// The detected semantic kind, or `SemanticKind::Unknown` if no pattern matches.
+    pub fn from_function_name(func_name: &str) -> Self {
+        // ── Python reference counting patterns ──
+        if func_name.contains("Py_INCREF") || func_name.contains("Py_XINCREF") {
+            return SemanticKind::PythonRefcountInc;
+        }
+        if func_name.contains("Py_DECREF") || func_name.contains("Py_XDECREF") {
+            return SemanticKind::PythonRefcountDec;
+        }
+        if func_name.contains("PyList_GetItem")
+            || func_name.contains("PyTuple_GetItem")
+            || func_name.contains("PyDict_GetItem")
+            || func_name.contains("PyList_GET_ITEM")
+            || func_name.contains("PyTuple_GET_ITEM")
+        {
+            return SemanticKind::PythonBorrowedRef;
+        }
+        if func_name.contains("PyBytes_FromString")
+            || func_name.contains("PyLong_FromLong")
+            || func_name.contains("PyFloat_FromDouble")
+            || func_name.contains("PyObject_Call")
+            || func_name.contains("PyUnicode_FromString")
+            || func_name.contains("PyBool_FromLong")
+        {
+            return SemanticKind::PythonOwnedRef;
+        }
+        if func_name.contains("PyGILState_Ensure") || func_name.contains("PyGILState_Release") {
+            return SemanticKind::PythonGilProtected;
+        }
+
+        // ── Go defer and CGO patterns ──
+        if func_name.contains("defer") && func_name.contains("free") {
+            return SemanticKind::GoDeferCleanup;
+        }
+        if func_name.contains("runtime.SetFinalizer") || func_name.contains("SetFinalizer") {
+            return SemanticKind::GoFinalizer;
+        }
+        if func_name.starts_with("_Cgo_") || func_name.contains("_cgo_") {
+            return SemanticKind::GoCgoWrapper;
+        }
+        if func_name.contains("runtime.mallocgc")
+            || func_name.contains("runtime.newobject")
+            || func_name.contains("runtime.newarray")
+        {
+            return SemanticKind::GoRuntimeAlloc;
+        }
+
+        // ── C++ smart pointer patterns ──
+        if func_name.contains("unique_ptr")
+            || func_name.contains("make_unique")
+            || func_name.contains("std::unique_ptr")
+        {
+            return SemanticKind::CppUniquePtr;
+        }
+        if func_name.contains("shared_ptr")
+            || func_name.contains("make_shared")
+            || func_name.contains("std::shared_ptr")
+        {
+            return SemanticKind::CSharedPtr;
+        }
+        // C++ destructor pattern: starts with ~ or contains ~ClassName
+        if func_name.starts_with('~') || func_name.contains("::~") {
+            return SemanticKind::CppDestructor;
+        }
+        // C++ exception handling
+        if func_name.contains("__cxa_throw")
+            || func_name.contains("__cxa_begin_catch")
+            || func_name.contains("__cxa_end_catch")
+            || func_name.contains("__cxa_allocate_exception")
+        {
+            return SemanticKind::CppExceptionPath;
+        }
+
+        // ── C# SafeHandle and P/Invoke patterns ──
+        if func_name.contains("SafeHandle")
+            || func_name.contains("ReleaseHandle")
+            || func_name.contains("CriticalHandle")
+        {
+            return SemanticKind::CsharpSafeHandle;
+        }
+        // C# finalizer: ~ClassName pattern
+        if func_name.contains("Finalize") || func_name.contains("~Destructor") {
+            return SemanticKind::CsharpFinalizer;
+        }
+        if func_name.contains("DllImport")
+            || func_name.contains("Marshal.AllocHGlobal")
+            || func_name.contains("Marshal.FreeHGlobal")
+            || func_name.contains("P/Invoke")
+        {
+            return SemanticKind::CsharpPinvokeMarshal;
+        }
+
+        // ── Java JNI reference patterns ──
+        if func_name.contains("NewLocalRef") || func_name.contains("DeleteLocalRef") {
+            return SemanticKind::JavaLocalRef;
+        }
+        if func_name.contains("NewGlobalRef") || func_name.contains("DeleteGlobalRef") {
+            return SemanticKind::JavaGlobalRef;
+        }
+        if func_name.contains("NewWeakGlobalRef") || func_name.contains("DeleteWeakGlobalRef") {
+            return SemanticKind::JavaWeakRef;
+        }
+
+        // ── Default: no pattern matched ──
+        SemanticKind::Unknown
+    }
+
+    /// Returns the safety score for this semantic kind.
+    ///
+    /// The safety score indicates how safe it is to assume that a resource
+    /// with this semantic kind is being managed correctly:
+    /// - 1.0: Completely safe (e.g., RAII cleanup)
+    /// - 0.8: Generally safe (e.g., borrowed references)
+    /// - 0.6: Moderately safe (e.g., smart pointers)
+    /// - 0.4: Potentially unsafe (e.g., finalizers)
+    /// - 0.2: High risk (e.g., manual reference counting)
+    pub fn safety_score(&self) -> f32 {
+        match self {
+            // ── Safe patterns (0.8-1.0) ──
+            SemanticKind::RaiiDropRelease => 1.0, // Compiler-managed
+            SemanticKind::CppUniquePtr => 0.9,    // Exclusive ownership
+            SemanticKind::CSharedPtr => 0.85,     // Shared ownership with refcount
+            SemanticKind::CppDestructor => 0.9,   // Deterministic cleanup
+            SemanticKind::CsharpSafeHandle => 0.9, // Safe resource management
+            SemanticKind::PythonBorrowedRef => 0.8, // Borrowed, no ownership
+            SemanticKind::PythonGilProtected => 0.8, // Thread-safe region
+
+            // ── Moderately safe patterns (0.6-0.7) ──
+            SemanticKind::HeapProvenance => 0.7,
+            SemanticKind::GlobalProvenance => 0.7,
+            SemanticKind::FromParameter => 0.6,
+            SemanticKind::GoDeferCleanup => 0.7, // Deterministic cleanup
+            SemanticKind::GoFinalizer => 0.6,    // GC-managed
+            SemanticKind::GoRuntimeAlloc => 0.7, // GC-managed memory
+
+            // ── Potentially unsafe patterns (0.4-0.5) ──
+            SemanticKind::MutableParam => 0.5,
+            SemanticKind::ReadonlyParam => 0.6,
+            SemanticKind::InteriorMutability => 0.5,
+            SemanticKind::IntoRawTransfer => 0.4, // Ownership transferred
+            SemanticKind::PythonOwnedRef => 0.5,  // Must be decremented
+            SemanticKind::JavaLocalRef => 0.5,    // Auto-freed on return
+            SemanticKind::JavaGlobalRef => 0.4,   // Must be explicitly deleted
+            SemanticKind::JavaWeakRef => 0.3,     // May be GC'd
+            SemanticKind::CsharpFinalizer => 0.4, // Non-deterministic
+            SemanticKind::CsharpPinvokeMarshal => 0.5, // Manual marshalling
+
+            // ── High risk patterns (0.2-0.3) ──
+            SemanticKind::PythonRefcountInc => 0.3, // Manual refcount
+            SemanticKind::PythonRefcountDec => 0.3, // Manual refcount
+            SemanticKind::CppExceptionPath => 0.4,  // Exception handling
+            SemanticKind::GoCgoWrapper => 0.5,      // CGO boundary
+
+            // ── POSIX patterns (0.8-0.9) ──
+            SemanticKind::FileOperation => 0.9,
+            SemanticKind::NetworkOperation => 0.9,
+            SemanticKind::ProcessOperation => 0.8,
+            SemanticKind::LibraryRelease => 0.8,
+
+            // ── Default ──
+            SemanticKind::Unknown => 0.5,
+        }
+    }
+
+    /// Returns whether this semantic kind indicates a resource that requires
+    /// explicit cleanup or deallocation.
+    pub fn requires_cleanup(&self) -> bool {
+        match self {
+            // Python reference counting
+            SemanticKind::PythonRefcountInc => true,
+            SemanticKind::PythonOwnedRef => true,
+            // Go patterns
+            SemanticKind::GoRuntimeAlloc => true,
+            // C++ patterns
+            SemanticKind::CppUniquePtr => true,
+            SemanticKind::CSharedPtr => true,
+            // C# patterns
+            SemanticKind::CsharpSafeHandle => true,
+            SemanticKind::CsharpFinalizer => true,
+            SemanticKind::CsharpPinvokeMarshal => true,
+            // Java patterns
+            SemanticKind::JavaGlobalRef => true,
+            SemanticKind::JavaWeakRef => true,
+            // Existing patterns
+            SemanticKind::HeapProvenance => true,
+            SemanticKind::IntoRawTransfer => true,
+            _ => false,
+        }
+    }
+
+    /// Returns whether this semantic kind indicates a borrowed or temporary reference.
+    pub fn is_borrowed_or_temporary(&self) -> bool {
+        matches!(
+            self,
+            SemanticKind::PythonBorrowedRef
+                | SemanticKind::PythonGilProtected
+                | SemanticKind::JavaLocalRef
+                | SemanticKind::FromParameter
+                | SemanticKind::ReadonlyParam
         )
     }
 }
@@ -1146,5 +1466,493 @@ mod tests {
         assert!(mem_nodes
             .iter()
             .all(|n| n.syscall_semantic == SyscallSemantic::MemoryManagement));
+    }
+
+    // ── Python semantic detection tests ──
+    #[test]
+    fn test_semantic_kind_from_function_name_python_refcount() {
+        // Test Python reference counting patterns
+        assert_eq!(
+            SemanticKind::from_function_name("Py_INCREF"),
+            SemanticKind::PythonRefcountInc
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("Py_XINCREF"),
+            SemanticKind::PythonRefcountInc
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("Py_DECREF"),
+            SemanticKind::PythonRefcountDec
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("Py_XDECREF"),
+            SemanticKind::PythonRefcountDec
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_from_function_name_python_references() {
+        // Test Python borrowed and owned references
+        assert_eq!(
+            SemanticKind::from_function_name("PyList_GetItem"),
+            SemanticKind::PythonBorrowedRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("PyTuple_GetItem"),
+            SemanticKind::PythonBorrowedRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("PyDict_GetItem"),
+            SemanticKind::PythonBorrowedRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("PyBytes_FromString"),
+            SemanticKind::PythonOwnedRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("PyLong_FromLong"),
+            SemanticKind::PythonOwnedRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("PyObject_Call"),
+            SemanticKind::PythonOwnedRef
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_from_function_name_python_gil() {
+        // Test Python GIL protection patterns
+        assert_eq!(
+            SemanticKind::from_function_name("PyGILState_Ensure"),
+            SemanticKind::PythonGilProtected
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("PyGILState_Release"),
+            SemanticKind::PythonGilProtected
+        );
+    }
+
+    // ── Go semantic detection tests ──
+    #[test]
+    fn test_semantic_kind_from_function_name_go_patterns() {
+        // Test Go defer and CGO patterns
+        assert_eq!(
+            SemanticKind::from_function_name("defer C.free(ptr)"),
+            SemanticKind::GoDeferCleanup
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("runtime.SetFinalizer"),
+            SemanticKind::GoFinalizer
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("_Cgo_malloc"),
+            SemanticKind::GoCgoWrapper
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("_cgo_free"),
+            SemanticKind::GoCgoWrapper
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("runtime.mallocgc"),
+            SemanticKind::GoRuntimeAlloc
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("runtime.newobject"),
+            SemanticKind::GoRuntimeAlloc
+        );
+    }
+
+    // ── C++ semantic detection tests ──
+    #[test]
+    fn test_semantic_kind_from_function_name_cpp_smart_pointers() {
+        // Test C++ smart pointer patterns
+        assert_eq!(
+            SemanticKind::from_function_name("std::unique_ptr<int>"),
+            SemanticKind::CppUniquePtr
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("make_unique<int>"),
+            SemanticKind::CppUniquePtr
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("std::shared_ptr<int>"),
+            SemanticKind::CSharedPtr
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("make_shared<int>"),
+            SemanticKind::CSharedPtr
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_from_function_name_cpp_destructor() {
+        // Test C++ destructor patterns
+        assert_eq!(
+            SemanticKind::from_function_name("~MyClass"),
+            SemanticKind::CppDestructor
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("MyClass::~MyClass"),
+            SemanticKind::CppDestructor
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_from_function_name_cpp_exception() {
+        // Test C++ exception handling patterns
+        assert_eq!(
+            SemanticKind::from_function_name("__cxa_throw"),
+            SemanticKind::CppExceptionPath
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("__cxa_begin_catch"),
+            SemanticKind::CppExceptionPath
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("__cxa_end_catch"),
+            SemanticKind::CppExceptionPath
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("__cxa_allocate_exception"),
+            SemanticKind::CppExceptionPath
+        );
+    }
+
+    // ── C# semantic detection tests ──
+    #[test]
+    fn test_semantic_kind_from_function_name_csharp_patterns() {
+        // Test C# SafeHandle and P/Invoke patterns
+        assert_eq!(
+            SemanticKind::from_function_name("SafeHandle"),
+            SemanticKind::CsharpSafeHandle
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("ReleaseHandle"),
+            SemanticKind::CsharpSafeHandle
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("CriticalHandle"),
+            SemanticKind::CsharpSafeHandle
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("Finalize"),
+            SemanticKind::CsharpFinalizer
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("DllImport"),
+            SemanticKind::CsharpPinvokeMarshal
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("Marshal.AllocHGlobal"),
+            SemanticKind::CsharpPinvokeMarshal
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("Marshal.FreeHGlobal"),
+            SemanticKind::CsharpPinvokeMarshal
+        );
+    }
+
+    // ── Java JNI semantic detection tests ──
+    #[test]
+    fn test_semantic_kind_from_function_name_java_jni() {
+        // Test Java JNI reference patterns
+        assert_eq!(
+            SemanticKind::from_function_name("NewLocalRef"),
+            SemanticKind::JavaLocalRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("DeleteLocalRef"),
+            SemanticKind::JavaLocalRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("NewGlobalRef"),
+            SemanticKind::JavaGlobalRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("DeleteGlobalRef"),
+            SemanticKind::JavaGlobalRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("NewWeakGlobalRef"),
+            SemanticKind::JavaWeakRef
+        );
+        assert_eq!(
+            SemanticKind::from_function_name("DeleteWeakGlobalRef"),
+            SemanticKind::JavaWeakRef
+        );
+    }
+
+    // ── Safety score tests ──
+    #[test]
+    fn test_semantic_kind_safety_scores() {
+        // Test that safety scores are reasonable
+        assert!(
+            SemanticKind::RaiiDropRelease.safety_score() >= 0.9,
+            "RAII drop should be very safe"
+        );
+        assert!(
+            SemanticKind::CppUniquePtr.safety_score() >= 0.8,
+            "C++ unique_ptr should be safe"
+        );
+        assert!(
+            SemanticKind::CSharedPtr.safety_score() >= 0.8,
+            "C++ shared_ptr should be safe"
+        );
+        assert!(
+            SemanticKind::CsharpSafeHandle.safety_score() >= 0.8,
+            "C# SafeHandle should be safe"
+        );
+        assert!(
+            SemanticKind::PythonBorrowedRef.safety_score() >= 0.7,
+            "Python borrowed ref should be moderately safe"
+        );
+        assert!(
+            SemanticKind::PythonRefcountInc.safety_score() <= 0.4,
+            "Python refcount inc should be higher risk"
+        );
+        assert!(
+            SemanticKind::JavaWeakRef.safety_score() <= 0.4,
+            "Java weak ref should be higher risk"
+        );
+    }
+
+    // ── Cleanup requirement tests ──
+    #[test]
+    fn test_semantic_kind_requires_cleanup() {
+        // Test cleanup requirement detection
+        assert!(
+            SemanticKind::PythonRefcountInc.requires_cleanup(),
+            "Python refcount inc should require cleanup"
+        );
+        assert!(
+            SemanticKind::PythonOwnedRef.requires_cleanup(),
+            "Python owned ref should require cleanup"
+        );
+        assert!(
+            SemanticKind::CppUniquePtr.requires_cleanup(),
+            "C++ unique_ptr should require cleanup"
+        );
+        assert!(
+            SemanticKind::CSharedPtr.requires_cleanup(),
+            "C++ shared_ptr should require cleanup"
+        );
+        assert!(
+            SemanticKind::CsharpSafeHandle.requires_cleanup(),
+            "C# SafeHandle should require cleanup"
+        );
+        assert!(
+            SemanticKind::JavaGlobalRef.requires_cleanup(),
+            "Java global ref should require cleanup"
+        );
+        assert!(
+            !SemanticKind::PythonBorrowedRef.requires_cleanup(),
+            "Python borrowed ref should not require cleanup"
+        );
+        assert!(
+            !SemanticKind::JavaLocalRef.requires_cleanup(),
+            "Java local ref should not require cleanup (auto-freed)"
+        );
+    }
+
+    // ── Borrowed/temporary reference tests ──
+    #[test]
+    fn test_semantic_kind_is_borrowed_or_temporary() {
+        // Test borrowed/temporary reference detection
+        assert!(
+            SemanticKind::PythonBorrowedRef.is_borrowed_or_temporary(),
+            "Python borrowed ref should be temporary"
+        );
+        assert!(
+            SemanticKind::PythonGilProtected.is_borrowed_or_temporary(),
+            "Python GIL protected should be temporary"
+        );
+        assert!(
+            SemanticKind::JavaLocalRef.is_borrowed_or_temporary(),
+            "Java local ref should be temporary"
+        );
+        assert!(
+            SemanticKind::FromParameter.is_borrowed_or_temporary(),
+            "From parameter should be temporary"
+        );
+        assert!(
+            !SemanticKind::CppUniquePtr.is_borrowed_or_temporary(),
+            "C++ unique_ptr should not be temporary"
+        );
+        assert!(
+            !SemanticKind::JavaGlobalRef.is_borrowed_or_temporary(),
+            "Java global ref should not be temporary"
+        );
+    }
+
+    // ── Suppression rule tests ──
+    #[test]
+    fn test_semantic_kind_suppresses_write_to_immutable() {
+        // Test write_to_immutable suppression rules
+        assert!(
+            SemanticKind::MutableParam.suppresses_write_to_immutable(),
+            "MutableParam should suppress write_to_immutable"
+        );
+        assert!(
+            SemanticKind::InteriorMutability.suppresses_write_to_immutable(),
+            "InteriorMutability should suppress write_to_immutable"
+        );
+        assert!(
+            SemanticKind::PythonGilProtected.suppresses_write_to_immutable(),
+            "Python GIL protected should suppress write_to_immutable"
+        );
+        assert!(
+            SemanticKind::CppUniquePtr.suppresses_write_to_immutable(),
+            "C++ unique_ptr should suppress write_to_immutable"
+        );
+        assert!(
+            SemanticKind::CSharedPtr.suppresses_write_to_immutable(),
+            "C++ shared_ptr should suppress write_to_immutable"
+        );
+        assert!(
+            SemanticKind::CsharpSafeHandle.suppresses_write_to_immutable(),
+            "C# SafeHandle should suppress write_to_immutable"
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_suppresses_borrow_escape() {
+        // Test borrow_escape suppression rules
+        assert!(
+            SemanticKind::HeapProvenance.suppresses_borrow_escape(),
+            "HeapProvenance should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::GlobalProvenance.suppresses_borrow_escape(),
+            "GlobalProvenance should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::FromParameter.suppresses_borrow_escape(),
+            "FromParameter should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::PythonBorrowedRef.suppresses_borrow_escape(),
+            "Python borrowed ref should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::PythonGilProtected.suppresses_borrow_escape(),
+            "Python GIL protected should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::GoDeferCleanup.suppresses_borrow_escape(),
+            "Go defer cleanup should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::CppUniquePtr.suppresses_borrow_escape(),
+            "C++ unique_ptr should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::CSharedPtr.suppresses_borrow_escape(),
+            "C++ shared_ptr should suppress borrow_escape"
+        );
+        assert!(
+            SemanticKind::JavaLocalRef.suppresses_borrow_escape(),
+            "Java local ref should suppress borrow_escape"
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_suppresses_use_after_free() {
+        // Test use_after_free suppression rules
+        assert!(
+            SemanticKind::RaiiDropRelease.suppresses_use_after_free(),
+            "RAII drop should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::PythonRefcountInc.suppresses_use_after_free(),
+            "Python refcount inc should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::PythonOwnedRef.suppresses_use_after_free(),
+            "Python owned ref should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::GoDeferCleanup.suppresses_use_after_free(),
+            "Go defer cleanup should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::CppUniquePtr.suppresses_use_after_free(),
+            "C++ unique_ptr should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::CSharedPtr.suppresses_use_after_free(),
+            "C++ shared_ptr should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::CsharpSafeHandle.suppresses_use_after_free(),
+            "C# SafeHandle should suppress use_after_free"
+        );
+        assert!(
+            SemanticKind::JavaGlobalRef.suppresses_use_after_free(),
+            "Java global ref should suppress use_after_free"
+        );
+    }
+
+    #[test]
+    fn test_semantic_kind_suppresses_cross_language_free() {
+        // Test cross_language_free suppression rules
+        assert!(
+            SemanticKind::IntoRawTransfer.suppresses_cross_language_free(),
+            "IntoRawTransfer should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::FileOperation.suppresses_cross_language_free(),
+            "FileOperation should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::NetworkOperation.suppresses_cross_language_free(),
+            "NetworkOperation should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::ProcessOperation.suppresses_cross_language_free(),
+            "ProcessOperation should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::LibraryRelease.suppresses_cross_language_free(),
+            "LibraryRelease should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::PythonRefcountDec.suppresses_cross_language_free(),
+            "Python refcount dec should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::PythonOwnedRef.suppresses_cross_language_free(),
+            "Python owned ref should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::GoDeferCleanup.suppresses_cross_language_free(),
+            "Go defer cleanup should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::CppUniquePtr.suppresses_cross_language_free(),
+            "C++ unique_ptr should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::CSharedPtr.suppresses_cross_language_free(),
+            "C++ shared_ptr should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::CsharpSafeHandle.suppresses_cross_language_free(),
+            "C# SafeHandle should suppress cross_language_free"
+        );
+        assert!(
+            SemanticKind::JavaGlobalRef.suppresses_cross_language_free(),
+            "Java global ref should suppress cross_language_free"
+        );
+    }
+
+    // ── Unknown function detection test ──
+    #[test]
+    fn test_semantic_kind_from_function_name_unknown() {
+        // Test that unknown functions return Unknown
+        assert_eq!(
+            SemanticKind::from_function_name("some_random_function"),
+            SemanticKind::Unknown
+        );
+        assert_eq!(SemanticKind::from_function_name(""), SemanticKind::Unknown);
     }
 }

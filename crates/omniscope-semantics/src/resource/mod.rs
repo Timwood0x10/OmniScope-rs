@@ -10,11 +10,14 @@
 //! - `escape`: Escape analysis for pointer scope tracking.
 //! - `structural_inference`: Phase 4 structural inference patterns
 //!   (destructor, bridge, refcount, static-lifetime).
+//! - `allocator_shim`: Detector for filtering false positives from custom allocators.
 
+pub mod allocator_shim;
 pub mod confidence_scorer;
 pub mod escape;
 pub mod family_inference;
 pub mod family_registry;
+pub mod ffi_contract;
 pub mod ir_pattern;
 pub mod ownership_state;
 pub mod semantic_engine;

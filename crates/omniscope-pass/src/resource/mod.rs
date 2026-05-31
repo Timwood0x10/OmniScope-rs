@@ -12,6 +12,7 @@
 //! - `issue_verifier` — Verifies candidates and assigns verdicts.
 //! - `risk_scoring` — Centralized risk scoring for issue candidates.
 //! - `path_sensitive_leak` — Path-sensitive leak detection (Phase 6).
+//! - `rust_drop_tracker` — Tracks Rust Drop operations for RAII cleanup detection.
 
 pub mod contract_graph_builder;
 pub mod ffi_return_check;
@@ -23,6 +24,7 @@ pub mod ownership_solver;
 pub mod path_sensitive_leak;
 pub mod raw_fact_collector;
 pub mod risk_scoring;
+pub mod rust_drop_tracker;
 pub mod structural_inference_pass;
 pub mod summary_builder;
 pub mod union_find;

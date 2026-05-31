@@ -24,6 +24,7 @@ pub use resource::family_inference::infer_family;
 pub use resource::family_registry::{
     FamilyEntry, FamilyRegistry, ResourceFamilyOwned, SymbolEffect,
 };
+pub use resource::ffi_contract;
 pub use resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior, ReturnSource};
 pub use resource::ownership_state::{
     OwnershipError, OwnershipEvent, OwnershipState, ResourceInstance,

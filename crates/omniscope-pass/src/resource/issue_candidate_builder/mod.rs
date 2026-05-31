@@ -25,6 +25,7 @@ mod grouping;
 mod tests;
 
 use omniscope_core::{IssueCandidate, Result};
+use omniscope_semantics::resource::allocator_shim::AllocatorShimDetector;
 use omniscope_semantics::{FamilyRegistry, OwnershipState, ResourceInstance};
 use omniscope_types::{
     Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
@@ -459,8 +460,26 @@ impl Pass for IssueCandidateBuilderPass {
             }
         }
 
-        let candidate_count = candidates.len();
-        ctx.store("issue_candidates", candidates);
+        // Filter out custom allocator shims to reduce false positives
+        // Note: We only filter custom allocator shims (mimalloc, jemalloc, etc.),
+        // not system or Rust allocators, as those are legitimate for analysis.
+        let allocator_detector = AllocatorShimDetector::new();
+        let filtered_candidates: Vec<IssueCandidate> = candidates
+            .into_iter()
+            .filter(|candidate| {
+                // Check if the candidate's function is a custom allocator shim
+                let func_name = &candidate.alloc_function;
+                let release_func = candidate.release_function.as_deref().unwrap_or("");
+
+                // Keep candidates where neither the allocation nor release function
+                // is a custom allocator shim
+                !allocator_detector.is_custom_allocator_shim(func_name)
+                    && !allocator_detector.is_custom_allocator_shim(release_func)
+            })
+            .collect();
+
+        let candidate_count = filtered_candidates.len();
+        ctx.store("issue_candidates", filtered_candidates);
 
         let result = PassResult::new(self.name())
             .with_nodes(candidate_count)
