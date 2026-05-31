@@ -156,4 +156,18 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         .with_family(family)
         .with_notes("Returns borrowed pointer; caller must not free"),
     );
+
+    // SQL execution
+    db.register(
+        FFIContract::new(
+            "sqlite3_exec",
+            ContractType::Borrower,
+            vec![],
+            OwnershipSemantics::Borrowed,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Execute SQL; borrows database connection"),
+    );
 }

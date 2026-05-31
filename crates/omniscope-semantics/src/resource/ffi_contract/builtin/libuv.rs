@@ -92,6 +92,20 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         .with_notes("Initialize a timer handle"),
     );
 
+    // TCP operations
+    db.register(
+        FFIContract::new(
+            "uv_tcp_init",
+            ContractType::Allocator,
+            vec!["uv_close"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Initialize a TCP handle"),
+    );
+
     // Error-prone patterns
     db.register(
         FFIContract::new(

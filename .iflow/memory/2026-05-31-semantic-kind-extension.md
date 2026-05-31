@@ -26,7 +26,7 @@
 
 #### C++ (4个)
 - `CppUniquePtr` - std::unique_ptr 独占所有权
-- `CSharedPtr` - std::shared_ptr 共享所有权
+- `CppSharedPtr` - std::shared_ptr 共享所有权
 - `CppDestructor` - ~ClassName() 析构函数
 - `CppExceptionPath` - try/catch 异常路径
 

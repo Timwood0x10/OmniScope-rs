@@ -10,6 +10,98 @@ pub fn register_contracts(db: &mut FFIContractDB) {
     let source = ContractSource::Posix;
     let family = FamilyId::C_HEAP;
 
+    // Memory allocation
+    db.register(
+        FFIContract::new(
+            "malloc",
+            ContractType::Allocator,
+            vec!["free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Allocate memory"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "free",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Free allocated memory"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "calloc",
+            ContractType::Allocator,
+            vec!["free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Allocate zero-initialized memory"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "realloc",
+            ContractType::Allocator,
+            vec!["free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Reallocate memory"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "strdup",
+            ContractType::Allocator,
+            vec!["free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Duplicate a string"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "strndup",
+            ContractType::Allocator,
+            vec!["free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Duplicate a string up to n bytes"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "aligned_alloc",
+            ContractType::Allocator,
+            vec!["free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Allocate aligned memory"),
+    );
+
     // File operations
     db.register(
         FFIContract::new(
@@ -35,6 +127,32 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         )
         .with_family(family)
         .with_notes("Close a file descriptor"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "fopen",
+            ContractType::Allocator,
+            vec!["fclose"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Open a file stream"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "fclose",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Close a file stream"),
     );
 
     // Socket operations

@@ -68,7 +68,7 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         FFIContract::new(
             "g_object_ref",
             ContractType::Retainer,
-            vec![],
+            vec!["g_object_unref"],
             OwnershipSemantics::ReferenceCounted,
             false,
             source,
@@ -102,6 +102,20 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         )
         .with_family(family)
         .with_notes("Duplicate a string"),
+    );
+
+    // Type-safe allocation
+    db.register(
+        FFIContract::new(
+            "g_new",
+            ContractType::Allocator,
+            vec!["g_free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Allocate memory for a type"),
     );
 
     db.register(

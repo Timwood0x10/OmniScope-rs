@@ -263,4 +263,97 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         .with_family(family)
         .with_notes("Returns borrowed reference; caller must not free"),
     );
+
+    // Memory allocation
+    db.register(
+        FFIContract::new(
+            "OPENSSL_malloc",
+            ContractType::Allocator,
+            vec!["OPENSSL_free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Allocate memory using OpenSSL's allocator"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "OPENSSL_free",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Free memory allocated by OpenSSL"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "OPENSSL_strdup",
+            ContractType::Allocator,
+            vec!["OPENSSL_free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Duplicate a string using OpenSSL's allocator"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "OPENSSL_clear_free",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Free memory and clear sensitive data"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "CRYPTO_secure_malloc",
+            ContractType::Allocator,
+            vec!["CRYPTO_secure_free"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Allocate secure memory"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "CRYPTO_secure_free",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Free secure memory"),
+    );
+
+    // X509
+    db.register(
+        FFIContract::new(
+            "X509_free",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Free an X509 structure"),
+    );
 }

@@ -350,6 +350,7 @@ impl Default for AllocatorShimDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     /// Objective: Verify system allocator detection works correctly.
     /// Invariants: All standard C allocators and Windows allocators are recognized.
@@ -706,5 +707,192 @@ mod tests {
             !detector.is_allocator_shim("alloc"),
             "Partial match 'alloc' should not be recognized"
         );
+    }
+
+    // === Property-based tests using proptest ===
+
+    proptest! {
+        #[test]
+        fn prop_is_allocator_shim_never_panics(
+            func_name in "[a-zA-Z0-9_:/~]{0,100}"
+        ) {
+            // Property: is_allocator_shim should never panic for any string
+            let detector = AllocatorShimDetector::new();
+            let _result = detector.is_allocator_shim(&func_name);
+            // The property is that this doesn't panic
+        }
+
+        #[test]
+        fn prop_is_system_allocator_never_panics(
+            func_name in "[a-zA-Z0-9_:/~]{0,100}"
+        ) {
+            // Property: is_system_allocator should never panic for any string
+            let detector = AllocatorShimDetector::new();
+            let _result = detector.is_system_allocator(&func_name);
+            // The property is that this doesn't panic
+        }
+
+        #[test]
+        fn prop_is_rust_allocator_never_panics(
+            func_name in "[a-zA-Z0-9_:/~]{0,100}"
+        ) {
+            // Property: is_rust_allocator should never panic for any string
+            let detector = AllocatorShimDetector::new();
+            let _result = detector.is_rust_allocator(&func_name);
+            // The property is that this doesn't panic
+        }
+
+        #[test]
+        fn prop_get_allocator_type_never_panics(
+            func_name in "[a-zA-Z0-9_:/~]{0,100}"
+        ) {
+            // Property: get_allocator_type should never panic for any string
+            let detector = AllocatorShimDetector::new();
+            let _result = detector.get_allocator_type(&func_name);
+            // The property is that this doesn't panic
+        }
+
+        #[test]
+        fn prop_allocator_type_consistency(
+            func_name in "[a-zA-Z0-9_:/~]{0,100}"
+        ) {
+            // Property: if get_allocator_type returns Some, then is_allocator_shim must be true
+            let detector = AllocatorShimDetector::new();
+            if let Some(allocator_type) = detector.get_allocator_type(&func_name) {
+                prop_assert!(
+                    detector.is_allocator_shim(&func_name),
+                    "Function '{}' has allocator type '{}' but is not recognized as allocator shim",
+                    func_name,
+                    allocator_type
+                );
+            }
+        }
+
+        #[test]
+        fn prop_allocator_categories_are_exclusive(
+            func_name in "[a-zA-Z0-9_:/~]{0,100}"
+        ) {
+            // Property: a function can only be in one allocator category
+            let detector = AllocatorShimDetector::new();
+            let is_system = detector.is_system_allocator(&func_name);
+            let is_rust = detector.is_rust_allocator(&func_name);
+            let is_custom = detector.is_custom_allocator_shim(&func_name);
+
+            let category_count = [is_system, is_rust, is_custom]
+                .iter()
+                .filter(|&&x| x)
+                .count();
+
+            prop_assert!(
+                category_count <= 1,
+                "Function '{}' is in multiple allocator categories: system={}, rust={}, custom={}",
+                func_name,
+                is_system,
+                is_rust,
+                is_custom
+            );
+        }
+
+        #[test]
+        fn prop_prefix_based_functions_are_custom(
+            prefix in "(mi|je|tc|jemalloc_|tcmalloc_|mimalloc_)",
+            suffix in "[a-zA-Z0-9_]{1,20}"
+        ) {
+            // Property: functions with known allocator prefixes should be custom allocators
+            let func_name = format!("{}{}", prefix, suffix);
+            let detector = AllocatorShimDetector::new();
+
+            // These should be recognized as allocator shims
+            prop_assert!(
+                detector.is_allocator_shim(&func_name),
+                "Function '{}' with known prefix should be recognized as allocator shim",
+                func_name
+            );
+
+            // These should be custom allocators (not system or Rust)
+            prop_assert!(
+                detector.is_custom_allocator_shim(&func_name),
+                "Function '{}' with known prefix should be recognized as custom allocator",
+                func_name
+            );
+        }
+
+        #[test]
+        fn prop_system_allocators_are_not_custom(
+            func_name in "(malloc|calloc|realloc|free|aligned_alloc|posix_memalign|valloc|pvalloc|memalign|aligned_free|HeapAlloc|HeapFree|HeapReAlloc|LocalAlloc|LocalFree|LocalReAlloc|GlobalAlloc|GlobalFree|GlobalReAlloc|VirtualAlloc|VirtualFree)"
+        ) {
+            // Property: system allocators should not be recognized as custom allocators
+            let detector = AllocatorShimDetector::new();
+
+            prop_assert!(
+                detector.is_system_allocator(&func_name),
+                "Function '{}' should be recognized as system allocator",
+                func_name
+            );
+
+            prop_assert!(
+                !detector.is_custom_allocator_shim(&func_name),
+                "Function '{}' should not be recognized as custom allocator",
+                func_name
+            );
+        }
+
+        #[test]
+        fn prop_rust_allocators_are_not_custom(
+            func_name in "(__rust_alloc|__rust_dealloc|__rust_realloc|__rust_alloc_zeroed|alloc::alloc::alloc|alloc::alloc::dealloc|alloc::alloc::realloc|alloc::alloc::alloc_zeroed|std::alloc::alloc|std::alloc::dealloc|std::alloc::realloc|std::alloc::alloc_zeroed)"
+        ) {
+            // Property: Rust allocators should not be recognized as custom allocators
+            let detector = AllocatorShimDetector::new();
+
+            prop_assert!(
+                detector.is_rust_allocator(&func_name),
+                "Function '{}' should be recognized as Rust allocator",
+                func_name
+            );
+
+            prop_assert!(
+                !detector.is_custom_allocator_shim(&func_name),
+                "Function '{}' should not be recognized as custom allocator",
+                func_name
+            );
+        }
+
+        #[test]
+        fn prop_random_non_allocator_functions(
+            func_name in "[a-zA-Z_][a-zA-Z0-9_]{0,20}"
+        ) {
+            // Property: random function names (not matching known patterns) should not be allocators
+            let detector = AllocatorShimDetector::new();
+
+            // Skip known prefixes and functions
+            let known_prefixes = ["mi_", "je_", "tc_", "mi", "je", "tc", "jemalloc_", "tcmalloc_", "mimalloc_"];
+            let known_functions = [
+                "malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "valloc", "pvalloc", "memalign", "aligned_free",
+                "HeapAlloc", "HeapFree", "HeapReAlloc", "LocalAlloc", "LocalFree", "LocalReAlloc", "GlobalAlloc", "GlobalFree", "GlobalReAlloc", "VirtualAlloc", "VirtualFree",
+                "__rust_alloc", "__rust_dealloc", "__rust_realloc", "__rust_alloc_zeroed",
+                "alloc::alloc::alloc", "alloc::alloc::dealloc", "alloc::alloc::realloc", "alloc::alloc::alloc_zeroed",
+                "std::alloc::alloc", "std::alloc::dealloc", "std::alloc::realloc", "std::alloc::alloc_zeroed",
+                "mi_malloc", "mi_free", "mi_calloc", "mi_realloc", "mi_zalloc", "mi_malloc_aligned", "mi_free_aligned", "mi_realloc_aligned",
+                "je_malloc", "je_free", "je_calloc", "je_realloc", "je_mallocx", "je_dallocx", "je_rallocx", "je_xallocx", "je_sallocx",
+                "tc_malloc", "tc_free", "tc_calloc", "tc_realloc", "tc_malloc_skip_new_handler", "tc_malloc_nothrow", "tc_new", "tc_delete", "tc_newarray", "tc_deletearray",
+                "dlmalloc", "dlfree", "dlcalloc", "dlrealloc", "dlmemalign",
+                "nedmalloc", "nedfree", "nedcalloc", "nedrealloc", "nedmemalign",
+                "rpmalloc", "rpfree", "rpcalloc", "rprealloc", "rpmemalign",
+                "sn_malloc", "sn_free", "sn_calloc", "sn_realloc",
+            ];
+
+            // Check if this is a known function or has a known prefix
+            let is_known = known_functions.contains(&func_name.as_str()) ||
+                known_prefixes.iter().any(|prefix| func_name.starts_with(prefix));
+
+            if !is_known {
+                // Random function names should not be allocators
+                prop_assert!(
+                    !detector.is_allocator_shim(&func_name),
+                    "Random function '{}' should not be recognized as allocator shim",
+                    func_name
+                );
+            }
+        }
     }
 }

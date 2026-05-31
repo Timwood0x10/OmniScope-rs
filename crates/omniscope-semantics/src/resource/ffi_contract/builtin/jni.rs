@@ -173,6 +173,32 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         .with_notes("Create a new byte array"),
     );
 
+    db.register(
+        FFIContract::new(
+            "FindClass",
+            ContractType::Allocator,
+            vec!["DeleteLocalRef"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(local_family)
+        .with_notes("Find a class by name"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "NewObject",
+            ContractType::Allocator,
+            vec!["DeleteLocalRef"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(local_family)
+        .with_notes("Create a new Java object"),
+    );
+
     // Auto-freed local references
     db.register(
         FFIContract::new(

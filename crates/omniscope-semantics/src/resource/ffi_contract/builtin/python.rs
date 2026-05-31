@@ -16,7 +16,7 @@ pub fn register_contracts(db: &mut FFIContractDB) {
             "PyObject_New",
             ContractType::Allocator,
             vec!["Py_DECREF", "Py_XDECREF"],
-            OwnershipSemantics::CallerOwns,
+            OwnershipSemantics::ReferenceCounted,
             false,
             source,
         )
@@ -187,7 +187,7 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         FFIContract::new(
             "Py_INCREF",
             ContractType::Retainer,
-            vec![],
+            vec!["Py_DECREF"],
             OwnershipSemantics::ReferenceCounted,
             false,
             source,
@@ -328,5 +328,46 @@ pub fn register_contracts(db: &mut FFIContractDB) {
         )
         .with_family(family)
         .with_notes("Free memory allocated for Python object"),
+    );
+
+    // Value creation
+    db.register(
+        FFIContract::new(
+            "Py_BuildValue",
+            ContractType::Allocator,
+            vec!["Py_DECREF"],
+            OwnershipSemantics::ReferenceCounted,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Build a Python value from C values"),
+    );
+
+    // GIL management
+    db.register(
+        FFIContract::new(
+            "PyGILState_Ensure",
+            ContractType::Allocator,
+            vec!["PyGILState_Release"],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Ensure GIL is held; returns GIL state"),
+    );
+
+    db.register(
+        FFIContract::new(
+            "PyGILState_Release",
+            ContractType::Deallocator,
+            vec![],
+            OwnershipSemantics::CallerOwns,
+            false,
+            source,
+        )
+        .with_family(family)
+        .with_notes("Release GIL"),
     );
 }
