@@ -828,6 +828,11 @@ fn test_semantic_kind_from_function_name_unknown() {
 // ── Property-based tests using proptest ──
 
 proptest! {
+    /// Objective: 验证 from_function_name 对任意字符串输入不会 panic
+    ///
+    /// Invariants:
+    /// - 对任意字符串输入，from_function_name 应返回 SemanticKind
+    /// - 不应抛出异常或 panic
     #[test]
     fn prop_from_function_name_never_panics(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -837,6 +842,11 @@ proptest! {
         // The property is that this doesn't panic
     }
 
+    /// Objective: 验证安全分数始终在有效范围内
+    ///
+    /// Invariants:
+    /// - 安全分数必须在 0.0 到 1.0 之间（包含边界值）
+    /// - 确保所有 SemanticKind 的安全分数都在有效范围内
     #[test]
     fn prop_safety_score_range(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -852,6 +862,12 @@ proptest! {
         );
     }
 
+    /// Objective: 验证 requires_cleanup 方法与语义类型的一致性
+    ///
+    /// Invariants:
+    /// - 需要清理的语义类型（如 PythonRefcountInc、CppUniquePtr 等）必须返回 true
+    /// - 其他语义类型必须返回 false
+    /// - 确保清理标志与语义类型定义一致
     #[test]
     fn prop_requires_cleanup_consistency(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -886,6 +902,12 @@ proptest! {
         );
     }
 
+    /// Objective: 验证 is_borrowed_or_temporary 方法与语义类型的一致性
+    ///
+    /// Invariants:
+    /// - 借用或临时语义类型（如 PythonBorrowedRef、FromParameter 等）必须返回 true
+    /// - 其他语义类型必须返回 false
+    /// - 确保借用标志与语义类型定义一致
     #[test]
     fn prop_is_borrowed_or_temporary_consistency(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -913,6 +935,13 @@ proptest! {
         );
     }
 
+    /// Objective: 验证抑制规则与语义类型的一致性
+    ///
+    /// Invariants:
+    /// - write_to_immutable 抑制规则必须与语义类型定义一致
+    /// - borrow_escape 抑制规则必须与语义类型定义一致
+    /// - use_after_free 抑制规则必须与语义类型定义一致
+    /// - cross_language_free 抑制规则必须与语义类型定义一致
     #[test]
     fn prop_suppression_rules_consistency(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -1021,6 +1050,14 @@ proptest! {
         );
     }
 
+    /// Objective: 验证 Python 模式被正确检测
+    ///
+    /// Invariants:
+    /// - Py_INCREF/Py_XINCREF 必须被识别为 PythonRefcountInc
+    /// - Py_DECREF/Py_XDECREF 必须被识别为 PythonRefcountDec
+    /// - PyList_GetItem 等必须被识别为 PythonBorrowedRef
+    /// - PyBytes_FromString 等必须被识别为 PythonOwnedRef
+    /// - PyGILState_Ensure/Release 必须被识别为 PythonGilProtected
     #[test]
     fn prop_python_patterns_detected(
         prefix in "(Py_INCREF|Py_XINCREF|Py_DECREF|Py_XDECREF|PyList_GetItem|PyTuple_GetItem|PyDict_GetItem|PyBytes_FromString|PyLong_FromLong|PyFloat_FromDouble|PyObject_Call|PyUnicode_FromString|PyBool_FromLong|PyGILState_Ensure|PyGILState_Release)",
@@ -1040,6 +1077,13 @@ proptest! {
         }
     }
 
+    /// Objective: 验证 Go 模式被正确检测
+    ///
+    /// Invariants:
+    /// - defer C.free 必须被识别为 GoDeferCleanup
+    /// - runtime.SetFinalizer 必须被识别为 GoFinalizer
+    /// - _Cgo_/_cgo_ 必须被识别为 GoCgoWrapper
+    /// - runtime.mallocgc 等必须被识别为 GoRuntimeAlloc
     #[test]
     fn prop_go_patterns_detected(
         prefix in "(defer C.free|runtime.SetFinalizer|_Cgo_|_cgo_|runtime.mallocgc|runtime.newobject|runtime.newarray)",
@@ -1058,6 +1102,13 @@ proptest! {
         }
     }
 
+    /// Objective: 验证 C++ 模式被正确检测
+    ///
+    /// Invariants:
+    /// - unique_ptr/make_unique/std::unique_ptr 必须被识别为 CppUniquePtr
+    /// - shared_ptr/make_shared/std::shared_ptr 必须被识别为 CppSharedPtr
+    /// - ~ 必须被识别为 CppDestructor
+    /// - __cxa_throw 等必须被识别为 CppExceptionPath
     #[test]
     fn prop_cpp_patterns_detected(
         prefix in "(unique_ptr|make_unique|std::unique_ptr|shared_ptr|make_shared|std::shared_ptr|~|__cxa_throw|__cxa_begin_catch|__cxa_end_catch|__cxa_allocate_exception)",
@@ -1076,6 +1127,12 @@ proptest! {
         }
     }
 
+    /// Objective: 验证 C# 模式被正确检测
+    ///
+    /// Invariants:
+    /// - SafeHandle/ReleaseHandle/CriticalHandle 必须被识别为 CsharpSafeHandle
+    /// - Finalize 必须被识别为 CsharpFinalizer
+    /// - DllImport/Marshal.AllocHGlobal/Marshal.FreeHGlobal 必须被识别为 CsharpPinvokeMarshal
     #[test]
     fn prop_csharp_patterns_detected(
         prefix in "(SafeHandle|ReleaseHandle|CriticalHandle|Finalize|DllImport|Marshal.AllocHGlobal|Marshal.FreeHGlobal)",
@@ -1093,6 +1150,12 @@ proptest! {
         }
     }
 
+    /// Objective: 验证 Java JNI 模式被正确检测
+    ///
+    /// Invariants:
+    /// - NewLocalRef/DeleteLocalRef 必须被识别为 JavaLocalRef
+    /// - NewGlobalRef/DeleteGlobalRef 必须被识别为 JavaGlobalRef
+    /// - NewWeakGlobalRef/DeleteWeakGlobalRef 必须被识别为 JavaWeakRef
     #[test]
     fn prop_java_patterns_detected(
         prefix in "(NewLocalRef|DeleteLocalRef|NewGlobalRef|DeleteGlobalRef|NewWeakGlobalRef|DeleteWeakGlobalRef)",
@@ -1110,6 +1173,12 @@ proptest! {
         }
     }
 
+    /// Objective: 验证随机函数名返回 Unknown 语义类型
+    ///
+    /// Invariants:
+    /// - 不匹配已知模式的随机函数名必须返回 SemanticKind::Unknown
+    /// - 已知模式应被排除在检查之外
+    /// - 确保未知函数不会被错误分类
     #[test]
     fn prop_random_function_names_unknown(
         func_name in "[a-zA-Z_][a-zA-Z0-9_]{0,30}"

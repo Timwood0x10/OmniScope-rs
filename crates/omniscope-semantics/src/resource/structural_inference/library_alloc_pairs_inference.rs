@@ -439,7 +439,9 @@ mod tests {
 
     #[test]
     fn test_lookup_mimalloc() {
-        let entry = lookup_library_alloc("mi_malloc").expect("mi_malloc must be in table");
+        let entry = lookup_library_alloc("mi_malloc").expect(
+            "library_alloc_pairs_inference::test_lookup_mimalloc: mi_malloc must be in table",
+        );
         assert_eq!(
             entry.effect,
             LibraryAllocEffect::Acquire,
@@ -454,13 +456,15 @@ mod tests {
 
     #[test]
     fn test_lookup_zlib() {
-        let inflate_end = lookup_library_alloc("inflateEnd").expect("inflateEnd must be in table");
+        let inflate_end = lookup_library_alloc("inflateEnd")
+            .expect("library_alloc_pairs_inference::test_lookup_zlib: inflateEnd must be in table");
         assert_eq!(
             inflate_end.effect,
             LibraryAllocEffect::Release,
             "inflateEnd should be classified as Release effect"
         );
-        let deflate_init = lookup_library_alloc("deflateInit_").expect("deflateInit_ in table");
+        let deflate_init = lookup_library_alloc("deflateInit_")
+            .expect("library_alloc_pairs_inference::test_lookup_zlib: deflateInit_ in table");
         assert_eq!(
             deflate_init.effect,
             LibraryAllocEffect::Acquire,
@@ -470,13 +474,15 @@ mod tests {
 
     #[test]
     fn test_lookup_openssl() {
-        let ctx_new = lookup_library_alloc("EVP_CIPHER_CTX_new").expect("must be in table");
+        let ctx_new = lookup_library_alloc("EVP_CIPHER_CTX_new")
+            .expect("library_alloc_pairs_inference::test_lookup_openssl: must be in table");
         assert_eq!(
             ctx_new.effect,
             LibraryAllocEffect::Acquire,
             "EVP_CIPHER_CTX_new should be classified as Acquire effect"
         );
-        let ctx_free = lookup_library_alloc("EVP_CIPHER_CTX_free").expect("must be in table");
+        let ctx_free = lookup_library_alloc("EVP_CIPHER_CTX_free")
+            .expect("library_alloc_pairs_inference::test_lookup_openssl: must be in table");
         assert_eq!(
             ctx_free.effect,
             LibraryAllocEffect::Release,
@@ -486,13 +492,15 @@ mod tests {
 
     #[test]
     fn test_lookup_sqlite() {
-        let open = lookup_library_alloc("sqlite3_open").expect("sqlite3_open in table");
+        let open = lookup_library_alloc("sqlite3_open")
+            .expect("library_alloc_pairs_inference::test_lookup_sqlite: sqlite3_open in table");
         assert_eq!(
             open.effect,
             LibraryAllocEffect::Acquire,
             "sqlite3_open should be classified as Acquire effect"
         );
-        let close = lookup_library_alloc("sqlite3_close").expect("sqlite3_close in table");
+        let close = lookup_library_alloc("sqlite3_close")
+            .expect("library_alloc_pairs_inference::test_lookup_sqlite: sqlite3_close in table");
         assert_eq!(
             close.effect,
             LibraryAllocEffect::Release,
@@ -502,7 +510,8 @@ mod tests {
 
     #[test]
     fn test_lookup_go_cgo() {
-        let alloc = lookup_library_alloc("_cgo_allocate").expect("must be in table");
+        let alloc = lookup_library_alloc("_cgo_allocate")
+            .expect("library_alloc_pairs_inference::test_lookup_go_cgo: must be in table");
         assert_eq!(
             alloc.effect,
             LibraryAllocEffect::Acquire,
@@ -517,13 +526,15 @@ mod tests {
 
     #[test]
     fn test_lookup_python() {
-        let decref = lookup_library_alloc("Py_DECREF").expect("Py_DECREF in table");
+        let decref = lookup_library_alloc("Py_DECREF")
+            .expect("library_alloc_pairs_inference::test_lookup_python: Py_DECREF in table");
         assert_eq!(
             decref.effect,
             LibraryAllocEffect::ConditionalRelease,
             "Py_DECREF should be classified as ConditionalRelease effect"
         );
-        let getitem = lookup_library_alloc("PyList_GetItem").expect("PyList_GetItem in table");
+        let getitem = lookup_library_alloc("PyList_GetItem")
+            .expect("library_alloc_pairs_inference::test_lookup_python: PyList_GetItem in table");
         assert_eq!(
             getitem.effect,
             LibraryAllocEffect::Borrow,
@@ -533,7 +544,8 @@ mod tests {
 
     #[test]
     fn test_lookup_jni() {
-        let new_ref = lookup_library_alloc("NewGlobalRef").expect("NewGlobalRef in table");
+        let new_ref = lookup_library_alloc("NewGlobalRef")
+            .expect("library_alloc_pairs_inference::test_lookup_jni: NewGlobalRef in table");
         assert_eq!(
             new_ref.effect,
             LibraryAllocEffect::Acquire,
@@ -544,7 +556,8 @@ mod tests {
             LanguageHint::Java,
             "NewGlobalRef should be identified as Java language"
         );
-        let get_chars = lookup_library_alloc("GetStringUTFChars").expect("in table");
+        let get_chars = lookup_library_alloc("GetStringUTFChars")
+            .expect("library_alloc_pairs_inference::test_lookup_jni: in table");
         assert_eq!(
             get_chars.effect,
             LibraryAllocEffect::Borrow,
@@ -554,7 +567,8 @@ mod tests {
 
     #[test]
     fn test_lookup_zig() {
-        let alloc = lookup_library_alloc("zig_allocator_allocImpl").expect("in table");
+        let alloc = lookup_library_alloc("zig_allocator_allocImpl")
+            .expect("library_alloc_pairs_inference::test_lookup_zig: in table");
         assert_eq!(
             alloc.effect,
             LibraryAllocEffect::Acquire,

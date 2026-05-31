@@ -669,7 +669,7 @@ mod tests {
             .function_bodies
             .values()
             .next()
-            .expect("no function body found")
+            .expect("ir_pattern::parse_body: no function body found")
             .clone()
     }
 

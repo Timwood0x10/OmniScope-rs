@@ -534,8 +534,10 @@ mod tests {
         let registry = FamilyRegistry::new();
         let malloc = registry
             .lookup("malloc")
-            .expect("malloc must be registered");
-        let free = registry.lookup("free").expect("free must be registered");
+            .expect("family_registry::test_malloc_free_same_family: malloc must be registered");
+        let free = registry
+            .lookup("free")
+            .expect("family_registry::test_malloc_free_same_family: free must be registered");
         assert_eq!(
             malloc.family_id, free.family_id,
             "malloc and free must be same family"
@@ -548,10 +550,10 @@ mod tests {
         let registry = FamilyRegistry::new();
         let malloc = registry
             .lookup("malloc")
-            .expect("malloc must be registered");
-        let del = registry
-            .lookup("_ZdlPv")
-            .expect("operator delete must be registered");
+            .expect("family_registry::test_malloc_delete_mismatch: malloc must be registered");
+        let del = registry.lookup("_ZdlPv").expect(
+            "family_registry::test_malloc_delete_mismatch: operator delete must be registered",
+        );
         assert_ne!(
             malloc.family_id, del.family_id,
             "malloc and delete must be different families"
@@ -562,22 +564,24 @@ mod tests {
     #[test]
     fn test_rust_alloc_c_free_mismatch() {
         let registry = FamilyRegistry::new();
-        let rust_alloc = registry
-            .lookup("__rust_alloc")
-            .expect("__rust_alloc must be registered");
-        let free = registry.lookup("free").expect("free must be registered");
+        let rust_alloc = registry.lookup("__rust_alloc").expect(
+            "family_registry::test_rust_alloc_c_free_mismatch: __rust_alloc must be registered",
+        );
+        let free = registry
+            .lookup("free")
+            .expect("family_registry::test_rust_alloc_c_free_mismatch: free must be registered");
         assert!(!registry.is_compatible_release(rust_alloc.family_id, free.family_id));
     }
 
     #[test]
     fn test_pyobject_new_free_same_family() {
         let registry = FamilyRegistry::new();
-        let new = registry
-            .lookup("PyObject_New")
-            .expect("PyObject_New must be registered");
-        let free = registry
-            .lookup("PyObject_Free")
-            .expect("PyObject_Free must be registered");
+        let new = registry.lookup("PyObject_New").expect(
+            "family_registry::test_pyobject_new_free_same_family: PyObject_New must be registered",
+        );
+        let free = registry.lookup("PyObject_Free").expect(
+            "family_registry::test_pyobject_new_free_same_family: PyObject_Free must be registered",
+        );
         assert_eq!(new.family_id, free.family_id);
     }
 
@@ -586,10 +590,10 @@ mod tests {
         let registry = FamilyRegistry::new();
         let alloc = registry
             .lookup("PyMem_Malloc")
-            .expect("PyMem_Malloc must be registered");
+            .expect("family_registry::test_pymem_malloc_pyobject_free_mismatch: PyMem_Malloc must be registered");
         let free = registry
             .lookup("PyObject_Free")
-            .expect("PyObject_Free must be registered");
+            .expect("family_registry::test_pymem_malloc_pyobject_free_mismatch: PyObject_Free must be registered");
         assert_ne!(
             alloc.family_id, free.family_id,
             "PyMem_Malloc and PyObject_Free must be different families"
@@ -599,9 +603,9 @@ mod tests {
     #[test]
     fn test_py_decref_is_conditional_release() {
         let registry = FamilyRegistry::new();
-        let decref = registry
-            .lookup("Py_DECREF")
-            .expect("Py_DECREF must be registered");
+        let decref = registry.lookup("Py_DECREF").expect(
+            "family_registry::test_py_decref_is_conditional_release: Py_DECREF must be registered",
+        );
         assert_eq!(decref.effect, SymbolEffect::ConditionalRelease);
     }
 
@@ -610,19 +614,19 @@ mod tests {
         let registry = FamilyRegistry::new();
         let incref = registry
             .lookup("Py_INCREF")
-            .expect("Py_INCREF must be registered");
+            .expect("family_registry::test_py_incref_is_retain: Py_INCREF must be registered");
         assert_eq!(incref.effect, SymbolEffect::Retain);
     }
 
     #[test]
     fn test_jni_local_global_ref_mismatch() {
         let registry = FamilyRegistry::new();
-        let local = registry
-            .lookup("NewLocalRef")
-            .expect("NewLocalRef must be registered");
+        let local = registry.lookup("NewLocalRef").expect(
+            "family_registry::test_jni_local_global_ref_mismatch: NewLocalRef must be registered",
+        );
         let global_del = registry
             .lookup("DeleteGlobalRef")
-            .expect("DeleteGlobalRef must be registered");
+            .expect("family_registry::test_jni_local_global_ref_mismatch: DeleteGlobalRef must be registered");
         assert_ne!(
             local.family_id, global_del.family_id,
             "Local and global refs are different families"
@@ -632,12 +636,12 @@ mod tests {
     #[test]
     fn test_hglobal_cotask_mismatch() {
         let registry = FamilyRegistry::new();
-        let hglobal = registry
-            .lookup("AllocHGlobal")
-            .expect("AllocHGlobal must be registered");
-        let cotask = registry
-            .lookup("CoTaskMemFree")
-            .expect("CoTaskMemFree must be registered");
+        let hglobal = registry.lookup("AllocHGlobal").expect(
+            "family_registry::test_hglobal_cotask_mismatch: AllocHGlobal must be registered",
+        );
+        let cotask = registry.lookup("CoTaskMemFree").expect(
+            "family_registry::test_hglobal_cotask_mismatch: CoTaskMemFree must be registered",
+        );
         assert_ne!(
             hglobal.family_id, cotask.family_id,
             "HGlobal and CoTaskMem are different families"
@@ -647,10 +651,12 @@ mod tests {
     #[test]
     fn test_cpp_new_array_delete_array_same() {
         let registry = FamilyRegistry::new();
-        let new_arr = registry.lookup("_Znam").expect("_Znam must be registered");
-        let del_arr = registry
-            .lookup("_ZdaPv")
-            .expect("_ZdaPv must be registered");
+        let new_arr = registry.lookup("_Znam").expect(
+            "family_registry::test_cpp_new_array_delete_array_same: _Znam must be registered",
+        );
+        let del_arr = registry.lookup("_ZdaPv").expect(
+            "family_registry::test_cpp_new_array_delete_array_same: _ZdaPv must be registered",
+        );
         assert_eq!(
             new_arr.family_id, del_arr.family_id,
             "new[] and delete[] must be same family"

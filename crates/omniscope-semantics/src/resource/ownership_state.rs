@@ -312,6 +312,13 @@ pub enum OwnershipError {
 mod tests {
     use super::*;
 
+    /// Objective: 验证从 Acquired 状态到 Released 状态的转换
+    ///
+    /// Invariants:
+    /// - 初始状态应为 Acquired，且是泄漏候选
+    /// - Release 事件后状态应为 Released
+    /// - 转换不应返回错误
+    /// - Released 状态不再是泄漏候选
     #[test]
     fn test_acquire_release_transition() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
@@ -330,16 +337,29 @@ mod tests {
         );
     }
 
+    /// Objective: 验证双重释放会返回 DoubleRelease 错误
+    ///
+    /// Invariants:
+    /// - 第一次 Release 应成功，状态变为 Released
+    /// - 第二次 Release 应返回 DoubleRelease 错误
+    /// - 错误应包含实例 ID 和资源族信息
     #[test]
     fn test_double_release_error() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 42 })
-            .expect("ownership_state: first release transition should succeed in test_double_release_error");
+            .expect("ownership_state::test_double_release_error: first release transition should succeed");
         let result = instance.transition(OwnershipEvent::Release { function: 43 });
         assert!(result.is_err(), "Double release must be an error");
     }
 
+    /// Objective: 验证从 Acquired 状态到 Escaped 状态的转换
+    ///
+    /// Invariants:
+    /// - 初始状态应为 Acquired
+    /// - Escape 事件后状态应为 Escaped(ReturnToCaller)
+    /// - 转换不应返回错误
+    /// - Escaped 状态不再是泄漏候选
     #[test]
     fn test_escape_transition() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
@@ -353,6 +373,12 @@ mod tests {
         );
     }
 
+    /// Objective: 验证释放借用的资源会返回 ReleaseBorrowed 错误
+    ///
+    /// Invariants:
+    /// - 初始状态应为 Borrowed
+    /// - Release 事件应返回 ReleaseBorrowed 错误
+    /// - 状态应保持 Borrowed 不变
     #[test]
     fn test_release_borrowed_error() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Borrowed);
@@ -420,9 +446,9 @@ mod tests {
         let mut instance =
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
         // Transition: Acquired -> Retained -> Released
-        instance
-            .transition(OwnershipEvent::Retain)
-            .expect("Retain from Acquired must succeed");
+        instance.transition(OwnershipEvent::Retain).expect(
+            "ownership_state::test_release_from_retained: Retain from Acquired must succeed",
+        );
         assert_eq!(
             instance.state,
             OwnershipState::Retained,
@@ -461,7 +487,9 @@ mod tests {
             .transition(OwnershipEvent::Escape {
                 kind: EscapeKind::ReturnToCaller,
             })
-            .expect("Escape from Acquired must succeed");
+            .expect(
+                "ownership_state::test_release_from_escaped: Escape from Acquired must succeed",
+            );
         assert!(
             matches!(instance.state, OwnershipState::Escaped(_)),
             "Pre-condition: instance is in Escaped state"
@@ -493,7 +521,7 @@ mod tests {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 10 })
-            .expect("Release from Acquired must succeed");
+            .expect("ownership_state::test_escape_from_released_is_error: Release from Acquired must succeed");
         assert_eq!(
             instance.state,
             OwnershipState::Released,
@@ -523,7 +551,7 @@ mod tests {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 10 })
-            .expect("Release from Acquired must succeed");
+            .expect("ownership_state::test_transfer_from_released_is_error: Release from Acquired must succeed");
         assert_eq!(
             instance.state,
             OwnershipState::Released,
@@ -551,7 +579,7 @@ mod tests {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 10 })
-            .expect("Release from Acquired must succeed");
+            .expect("ownership_state::test_retain_from_released_is_error: Release from Acquired must succeed");
         assert_eq!(
             instance.state,
             OwnershipState::Released,
@@ -606,7 +634,7 @@ mod tests {
             .transition(OwnershipEvent::Escape {
                 kind: EscapeKind::FieldStore,
             })
-            .expect("Escape from Acquired must succeed");
+            .expect("ownership_state::test_escape_from_escaped_updates_kind: Escape from Acquired must succeed");
         assert!(
             matches!(
                 instance.state,
@@ -638,9 +666,9 @@ mod tests {
     fn test_escape_from_retained() {
         let mut instance =
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
-        instance
-            .transition(OwnershipEvent::Retain)
-            .expect("Retain from Acquired must succeed");
+        instance.transition(OwnershipEvent::Retain).expect(
+            "ownership_state::test_escape_from_retained: Retain from Acquired must succeed",
+        );
 
         let result = instance.transition(OwnershipEvent::Escape {
             kind: EscapeKind::GlobalStore,
@@ -662,9 +690,9 @@ mod tests {
     fn test_transfer_from_retained() {
         let mut instance =
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
-        instance
-            .transition(OwnershipEvent::Retain)
-            .expect("Retain from Acquired must succeed");
+        instance.transition(OwnershipEvent::Retain).expect(
+            "ownership_state::test_transfer_from_retained: Retain from Acquired must succeed",
+        );
         assert_eq!(
             instance.state,
             OwnershipState::Retained,
@@ -688,7 +716,7 @@ mod tests {
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Retain)
-            .expect("Retain from Acquired must succeed");
+            .expect("ownership_state::test_retain_from_retained_is_idempotent: Retain from Acquired must succeed");
 
         let result = instance.transition(OwnershipEvent::Retain);
         assert!(
@@ -709,7 +737,7 @@ mod tests {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Transfer)
-            .expect("Transfer from Acquired must succeed");
+            .expect("ownership_state::test_release_from_transferred_is_error: Transfer from Acquired must succeed");
 
         let result = instance.transition(OwnershipEvent::Release { function: 99 });
         assert!(
@@ -730,7 +758,7 @@ mod tests {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Transfer)
-            .expect("Transfer from Acquired must succeed");
+            .expect("ownership_state::test_transfer_from_transferred_is_error: Transfer from Acquired must succeed");
 
         let result = instance.transition(OwnershipEvent::Transfer);
         assert!(
@@ -767,7 +795,7 @@ mod tests {
         // Acquired → Retained
         instance
             .transition(OwnershipEvent::Retain)
-            .expect("Retain from Acquired must succeed");
+            .expect("ownership_state::test_retained_escape_release_chain: Retain from Acquired must succeed");
         assert_eq!(instance.state, OwnershipState::Retained);
 
         // Retained → Escaped
@@ -775,7 +803,7 @@ mod tests {
             .transition(OwnershipEvent::Escape {
                 kind: EscapeKind::Callback,
             })
-            .expect("Escape from Retained must succeed");
+            .expect("ownership_state::test_retained_escape_release_chain: Escape from Retained must succeed");
         assert!(
             matches!(
                 instance.state,
@@ -787,7 +815,7 @@ mod tests {
         // Escaped → Released (risky but allowed — signals potential use-after-free)
         instance
             .transition(OwnershipEvent::Release { function: 55 })
-            .expect("Release from Escaped must succeed");
+            .expect("ownership_state::test_retained_escape_release_chain: Release from Escaped must succeed");
         assert_eq!(
             instance.state,
             OwnershipState::Released,
@@ -812,7 +840,7 @@ mod tests {
         // Acquired → Retained
         instance
             .transition(OwnershipEvent::Retain)
-            .expect("Retain from Acquired must succeed");
+            .expect("ownership_state::test_conditional_release_from_retained_to_acquired: Retain from Acquired must succeed");
         assert_eq!(instance.state, OwnershipState::Retained);
 
         // Retained → Acquired (refcount still > 0)
@@ -868,15 +896,15 @@ mod tests {
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
 
         // Py_INCREF
-        instance
-            .transition(OwnershipEvent::Retain)
-            .expect("Retain must succeed");
+        instance.transition(OwnershipEvent::Retain).expect(
+            "ownership_state::test_incr_decr_cycle_preserves_acquired: Retain must succeed",
+        );
         assert_eq!(instance.state, OwnershipState::Retained);
 
         // Py_DECREF (refcount > 0 after decrement)
         instance
             .transition(OwnershipEvent::ConditionalRelease { function: 30 })
-            .expect("ConditionalRelease from Retained must succeed");
+            .expect("ownership_state::test_incr_decr_cycle_preserves_acquired: ConditionalRelease from Retained must succeed");
         assert_eq!(
             instance.state,
             OwnershipState::Acquired,
@@ -896,7 +924,7 @@ mod tests {
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
         instance
             .transition(OwnershipEvent::Release { function: 40 })
-            .expect("Release must succeed");
+            .expect("ownership_state::test_conditional_release_from_released_is_double_release: Release must succeed");
 
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 41 });
         assert!(
@@ -932,7 +960,7 @@ mod tests {
             .transition(OwnershipEvent::Escape {
                 kind: EscapeKind::RawPointer,
             })
-            .expect("Escape must succeed");
+            .expect("ownership_state::test_conditional_release_from_escaped_to_released: Escape must succeed");
 
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 50 });
         assert!(

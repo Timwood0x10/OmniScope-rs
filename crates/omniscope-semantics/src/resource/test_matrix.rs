@@ -19,13 +19,21 @@ use super::summary_inference::infer_summary_for_symbol;
 
 // ─── Same-family release: safe ───────────────────────────────────────
 
+/// Objective: 验证 malloc 和 free 是否正确注册在同一个家族中
+///
+/// Invariants:
+/// - malloc 和 free 必须有相同的 family_id（均为 C_HEAP）
+/// - is_compatible_release(malloc, free) 必须返回 true
+/// - 同一家族的候选者应有匹配的 alloc/release 家族
 #[test]
 fn test_matrix_malloc_free_same_family_safe() {
     let registry = FamilyRegistry::new();
     let malloc = registry
         .lookup("malloc")
-        .expect("malloc must be registered");
-    let free = registry.lookup("free").expect("free must be registered");
+        .expect("test_matrix::test_matrix_malloc_free_same_family_safe: malloc must be registered");
+    let free = registry
+        .lookup("free")
+        .expect("test_matrix::test_matrix_malloc_free_same_family_safe: free must be registered");
 
     assert_eq!(
         malloc.family_id, free.family_id,
@@ -51,18 +59,24 @@ fn test_matrix_malloc_free_same_family_safe() {
         candidate.alloc_family,
         candidate
             .release_family
-            .expect("test_matrix: release_family should be set for cross-family candidate"),
+            .expect("test_matrix::test_matrix_malloc_free_same_family_safe: test_matrix: release_family should be set for cross-family candidate"),
         "Same-family candidate should have matching families"
     );
 }
 
+/// Objective: 验证 C++ new[] 和 delete[] 是否正确注册在同一个家族中
+///
+/// Invariants:
+/// - new[] 和 delete[] 必须有相同的 family_id（均为 CPP_NEW_ARRAY）
+/// - is_compatible_release(new[], delete[]) 必须返回 true
+/// - 同一家族的分配和释放操作应正确配对
 #[test]
 fn test_matrix_new_array_delete_array_same_family_safe() {
     let registry = FamilyRegistry::new();
-    let new_arr = registry.lookup("_Znam").expect("_Znam must be registered");
+    let new_arr = registry.lookup("_Znam").expect("test_matrix::test_matrix_new_array_delete_array_same_family_safe: _Znam must be registered");
     let del_arr = registry
         .lookup("_ZdaPv")
-        .expect("_ZdaPv must be registered");
+        .expect("test_matrix::test_matrix_new_array_delete_array_same_family_safe: _ZdaPv must be registered");
 
     assert_eq!(
         new_arr.family_id, del_arr.family_id,
@@ -74,15 +88,21 @@ fn test_matrix_new_array_delete_array_same_family_safe() {
     );
 }
 
+/// Objective: 验证 Python 对象分配和释放函数是否正确注册在同一个家族中
+///
+/// Invariants:
+/// - PyObject_New 和 PyObject_Free 必须有相同的 family_id（均为 PYTHON_OBJECT）
+/// - Python 对象的分配和释放操作应正确配对
+/// - 家族注册应支持跨语言（Python）的资源管理
 #[test]
 fn test_matrix_pyobject_new_pyobject_free_same_family_safe() {
     let registry = FamilyRegistry::new();
     let py_new = registry
         .lookup("PyObject_New")
-        .expect("PyObject_New must be registered");
+        .expect("test_matrix::test_matrix_pyobject_new_pyobject_free_same_family_safe: PyObject_New must be registered");
     let py_free = registry
         .lookup("PyObject_Free")
-        .expect("PyObject_Free must be registered");
+        .expect("test_matrix::test_matrix_pyobject_new_pyobject_free_same_family_safe: PyObject_Free must be registered");
 
     assert_eq!(
         py_new.family_id, py_free.family_id,
@@ -92,15 +112,21 @@ fn test_matrix_pyobject_new_pyobject_free_same_family_safe() {
 
 // ─── Cross-family mismatch: confirmed issue ──────────────────────────
 
+/// Objective: 验证 C malloc 和 C++ operator delete 是否正确识别为不同家族
+///
+/// Invariants:
+/// - malloc 和 operator delete 必须有不同的 family_id
+/// - is_compatible_release(malloc, delete) 必须返回 false
+/// - 跨家族的分配/释放操作应被标记为不兼容
 #[test]
 fn test_matrix_malloc_delete_cross_family_mismatch() {
     let registry = FamilyRegistry::new();
-    let malloc = registry
-        .lookup("malloc")
-        .expect("malloc must be registered");
+    let malloc = registry.lookup("malloc").expect(
+        "test_matrix::test_matrix_malloc_delete_cross_family_mismatch: malloc must be registered",
+    );
     let del = registry
         .lookup("_ZdlPv")
-        .expect("operator delete must be registered");
+        .expect("test_matrix::test_matrix_malloc_delete_cross_family_mismatch: operator delete must be registered");
 
     assert_ne!(
         malloc.family_id, del.family_id,
@@ -112,13 +138,21 @@ fn test_matrix_malloc_delete_cross_family_mismatch() {
     );
 }
 
+/// Objective: 验证 Rust 分配器和 C free 是否正确识别为不同家族
+///
+/// Invariants:
+/// - __rust_alloc 和 free 必须有不同的 family_id
+/// - is_compatible_release(__rust_alloc, free) 必须返回 false
+/// - Rust 分配器与 C 标准库释放函数应被视为不兼容
 #[test]
 fn test_matrix_rust_alloc_free_cross_family_mismatch() {
     let registry = FamilyRegistry::new();
     let rust_alloc = registry
         .lookup("__rust_alloc")
-        .expect("__rust_alloc must be registered");
-    let free = registry.lookup("free").expect("free must be registered");
+        .expect("test_matrix::test_matrix_rust_alloc_free_cross_family_mismatch: __rust_alloc must be registered");
+    let free = registry.lookup("free").expect(
+        "test_matrix::test_matrix_rust_alloc_free_cross_family_mismatch: free must be registered",
+    );
 
     assert_ne!(
         rust_alloc.family_id, free.family_id,
@@ -130,15 +164,21 @@ fn test_matrix_rust_alloc_free_cross_family_mismatch() {
     );
 }
 
+/// Objective: 验证 Python 内存分配和对象释放函数是否正确识别为不同家族
+///
+/// Invariants:
+/// - PyMem_Malloc 和 PyObject_Free 必须有不同的 family_id
+/// - Python 内存管理与对象管理应被视为不同的资源家族
+/// - 不同的 Python API 应有明确的家族边界
 #[test]
 fn test_matrix_pymem_malloc_pyobject_free_family_mismatch() {
     let registry = FamilyRegistry::new();
     let pymem = registry
         .lookup("PyMem_Malloc")
-        .expect("PyMem_Malloc must be registered");
+        .expect("test_matrix::test_matrix_pymem_malloc_pyobject_free_family_mismatch: PyMem_Malloc must be registered");
     let py_free = registry
         .lookup("PyObject_Free")
-        .expect("PyObject_Free must be registered");
+        .expect("test_matrix::test_matrix_pymem_malloc_pyobject_free_family_mismatch: PyObject_Free must be registered");
 
     assert_ne!(
         pymem.family_id, py_free.family_id,
@@ -146,15 +186,21 @@ fn test_matrix_pymem_malloc_pyobject_free_family_mismatch() {
     );
 }
 
+/// Objective: 验证 JNI 本地引用和全局引用是否正确识别为不同家族
+///
+/// Invariants:
+/// - NewLocalRef 和 DeleteGlobalRef 必须有不同的 family_id
+/// - JNI 的本地引用和全局引用应被视为不同的资源类型
+/// - 不同的 JNI 引用类型应有明确的家族边界
 #[test]
 fn test_matrix_jni_local_global_ref_mismatch() {
     let registry = FamilyRegistry::new();
-    let local = registry
-        .lookup("NewLocalRef")
-        .expect("NewLocalRef must be registered");
+    let local = registry.lookup("NewLocalRef").expect(
+        "test_matrix::test_matrix_jni_local_global_ref_mismatch: NewLocalRef must be registered",
+    );
     let global_del = registry
         .lookup("DeleteGlobalRef")
-        .expect("DeleteGlobalRef must be registered");
+        .expect("test_matrix::test_matrix_jni_local_global_ref_mismatch: DeleteGlobalRef must be registered");
 
     assert_ne!(
         local.family_id, global_del.family_id,
@@ -162,6 +208,12 @@ fn test_matrix_jni_local_global_ref_mismatch() {
     );
 }
 
+/// Objective: 验证 Windows HGlobal 和 CoTaskMem 是否正确识别为不同家族
+///
+/// Invariants:
+/// - AllocHGlobal 和 CoTaskMemFree 必须有不同的 family_id
+/// - Windows 的不同内存管理 API 应被视为不同的资源家族
+/// - 跨 Windows API 的分配/释放操作应被标记为不兼容
 #[test]
 fn test_matrix_hglobal_cotask_mismatch() {
     let registry = FamilyRegistry::new();
@@ -180,6 +232,13 @@ fn test_matrix_hglobal_cotask_mismatch() {
 
 // ─── Refcount conditional release ─────────────────────────────────────
 
+/// Objective: 验证 Py_DECREF 是否正确识别为条件释放而非无条件释放
+///
+/// Invariants:
+/// - Py_DECREF 必须有 ConditionalRelease 效果，而不是无条件 Release
+/// - Py_DECREF 必须属于 PYTHON_OBJECT 家族
+/// - 推断摘要必须产生 ConditionalRelease 效果
+/// - 条件释放不应被误报为内存泄漏
 #[test]
 fn test_matrix_py_decref_conditional_release_not_leak() {
     let registry = FamilyRegistry::new();
@@ -218,6 +277,13 @@ fn test_matrix_py_decref_conditional_release_not_leak() {
 
 // ─── Destructor-mediated release ──────────────────────────────────────
 
+/// Objective: 验证 Rust Drop 函数是否正确推断为析构器释放模式
+///
+/// Invariants:
+/// - drop 函数必须被推断为析构器
+/// - 析构器摘要必须释放资源
+/// - 必须附加 DestructorRelease 证据
+/// - Rust Drop 调用 C free 应被识别为析构器中介释放
 #[test]
 fn test_matrix_rust_drop_calling_c_free_is_destructor_mediated() {
     // Rust Drop calling C free is destructor-mediated release.
@@ -247,6 +313,14 @@ fn test_matrix_rust_drop_calling_c_free_is_destructor_mediated() {
 
 // ─── Bridge inference ─────────────────────────────────────────────────
 
+/// Objective: 验证 as_ptr 函数是否正确推断为桥接助手模式
+///
+/// Invariants:
+/// - as_ptr 必须被推断为桥接助手
+/// - 必须产生 ReturnsBorrowed 效果
+/// - 不能产生 ReturnsOwned 效果
+/// - 必须附加 BridgeHelper 证据
+/// - 桥接助手应返回借用指针而非拥有指针
 #[test]
 fn test_matrix_as_ptr_bridge_returns_borrowed() {
     let registry = FamilyRegistry::new();
@@ -287,6 +361,13 @@ fn test_matrix_as_ptr_bridge_returns_borrowed() {
 
 // ─── Escape-based non-leak scenarios ─────────────────────────────────
 
+/// Objective: 验证返回拥有指针的函数不会被误报为本地泄漏
+///
+/// Invariants:
+/// - malloc 必须获取资源
+/// - malloc 必须产生 ReturnsOwned 效果
+/// - ReturnsOwned 是有效的逃逸机制，不应被视为泄漏
+/// - 注册表匹配的函数应有正确的资源获取效果
 #[test]
 fn test_matrix_return_owned_not_local_leak() {
     // A function that returns owned pointer is not a local leak.
@@ -309,6 +390,13 @@ fn test_matrix_return_owned_not_local_leak() {
 
 // ─── Static lifetime sink ─────────────────────────────────────────────
 
+/// Objective: 验证全局静态初始化是否正确识别为静态生命周期
+///
+/// Invariants:
+/// - __cxx_global_var_init 必须有 StaticLifetimeSink 证据
+/// - 必须产生 StoresArgToGlobal 效果
+/// - 静态生命周期不应被误报为内存泄漏
+/// - 全局变量初始化应被视为静态生命周期接收器
 #[test]
 fn test_matrix_global_static_init_is_static_lifetime() {
     let registry = FamilyRegistry::new();
@@ -337,6 +425,13 @@ fn test_matrix_global_static_init_is_static_lifetime() {
 
 // ─── NeedsModel diagnostic ───────────────────────────────────────────
 
+/// Objective: 验证未知家族是否产生 NeedsModel 诊断而不是误报
+///
+/// Invariants:
+/// - 未知符号不应产生高置信度推断
+/// - 未知家族应产生 NeedsModel 类型候选
+/// - Diagnostic 判定不应可报告
+/// - 未知分配器应被标记为需要模型，而不是误报为问题
 #[test]
 fn test_matrix_unknown_family_needs_model_diagnostic() {
     let registry = FamilyRegistry::new();
@@ -370,6 +465,13 @@ fn test_matrix_unknown_family_needs_model_diagnostic() {
 
 // ─── Verifier verdict gating ──────────────────────────────────────────
 
+/// Objective: 验证 ConfirmedIssue 判定是否正确标记为可报告
+///
+/// Invariants:
+/// - ConfirmedIssue 判定必须可报告
+/// - 跨家族释放问题应被正确识别和标记
+/// - 判定门控应正确处理确认的问题
+/// - 可报告状态应基于判定类型
 #[test]
 fn test_matrix_verdict_gating_confirmed_issue_reportable() {
     let candidate = IssueCandidate::new(
@@ -388,6 +490,13 @@ fn test_matrix_verdict_gating_confirmed_issue_reportable() {
     );
 }
 
+/// Objective: 验证 Diagnostic 判定是否正确标记为不可报告
+///
+/// Invariants:
+/// - Diagnostic 判定必须不可报告
+/// - 需要模型的诊断不应产生误报
+/// - 判定门控应正确过滤诊断信息
+/// - 诊断信息应仅用于内部分析，不对外报告
 #[test]
 fn test_matrix_verdict_gating_diagnostic_not_reportable() {
     let candidate = IssueCandidate::new(
@@ -404,6 +513,13 @@ fn test_matrix_verdict_gating_diagnostic_not_reportable() {
     );
 }
 
+/// Objective: 验证 ExplainedSafe 判定是否正确标记为不可报告
+///
+/// Invariants:
+/// - ExplainedSafe 判定必须不可报告
+/// - 同一家族的分配/释放操作应被标记为安全
+/// - 已解释的安全模式不应产生误报
+/// - 判定门控应正确处理安全解释
 #[test]
 fn test_matrix_verdict_gating_explained_safe_not_reportable() {
     let candidate = IssueCandidate::new(
@@ -424,6 +540,14 @@ fn test_matrix_verdict_gating_explained_safe_not_reportable() {
 
 // ─── End-to-end inference chain ───────────────────────────────────────
 
+/// Objective: 验证推断链优先级：注册表匹配 > 结构推断 > 桥接推断
+///
+/// Invariants:
+/// - 注册表匹配的符号应有高置信度（> 0.9）
+/// - 不在注册表中的符号应回退到结构推断
+/// - drop 函数应通过结构推断识别为析构器
+/// - as_ptr 函数应通过结构推断识别为桥接助手
+/// - 推断链应按优先级顺序执行
 #[test]
 fn test_matrix_inference_chain_priority() {
     let registry = FamilyRegistry::new();
