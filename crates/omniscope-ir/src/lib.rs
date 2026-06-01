@@ -23,7 +23,6 @@ pub mod llvm_sys_adapter;
 pub mod loader_v2;
 pub mod location;
 pub mod parser;
-pub mod platform;
 
 // Re-exports
 pub use ir_model::{
@@ -35,7 +34,6 @@ pub use location::{LocationManager, SourceLocation};
 pub use parser::{
     CallInstruction, Function, FunctionBody, IRInstruction, IRInstructionKind, IRModule,
 };
-pub use platform::{Architecture, Platform, PlatformFilterRegistry, PlatformInfo};
 
 #[cfg(test)]
 mod tests {
