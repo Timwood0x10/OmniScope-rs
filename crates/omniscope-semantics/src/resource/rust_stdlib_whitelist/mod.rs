@@ -20,6 +20,7 @@ use std::collections::HashSet;
 mod patterns;
 mod stdlib;
 mod third_party;
+pub mod trie;
 
 /// Semantic category for whitelisted functions.
 ///
@@ -85,6 +86,10 @@ pub struct RustStdlibWhitelist {
     functions: HashSet<String>,
     /// Detailed function information for reporting
     pub details: Vec<WhitelistedFunction>,
+    /// Trie for efficient pattern matching
+    pattern_trie: trie::Trie,
+    /// Trie for mangled name patterns
+    mangled_trie: trie::Trie,
 }
 
 impl RustStdlibWhitelist {
@@ -102,9 +107,12 @@ impl RustStdlibWhitelist {
         let mut whitelist = Self {
             functions: HashSet::new(),
             details: Vec::new(),
+            pattern_trie: trie::Trie::new(),
+            mangled_trie: trie::Trie::new(),
         };
         whitelist.populate_stdlib();
         whitelist.populate_common_crates();
+        whitelist.build_tries();
         whitelist
     }
 
@@ -197,6 +205,208 @@ impl RustStdlibWhitelist {
             return true;
         }
         false
+    }
+
+    /// Builds Trie data structures for efficient pattern matching.
+    ///
+    /// # Objective
+    /// Initialize Trie structures with all patterns for O(m) matching.
+    /// This is called once during initialization to precompute patterns.
+    ///
+    /// # Invariants
+    /// - All demangled patterns are inserted into pattern_trie
+    /// - All mangled patterns are inserted into mangled_trie
+    /// - Patterns are extracted from the matches_pattern method
+    /// - Called after all functions are added to the whitelist
+    fn build_tries(&mut self) {
+        // Demangled patterns for pattern_trie
+        let demangled_patterns = [
+            // Vec operations
+            "Vec::new",
+            "Vec::with_capacity",
+            "Vec::push",
+            "Vec::pop",
+            "Vec::insert",
+            "Vec::remove",
+            "Vec::clear",
+            "Vec::reserve",
+            "Vec::shrink_to_fit",
+            "Vec::as_ptr",
+            "Vec::as_mut_ptr",
+            // String operations
+            "String::new",
+            "String::with_capacity",
+            "String::push",
+            "String::push_str",
+            "String::from",
+            // Box operations
+            "Box::new",
+            "Box::into_raw",
+            "Box::from_raw",
+            // Arc operations
+            "Arc::new",
+            "Arc::clone",
+            "Arc::drop",
+            // Rc operations
+            "Rc::new",
+            "Rc::clone",
+            "Rc::drop",
+            // HashMap operations
+            "HashMap::new",
+            "HashMap::with_capacity",
+            "HashMap::insert",
+            "HashMap::remove",
+            "HashMap::get",
+            // BTreeMap operations
+            "BTreeMap::new",
+            "BTreeMap::insert",
+            "BTreeMap::remove",
+            // HashSet operations
+            "HashSet::new",
+            "HashSet::insert",
+            // Mutex operations
+            "Mutex::new",
+            "Mutex::lock",
+            "Mutex::unlock",
+            // RwLock operations
+            "RwLock::new",
+            "RwLock::write",
+            "RwLock::read",
+            // Option operations
+            "Option::unwrap",
+            "Option::unwrap_or",
+            "Option::map",
+            "Option::and_then",
+            // Result operations
+            "Result::unwrap",
+            "Result::unwrap_or",
+            "Result::map",
+            "Result::and_then",
+            "Result::map_err",
+            // Iterator operations
+            "Iterator::map",
+            "Iterator::filter",
+            "Iterator::collect",
+            "Iterator::fold",
+            "Iterator::for_each",
+            // Memory utilities
+            "std::mem::swap",
+            "std::mem::replace",
+            "std::mem::take",
+            "std::mem::size_of",
+            "std::mem::align_of",
+            // Slice operations
+            "slice::get",
+            "slice::index",
+            // Serde operations
+            "serde::Serialize",
+            "serde::Deserialize",
+            // Tokio operations
+            "tokio::task::spawn",
+            "tokio::task::spawn_blocking",
+            // Anyhow operations
+            "anyhow::Error",
+            "anyhow::Result",
+        ];
+
+        // Insert demangled patterns into pattern_trie
+        for pattern in &demangled_patterns {
+            self.pattern_trie.insert(pattern);
+        }
+
+        // Mangled patterns for mangled_trie
+        let mangled_patterns = [
+            // Vec operations
+            "3Vec3new",
+            "3Vec7with_capacity",
+            "3Vec4push",
+            "3Vec3pop",
+            "3Vec6insert",
+            "3Vec6remove",
+            "3Vec5clear",
+            "3Vec7reserve",
+            "3Vec13shrink_to_fit",
+            "3Vec6as_ptr",
+            "3Vec9as_mut_ptr",
+            // String operations
+            "6String3new",
+            "6String7with_capacity",
+            "6String4push",
+            "6String9push_str",
+            "6String4from",
+            // Box operations
+            "3Box3new",
+            "3Box8into_raw",
+            "3Box9from_raw",
+            // Arc operations
+            "3Arc3new",
+            "3Arc5clone",
+            "3Arc4drop",
+            "3Arc9into_raw",
+            // Rc operations
+            "2Rc3new",
+            "2Rc5clone",
+            "2Rc4drop",
+            // HashMap operations
+            "7HashMap3new",
+            "7HashMap7with_capacity",
+            "7HashMap6insert",
+            "7HashMap6remove",
+            "7HashMap3get",
+            // BTreeMap operations
+            "8BTreeMap3new",
+            "8BTreeMap6insert",
+            "8BTreeMap6remove",
+            // HashSet operations
+            "7HashSet3new",
+            "7HashSet6insert",
+            // Mutex operations
+            "5Mutex3new",
+            "5Mutex4lock",
+            "5Mutex6unlock",
+            // RwLock operations
+            "6RwLock3new",
+            "6RwLock5write",
+            "6RwLock4read",
+            // Condvar operations
+            "7Condvar3new",
+            "7Condvar4wait",
+            // Option operations
+            "6Option4unwrap",
+            "6Option9unwrap_or",
+            "6Option3map",
+            "6Option7and_then",
+            // Result operations
+            "6Result4unwrap",
+            "6Result9unwrap_or",
+            "6Result3map",
+            "6Result7and_then",
+            "6Result9map_err",
+            // Iterator operations
+            "8Iterator4map",
+            "8Iterator6filter",
+            "8Iterator7collect",
+            "8Iterator4fold",
+            "8Iterator8for_each",
+            // Memory utilities
+            "4swap",
+            "7replace",
+            "4take",
+            "7size_of",
+            "8align_of",
+            "4drop",
+            // Slice operations
+            "3get",
+            "5index",
+            // Thread spawn
+            "5spawn",
+            "14spawn_blocking",
+        ];
+
+        // Insert mangled patterns into mangled_trie
+        for pattern in &mangled_patterns {
+            self.mangled_trie.insert(pattern);
+        }
     }
 }
 

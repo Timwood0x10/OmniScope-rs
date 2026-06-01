@@ -5,6 +5,7 @@
 
 mod stdlib_tests;
 mod third_party_tests;
+mod trie_tests;
 
 use super::*;
 

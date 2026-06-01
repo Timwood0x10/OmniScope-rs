@@ -23,7 +23,7 @@
 
 ## 支持的语言
 
-C、C++、Rust、Zig、Go、Python、Java — 通过 IR 元数据（mangled name、调用约定等）自动识别语言。
+C、C++、Rust、Zig、Go、Python、Java、C# — 通过 IR 元数据（mangled name、调用约定等）自动识别语言。
 
 ## 架构
 
@@ -52,6 +52,55 @@ C、C++、Rust、Zig、Go、Python、Java — 通过 IR 元数据（mangled name
 | `omniscope-dataflow` | 通用前向/后向数据流分析框架 |
 | `omniscope-core` | 诊断、Issue 模型（23 类问题）、Profiler、内存池 |
 | `omniscope-types` | 公共类型定义、ResourceFamily 系统、ABI 类型 |
+
+## 新功能（v0.2.0）
+
+### 多语言语义扩展
+
+OmniScope 现在支持 7 种编程语言的 19 个语义变体：
+
+#### Python（5 个变体）
+- `PythonRefcountInc` - Py_INCREF 引用计数增加
+- `PythonRefcountDec` - Py_DECREF 引用计数减少
+- `PythonBorrowedRef` - PyList_GetItem 借用引用
+- `PythonOwnedRef` - PyBytes_FromString 拥有引用
+- `PythonGilProtected` - PyGILState_Ensure/Release GIL 保护
+
+#### Go（4 个变体）
+- `GoDeferCleanup` - defer C.free(ptr) 延迟清理
+- `GoFinalizer` - runtime.SetFinalizer 终结器
+- `GoCgoWrapper` - _Cgo_* 包装函数
+- `GoRuntimeAlloc` - runtime.mallocgc 运行时分配
+
+#### C++（4 个变体）
+- `CppUniquePtr` - std::unique_ptr 独占所有权
+- `CppSharedPtr` - std::shared_ptr 共享所有权
+- `CppDestructor` - ~ClassName() 析构函数
+- `CppExceptionPath` - try/catch 异常路径
+
+#### C#（3 个变体）
+- `CsharpSafeHandle` - SafeHandle.ReleaseHandle 安全句柄
+- `CsharpFinalizer` - ~Destructor() 终结器
+- `CsharpPinvokeMarshal` - P/Invoke marshalling 互操作
+
+#### Java（3 个变体）
+- `JavaLocalRef` - JNI LocalRef 本地引用
+- `JavaGlobalRef` - JNI GlobalRef 全局引用
+- `JavaWeakRef` - JNI WeakGlobalRef 弱全局引用
+
+### 语言适配器
+
+#### Go/CGO 适配器
+- 全面的 Go 内存模型分析（GC vs C 堆）
+- CGO 调用约定检测和指针传递规则
+- Go 特定函数模式识别（runtime、cgo）
+- Go 函数的 FFI 安全评估
+
+#### Python C API 适配器
+- Python 引用计数分析（Py_INCREF/Py_DECREF）
+- 对象生命周期检测（创建、借用、窃取）
+- GIL（全局解释器锁）管理分析
+- Python 特定 FFI 模式识别
 
 ## 核心特性
 
@@ -215,10 +264,15 @@ GitHub Actions 在每次 push/PR 时，于 `ubuntu-latest`、`macos-latest`、`w
 - [x] C++ LLVM Pass 集成（Plan A）
 - [x] 跨语言语料（C/C++/Rust/Zig/Go/Python）
 - [x] 基准测试 & CI/CD
+- [x] 多语言语义扩展（Python、Go、C++、C#、Java）
+- [x] Go/CGO 适配器（内存模型分析）
+- [x] Python C API 适配器（引用计数分析）
 - [ ] v1.0 稳定版发布
 - [ ] 增量分析缓存
 - [ ] IDE / LSP 集成
 - [ ] WASM/JS FFI 支持
+- [ ] 跨函数生命周期追踪
+- [ ] C++/C#/Java 语言适配器（完整实现）
 
 ## 贡献
 

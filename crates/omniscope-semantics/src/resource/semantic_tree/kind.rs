@@ -263,9 +263,6 @@ impl SemanticKind {
         if func_name.contains("runtime.SetFinalizer") || func_name.contains("SetFinalizer") {
             return SemanticKind::GoFinalizer;
         }
-        if func_name.starts_with("_Cgo_") || func_name.contains("_cgo_") {
-            return SemanticKind::GoCgoWrapper;
-        }
         if func_name.contains("runtime.mallocgc")
             || func_name.contains("runtime.newobject")
             || func_name.contains("runtime.newarray")
@@ -297,6 +294,11 @@ impl SemanticKind {
             || func_name.contains("__cxa_allocate_exception")
         {
             return SemanticKind::CppExceptionPath;
+        }
+
+        // ── Go CGO wrapper patterns (after C++ patterns to avoid conflicts) ──
+        if func_name.starts_with("_Cgo_") || func_name.contains("_cgo_") {
+            return SemanticKind::GoCgoWrapper;
         }
 
         // ── C# SafeHandle and P/Invoke patterns ──

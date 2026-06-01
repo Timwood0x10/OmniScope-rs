@@ -90,6 +90,8 @@ pub enum Language {
     Python,
     /// Java (via JNI)
     Java,
+    /// C# (via P/Invoke)
+    CSharp,
     /// Unknown language
     #[default]
     Unknown,
@@ -105,7 +107,12 @@ impl Language {
     pub fn has_ffi(&self) -> bool {
         matches!(
             self,
-            Language::Rust | Language::Zig | Language::Go | Language::Python | Language::Java
+            Language::Rust
+                | Language::Zig
+                | Language::Go
+                | Language::Python
+                | Language::Java
+                | Language::CSharp
         )
     }
 }
@@ -164,6 +171,12 @@ mod tests {
         // Test FFI capability detection
         assert!(Language::Rust.has_ffi(), "Rust should have FFI capability");
         assert!(Language::Go.has_ffi(), "Go should have FFI capability");
+        assert!(
+            Language::Python.has_ffi(),
+            "Python should have FFI capability"
+        );
+        assert!(Language::Java.has_ffi(), "Java should have FFI capability");
+        assert!(Language::CSharp.has_ffi(), "C# should have FFI capability");
         assert!(
             !Language::C.has_ffi(),
             "C should not have FFI (it IS the FFI target)"

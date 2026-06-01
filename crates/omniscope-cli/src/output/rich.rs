@@ -344,6 +344,7 @@ fn lang_label(lang: omniscope_types::Language) -> &'static str {
         Language::Rust => "Rust",
         Language::Python => "Python",
         Language::Java => "Java",
+        Language::CSharp => "C#",
         Language::Go => "Go",
         Language::Zig => "Zig",
         Language::Unknown => "?",

@@ -19,6 +19,11 @@ pub use surface_classifier::{Confidence, FunctionSurface, SurfaceClassifier, Sur
 pub use resource::confidence_scorer::{
     classify_issue, score_issue, ConfidenceTier, ScoreBreakdown, ScoringContext,
 };
+pub use resource::cross_function_lifetime::{
+    AnalysisResult, CrossFunctionTracker, FlowType, FunctionInfo, LifetimeConstraint,
+    LifetimeDomain, LifetimeViolation, ParamInfo, ResourceFate, ResourceFlow, ReturnInfo,
+    ViolationType,
+};
 pub use resource::escape::{classify_escape, EscapeContext, EscapeResult};
 pub use resource::family_inference::infer_family;
 pub use resource::family_registry::{

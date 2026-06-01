@@ -340,6 +340,55 @@ Fixes #456
 3. No unresolved conversations
 4. Squash and merge preferred
 
+## New Features
+
+### Multi-Language Semantic Extensions
+
+OmniScope now supports comprehensive semantic analysis for 7 programming languages with 19 new semantic variants:
+
+#### Python (5 variants)
+- `PythonRefcountInc` - Py_INCREF reference count increment
+- `PythonRefcountDec` - Py_DECREF reference count decrement
+- `PythonBorrowedRef` - PyList_GetItem borrowed reference
+- `PythonOwnedRef` - PyBytes_FromString owned reference
+- `PythonGilProtected` - PyGILState_Ensure/Release GIL protection
+
+#### Go (4 variants)
+- `GoDeferCleanup` - defer C.free(ptr) deferred cleanup
+- `GoFinalizer` - runtime.SetFinalizer finalizer pattern
+- `GoCgoWrapper` - _Cgo_* wrapper function
+- `GoRuntimeAlloc` - runtime.mallocgc runtime allocation
+
+#### C++ (4 variants)
+- `CppUniquePtr` - std::unique_ptr exclusive ownership
+- `CppSharedPtr` - std::shared_ptr shared ownership
+- `CppDestructor` - ~ClassName() destructor pattern
+- `CppExceptionPath` - try/catch exception path
+
+#### C# (3 variants)
+- `CsharpSafeHandle` - SafeHandle.ReleaseHandle safe handle
+- `CsharpFinalizer` - ~Destructor() finalizer
+- `CsharpPinvokeMarshal` - P/Invoke marshalling interop
+
+#### Java (3 variants)
+- `JavaLocalRef` - JNI LocalRef local reference
+- `JavaGlobalRef` - JNI GlobalRef global reference
+- `JavaWeakRef` - JNI WeakGlobalRef weak global reference
+
+### Language Adapters
+
+#### Go/CGO Adapter
+- Comprehensive Go memory model analysis (GC vs C heap)
+- CGO call convention detection and pointer passing rules
+- Go-specific function pattern recognition (runtime, cgo)
+- FFI safety assessment for Go functions
+
+#### Python C API Adapter
+- Python reference counting analysis (Py_INCREF/Py_DECREF)
+- Object lifecycle detection (creation, borrowing, stealing)
+- GIL (Global Interpreter Lock) management analysis
+- Python-specific FFI pattern recognition
+
 ## Project Architecture
 
 OmniScope-rs follows a 7-layer architecture:

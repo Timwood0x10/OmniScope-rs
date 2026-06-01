@@ -47,6 +47,9 @@ impl LanguageDetector {
         if module_name.ends_with(".java") || module_name.contains("java") {
             return Language::Java;
         }
+        if module_name.ends_with(".cs") || module_name.contains("csharp") {
+            return Language::CSharp;
+        }
         if module_name.ends_with(".cpp") || module_name.ends_with(".cc") {
             return Language::Cpp;
         }
@@ -101,6 +104,10 @@ impl LanguageDetector {
             // Java patterns
             LanguagePattern::new(Language::Java, "Java_").prefix(),
             LanguagePattern::new(Language::Java, "JNI").contains(),
+            // C# patterns (P/Invoke)
+            LanguagePattern::new(Language::CSharp, "System.Runtime.InteropServices").contains(),
+            LanguagePattern::new(Language::CSharp, "DllImport").contains(),
+            LanguagePattern::new(Language::CSharp, "P/Invoke").contains(),
         ]
     }
 }
@@ -200,6 +207,32 @@ mod tests {
 
         let lang = detector.detect_from_module("main.c");
         assert_eq!(lang, Language::C, "C file should be detected as C");
+    }
+
+    #[test]
+    fn test_detect_csharp() {
+        let detector = LanguageDetector::new();
+
+        let lang = detector.detect_from_module("Program.cs");
+        assert_eq!(lang, Language::CSharp, "C# file should be detected as C#");
+
+        let lang = detector.detect_from_module("csharp_module");
+        assert_eq!(lang, Language::CSharp, "C# module should be detected as C#");
+    }
+
+    #[test]
+    fn test_detect_java() {
+        let detector = LanguageDetector::new();
+
+        let lang = detector.detect_from_module("Main.java");
+        assert_eq!(lang, Language::Java, "Java file should be detected as Java");
+
+        let lang = detector.detect_from_module("java_module");
+        assert_eq!(
+            lang,
+            Language::Java,
+            "Java module should be detected as Java"
+        );
     }
 
     #[test]
