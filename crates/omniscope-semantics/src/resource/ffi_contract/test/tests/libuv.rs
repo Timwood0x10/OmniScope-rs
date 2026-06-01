@@ -19,16 +19,16 @@ fn test_uv_loop_init() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "uv_loop_init should be registered as Allocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::Libuv,
-        "Expected values to be equal"
+        "uv_loop_init should have Libuv source"
     );
     assert!(
         c.paired_release.contains(&"uv_loop_close".to_string()),
-        "Expected condition to be true"
+        "uv_loop_init should have uv_loop_close as paired release"
     );
 }
 
@@ -46,7 +46,7 @@ fn test_uv_loop_close() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "uv_loop_close should be registered as Deallocator contract type"
     );
 }
 
@@ -65,11 +65,11 @@ fn test_uv_tcp_init() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "uv_tcp_init should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"uv_close".to_string()),
-        "Expected condition to be true"
+        "uv_tcp_init should have uv_close as paired release"
     );
 }
 
@@ -88,11 +88,11 @@ fn test_uv_timer_init() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "uv_timer_init should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"uv_close".to_string()),
-        "Expected condition to be true"
+        "uv_timer_init should have uv_close as paired release"
     );
 }
 
@@ -110,6 +110,6 @@ fn test_uv_close() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "uv_close should be registered as Deallocator contract type"
     );
 }

@@ -420,17 +420,17 @@ mod tests {
         assert_eq!(
             pass.name(),
             "StructuralInference",
-            "Expected values to be equal"
+            "Pass name must be 'StructuralInference'"
         );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "StructuralInference must be an Analysis pass"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["SummaryBuilder"],
-            "Expected values to be equal"
+            "StructuralInference must depend on SummaryBuilder"
         );
     }
 

@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DropGlueKind::DropInPlace,
-            "Expected values to be equal"
+            "drop_in_place must be classified as DropInPlace"
         );
         assert!(summary.is_drop(), "Summary must be classified as drop");
     }
@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DropGlueKind::TailDealloc,
-            "Expected values to be equal"
+            "__rust_dealloc must be classified as TailDealloc"
         );
     }
 
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DropGlueKind::CppDestructor,
-            "Expected values to be equal"
+            "C++ destructor must be classified as CppDestructor"
         );
     }
 

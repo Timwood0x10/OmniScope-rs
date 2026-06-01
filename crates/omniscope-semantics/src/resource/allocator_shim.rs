@@ -712,11 +712,11 @@ mod tests {
     // === Property-based tests using proptest ===
 
     proptest! {
-        /// Objective: 验证 is_allocator_shim 对任意字符串输入不会 panic
+        /// Objective: Verify is_allocator_shim never panics for arbitrary string inputs
         ///
         /// Invariants:
-        /// - 对任意字符串输入，is_allocator_shim 应返回布尔值
-        /// - 不应抛出异常或 panic
+        /// - For arbitrary string inputs, is_allocator_shim should return a boolean value
+        /// - Should not throw exceptions or panic
         #[test]
         fn prop_is_allocator_shim_never_panics(
             func_name in "[a-zA-Z0-9_:/~]{0,100}"
@@ -727,11 +727,11 @@ mod tests {
             // The property is that this doesn't panic
         }
 
-        /// Objective: 验证 is_system_allocator 对任意字符串输入不会 panic
+        /// Objective: Verify is_system_allocator never panics for arbitrary string inputs
         ///
         /// Invariants:
-        /// - 对任意字符串输入，is_system_allocator 应返回布尔值
-        /// - 不应抛出异常或 panic
+        /// - For arbitrary string inputs, is_system_allocator should return a boolean value
+        /// - Should not throw exceptions or panic
         #[test]
         fn prop_is_system_allocator_never_panics(
             func_name in "[a-zA-Z0-9_:/~]{0,100}"
@@ -742,11 +742,11 @@ mod tests {
             // The property is that this doesn't panic
         }
 
-        /// Objective: 验证 is_rust_allocator 对任意字符串输入不会 panic
+        /// Objective: Verify is_rust_allocator never panics for arbitrary string inputs
         ///
         /// Invariants:
-        /// - 对任意字符串输入，is_rust_allocator 应返回布尔值
-        /// - 不应抛出异常或 panic
+        /// - For arbitrary string inputs, is_rust_allocator should return a boolean value
+        /// - Should not throw exceptions or panic
         #[test]
         fn prop_is_rust_allocator_never_panics(
             func_name in "[a-zA-Z0-9_:/~]{0,100}"
@@ -757,11 +757,11 @@ mod tests {
             // The property is that this doesn't panic
         }
 
-        /// Objective: 验证 get_allocator_type 对任意字符串输入不会 panic
+        /// Objective: Verify get_allocator_type never panics for arbitrary string inputs
         ///
         /// Invariants:
-        /// - 对任意字符串输入，get_allocator_type 应返回 Option<AllocatorType>
-        /// - 不应抛出异常或 panic
+        /// - For arbitrary string inputs, get_allocator_type should return Option<AllocatorType>
+        /// - Should not throw exceptions or panic
         #[test]
         fn prop_get_allocator_type_never_panics(
             func_name in "[a-zA-Z0-9_:/~]{0,100}"
@@ -772,11 +772,11 @@ mod tests {
             // The property is that this doesn't panic
         }
 
-        /// Objective: 验证 get_allocator_type 返回 Some 时，is_allocator_shim 必须为 true
+        /// Objective: Verify when get_allocator_type returns Some, is_allocator_shim must be true
         ///
         /// Invariants:
-        /// - 如果 get_allocator_type 返回 Some(type)，则 is_allocator_shim 必须返回 true
-        /// - 确保类型检测与 shim 检测的一致性
+        /// - If get_allocator_type returns Some(type), then is_allocator_shim must return true
+        /// - Ensure consistency between type detection and shim detection
         #[test]
         fn prop_allocator_type_consistency(
             func_name in "[a-zA-Z0-9_:/~]{0,100}"
@@ -793,11 +793,11 @@ mod tests {
             }
         }
 
-        /// Objective: 验证一个函数只能属于一个分配器类别
+        /// Objective: Verify that a function can only belong to one allocator category
         ///
         /// Invariants:
-        /// - 一个函数不能同时是系统分配器、Rust 分配器和自定义分配器
-        /// - 分配器类别必须互斥
+        /// - A function cannot be simultaneously a system allocator, Rust allocator, and custom allocator
+        /// - Allocator categories must be mutually exclusive
         #[test]
         fn prop_allocator_categories_are_exclusive(
             func_name in "[a-zA-Z0-9_:/~]{0,100}"
@@ -823,11 +823,11 @@ mod tests {
             );
         }
 
-        /// Objective: 验证已知分配器前缀的函数被正确识别为自定义分配器
+        /// Objective: Verify functions with known allocator prefixes are correctly identified as custom allocators
         ///
         /// Invariants:
-        /// - 以 mi_, je_, tc_, jemalloc_, tcmalloc_, mimalloc_ 开头的函数应被识别为分配器
-        /// - 这些函数应被归类为自定义分配器，而非系统或 Rust 分配器
+        /// - Functions starting with mi_, je_, tc_, jemalloc_, tcmalloc_, mimalloc_ should be recognized as allocators
+        /// - These functions should be classified as custom allocators, not system or Rust allocators
         #[test]
         fn prop_prefix_based_functions_are_custom(
             prefix in "(mi|je|tc|jemalloc_|tcmalloc_|mimalloc_)",
@@ -852,11 +852,11 @@ mod tests {
             );
         }
 
-        /// Objective: 验证系统分配器不被误识别为自定义分配器
+        /// Objective: Verify system allocators are not misidentified as custom allocators
         ///
         /// Invariants:
-        /// - 系统分配器（malloc, calloc, free 等）必须被识别为系统分配器
-        /// - 系统分配器不能被识别为自定义分配器
+        /// - System allocators (malloc, calloc, free, etc.) must be recognized as system allocators
+        /// - System allocators cannot be recognized as custom allocators
         #[test]
         fn prop_system_allocators_are_not_custom(
             func_name in "(malloc|calloc|realloc|free|aligned_alloc|posix_memalign|valloc|pvalloc|memalign|aligned_free|HeapAlloc|HeapFree|HeapReAlloc|LocalAlloc|LocalFree|LocalReAlloc|GlobalAlloc|GlobalFree|GlobalReAlloc|VirtualAlloc|VirtualFree)"
@@ -877,11 +877,11 @@ mod tests {
             );
         }
 
-        /// Objective: 验证 Rust 分配器不被误识别为自定义分配器
+        /// Objective: Verify Rust allocators are not misidentified as custom allocators
         ///
         /// Invariants:
-        /// - Rust 分配器（__rust_alloc 等）必须被识别为 Rust 分配器
-        /// - Rust 分配器不能被识别为自定义分配器
+        /// - Rust allocators (__rust_alloc, etc.) must be recognized as Rust allocators
+        /// - Rust allocators cannot be recognized as custom allocators
         #[test]
         fn prop_rust_allocators_are_not_custom(
             func_name in "(__rust_alloc|__rust_dealloc|__rust_realloc|__rust_alloc_zeroed|alloc::alloc::alloc|alloc::alloc::dealloc|alloc::alloc::realloc|alloc::alloc::alloc_zeroed|std::alloc::alloc|std::alloc::dealloc|std::alloc::realloc|std::alloc::alloc_zeroed)"
@@ -902,11 +902,11 @@ mod tests {
             );
         }
 
-        /// Objective: 验证随机函数名不被误识别为分配器
+        /// Objective: Verify random function names are not misidentified as allocators
         ///
         /// Invariants:
-        /// - 不匹配已知模式的随机函数名不应被识别为分配器
-        /// - 已知函数和前缀应被排除在检查之外
+        /// - Random function names not matching known patterns should not be recognized as allocators
+        /// - Known functions and prefixes should be excluded from the check
         #[test]
         fn prop_random_non_allocator_functions(
             func_name in "[a-zA-Z_][a-zA-Z0-9_]{0,20}"

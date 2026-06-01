@@ -811,7 +811,7 @@ mod tests {
         assert_eq!(
             behavior.return_source,
             ReturnSource::CallResult("strlen".to_string()),
-            "Expected values to be equal"
+            "Return from strlen call must be classified as CallResult"
         );
     }
 
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(
             behavior.return_source,
             ReturnSource::Void,
-            "Expected values to be equal"
+            "Void function must have Void return source"
         );
     }
 

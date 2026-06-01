@@ -544,7 +544,7 @@ mod tests {
         );
         assert!(
             registry.is_compatible_release(malloc.family_id, free.family_id),
-            "Expected condition to be true"
+            "malloc and free should be compatible release"
         );
     }
 
@@ -563,7 +563,7 @@ mod tests {
         );
         assert!(
             !registry.is_compatible_release(malloc.family_id, del.family_id),
-            "Expected condition to be true"
+            "malloc and delete should NOT be compatible release"
         );
     }
 
@@ -578,7 +578,7 @@ mod tests {
             .expect("family_registry::test_rust_alloc_c_free_mismatch: free must be registered");
         assert!(
             !registry.is_compatible_release(rust_alloc.family_id, free.family_id),
-            "Expected condition to be true"
+            "Rust alloc and C free should NOT be compatible release"
         );
     }
 
@@ -591,7 +591,10 @@ mod tests {
         let free = registry.lookup("PyObject_Free").expect(
             "family_registry::test_pyobject_new_free_same_family: PyObject_Free must be registered",
         );
-        assert_eq!(new.family_id, free.family_id, "Expected values to be equal");
+        assert_eq!(
+            new.family_id, free.family_id,
+            "PyObject_New and PyObject_Free should be same family"
+        );
     }
 
     #[test]
@@ -618,7 +621,7 @@ mod tests {
         assert_eq!(
             decref.effect,
             SymbolEffect::ConditionalRelease,
-            "Expected values to be equal"
+            "Py_DECREF should be ConditionalRelease effect"
         );
     }
 
@@ -631,7 +634,7 @@ mod tests {
         assert_eq!(
             incref.effect,
             SymbolEffect::Retain,
-            "Expected values to be equal"
+            "Py_INCREF should be Retain effect"
         );
     }
 

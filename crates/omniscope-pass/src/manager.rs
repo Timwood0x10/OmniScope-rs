@@ -274,7 +274,11 @@ mod tests {
     #[test]
     fn test_pass_manager_creation() {
         let manager = PassManager::new();
-        assert_eq!(manager.pass_count(), 0, "Expected values to be equal");
+        assert_eq!(
+            manager.pass_count(),
+            0,
+            "New PassManager must have 0 passes"
+        );
     }
 
     #[test]
@@ -284,7 +288,11 @@ mod tests {
         manager.register(RawFactCollectorPass::new());
         manager.register(SummaryBuilderPass::new());
 
-        assert_eq!(manager.pass_count(), 2, "Expected values to be equal");
+        assert_eq!(
+            manager.pass_count(),
+            2,
+            "PassManager must have 2 passes after registering 2"
+        );
     }
 
     #[test]
@@ -300,7 +308,7 @@ mod tests {
         assert_eq!(
             manager.execution_order.len(),
             3,
-            "Expected values to be equal"
+            "Execution order must contain all 3 registered passes"
         );
     }
 

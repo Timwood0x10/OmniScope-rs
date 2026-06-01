@@ -286,10 +286,10 @@ mod tests {
         profiler.end_span(id);
 
         let spans = profiler.spans_by_name("test");
-        assert_eq!(spans.len(), 1, "Expected values to be equal");
+        assert_eq!(spans.len(), 1, "Should have 1 test span");
         assert!(
             spans[0].duration >= Duration::from_millis(10),
-            "Expected condition to be true"
+            "Span duration should be at least 10ms"
         );
     }
 
@@ -303,7 +303,7 @@ mod tests {
         }
 
         let spans = profiler.spans_by_name("scoped");
-        assert_eq!(spans.len(), 1, "Expected values to be equal");
+        assert_eq!(spans.len(), 1, "Should have 1 scoped span");
     }
 
     #[test]
@@ -317,10 +317,10 @@ mod tests {
         }
 
         let stats = profiler.stats("test").unwrap();
-        assert_eq!(stats.count, 3, "Expected values to be equal");
+        assert_eq!(stats.count, 3, "Should have 3 spans");
         assert!(
             stats.avg >= Duration::from_millis(5),
-            "Expected condition to be true"
+            "Average duration should be at least 5ms"
         );
     }
 
@@ -356,6 +356,6 @@ mod tests {
         profiler.record_memory(2048, 1024);
 
         let history = profiler.memory_history();
-        assert_eq!(history.len(), 2, "Expected values to be equal");
+        assert_eq!(history.len(), 2, "Should have 2 memory samples");
     }
 }

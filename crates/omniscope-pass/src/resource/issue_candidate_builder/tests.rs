@@ -51,17 +51,17 @@ fn test_candidate_builder_creation() {
     assert_eq!(
         pass.name(),
         "IssueCandidateBuilder",
-        "Expected values to be equal"
+        "Pass name should be IssueCandidateBuilder"
     );
     assert_eq!(
         pass.kind(),
         PassKind::Analysis,
-        "Expected values to be equal"
+        "Pass kind should be Analysis"
     );
     assert_eq!(
         pass.dependencies(),
         vec!["OwnershipSolver"],
-        "Expected values to be equal"
+        "Dependencies should be OwnershipSolver"
     );
 }
 
@@ -77,17 +77,17 @@ fn test_cross_family_candidate_helper() {
     assert_eq!(
         candidate.kind,
         IssueCandidateKind::CrossFamilyFree,
-        "Expected values to be equal"
+        "Cross-family candidate should be CrossFamilyFree kind"
     );
     assert_eq!(
         candidate.alloc_family,
         FamilyId::C_HEAP,
-        "Expected values to be equal"
+        "Alloc family should be C_HEAP"
     );
     assert_eq!(
         candidate.release_family,
         Some(FamilyId::CPP_NEW_SCALAR),
-        "Expected values to be equal"
+        "Release family should be CPP_NEW_SCALAR"
     );
     assert!(
         !candidate.is_verified(),

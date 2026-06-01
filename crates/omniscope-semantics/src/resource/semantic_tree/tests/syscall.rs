@@ -11,7 +11,7 @@ fn test_syscall_classify_getenv() {
     assert_eq!(
         SyscallSemantic::classify("getenv"),
         SyscallSemantic::EnvironmentConfig,
-        "Expected values to be equal"
+        "getenv should be classified as EnvironmentConfig syscall"
     );
 }
 
@@ -24,7 +24,7 @@ fn test_syscall_classify_strlen() {
     assert_eq!(
         SyscallSemantic::classify("strlen"),
         SyscallSemantic::DataQuery,
-        "Expected values to be equal"
+        "strlen should be classified as DataQuery syscall"
     );
 }
 
@@ -37,7 +37,7 @@ fn test_syscall_classify_malloc() {
     assert_eq!(
         SyscallSemantic::classify("malloc"),
         SyscallSemantic::MemoryManagement,
-        "Expected values to be equal"
+        "malloc should be classified as MemoryManagement syscall"
     );
 }
 
@@ -50,7 +50,7 @@ fn test_syscall_classify_free() {
     assert_eq!(
         SyscallSemantic::classify("free"),
         SyscallSemantic::MemoryManagement,
-        "Expected values to be equal"
+        "free should be classified as MemoryManagement syscall"
     );
 }
 
@@ -63,7 +63,7 @@ fn test_syscall_classify_highway() {
     assert_eq!(
         SyscallSemantic::classify("highway_index_of_char"),
         SyscallSemantic::ComputeAccelerated,
-        "Expected values to be equal"
+        "highway_index_of_char should be classified as ComputeAccelerated syscall"
     );
 }
 
@@ -76,7 +76,7 @@ fn test_syscall_classify_bun_dispatch() {
     assert_eq!(
         SyscallSemantic::classify("__bun_dispatch__OutputSink__Sys__quiet_writer_write_all"),
         SyscallSemantic::InternalDispatch,
-        "Expected values to be equal"
+        "__bun_dispatch__OutputSink__Sys__quiet_writer_write_all should be classified as InternalDispatch syscall"
     );
 }
 
@@ -89,7 +89,7 @@ fn test_syscall_classify_bun_string() {
     assert_eq!(
         SyscallSemantic::classify("BunString__fromBytes"),
         SyscallSemantic::InternalDispatch,
-        "Expected values to be equal"
+        "BunString__fromBytes should be classified as InternalDispatch syscall"
     );
 }
 
@@ -102,6 +102,6 @@ fn test_syscall_classify_wtf_destroy() {
     assert_eq!(
         SyscallSemantic::classify("Bun__WTFStringImpl__destroy"),
         SyscallSemantic::InternalDispatch,
-        "Expected values to be equal"
+        "Bun__WTFStringImpl__destroy should be classified as InternalDispatch syscall"
     );
 }

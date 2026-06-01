@@ -373,47 +373,47 @@ mod tests {
         assert_eq!(
             language_label(LanguageHint::C),
             "C",
-            "Expected values to be equal"
+            "C language should display as 'C'"
         );
         assert_eq!(
             language_label(LanguageHint::Cpp),
             "C++",
-            "Expected values to be equal"
+            "C++ language should display as 'C++'"
         );
         assert_eq!(
             language_label(LanguageHint::Rust),
             "Rust",
-            "Expected values to be equal"
+            "Rust language should display as 'Rust'"
         );
         assert_eq!(
             language_label(LanguageHint::Python),
             "Python",
-            "Expected values to be equal"
+            "Python language should display as 'Python'"
         );
         assert_eq!(
             language_label(LanguageHint::Java),
             "Java",
-            "Expected values to be equal"
+            "Java language should display as 'Java'"
         );
         assert_eq!(
             language_label(LanguageHint::CSharp),
             "C#",
-            "Expected values to be equal"
+            "C# language should display as 'C#'"
         );
         assert_eq!(
             language_label(LanguageHint::Go),
             "Go",
-            "Expected values to be equal"
+            "Go language should display as 'Go'"
         );
         assert_eq!(
             language_label(LanguageHint::Zig),
             "Zig",
-            "Expected values to be equal"
+            "Zig language should display as 'Zig'"
         );
         assert_eq!(
             language_label(LanguageHint::Unknown),
             "?",
-            "Expected values to be equal"
+            "Unknown language should display as '?'"
         );
     }
 
@@ -469,22 +469,22 @@ mod tests {
         assert_eq!(
             infer_lang_from_family(FamilyId::C_HEAP),
             LanguageHint::C,
-            "Expected values to be equal"
+            "C_HEAP family should infer C language"
         );
         assert_eq!(
             infer_lang_from_family(FamilyId::CPP_NEW_SCALAR),
             LanguageHint::Cpp,
-            "Expected values to be equal"
+            "CPP_NEW_SCALAR family should infer C++ language"
         );
         assert_eq!(
             infer_lang_from_family(FamilyId::RUST_GLOBAL),
             LanguageHint::Rust,
-            "Expected values to be equal"
+            "RUST_GLOBAL family should infer Rust language"
         );
         assert_eq!(
             infer_lang_from_family(FamilyId::PYTHON_OBJECT),
             LanguageHint::Python,
-            "Expected values to be equal"
+            "PYTHON_OBJECT family should infer Python language"
         );
     }
 

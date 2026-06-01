@@ -877,11 +877,11 @@ mod tests {
         assert_eq!(
             assessment.verdict,
             FFIVerdict::SafeNoOwnership,
-            "Expected values to be equal"
+            "strlen should be assessed as SafeNoOwnership"
         );
         assert!(
             assessment.should_suppress_issue(),
-            "Expected condition to be true"
+            "SafeNoOwnership should suppress issue emission"
         );
     }
 
@@ -910,11 +910,11 @@ mod tests {
         assert_eq!(
             assessment.verdict,
             FFIVerdict::SafeConditionalRelease,
-            "Expected values to be equal"
+            "Bun__WTFStringImpl__destroy should be assessed as SafeConditionalRelease"
         );
         assert!(
             assessment.should_suppress_issue(),
-            "Expected condition to be true"
+            "SafeConditionalRelease should suppress issue emission"
         );
     }
 
@@ -936,11 +936,11 @@ mod tests {
         assert_eq!(
             assessment.verdict,
             FFIVerdict::ConcernOwnershipTransfer,
-            "Expected values to be equal"
+            "malloc should be assessed as ConcernOwnershipTransfer"
         );
         assert!(
             !assessment.should_suppress_issue(),
-            "Expected condition to be true"
+            "ConcernOwnershipTransfer should NOT suppress issue emission"
         );
     }
 
@@ -960,7 +960,7 @@ mod tests {
         assert_eq!(
             assessment.verdict,
             FFIVerdict::SafePointerProjection,
-            "Expected values to be equal"
+            "get_data_ptr should be assessed as SafePointerProjection"
         );
     }
 

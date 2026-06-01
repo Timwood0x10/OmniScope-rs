@@ -234,10 +234,13 @@ mod tests {
         assert_eq!(
             result.kind,
             StaticLifetimeKind::GlobalVariable,
-            "Expected values to be equal"
+            "__cxx_global_var_init should be classified as GlobalVariable"
         );
         assert!(result.is_single_init, "Global var init is single execution");
-        assert!(result.confidence > 0.9, "Expected condition to be true");
+        assert!(
+            result.confidence > 0.9,
+            "Global var init should have high confidence"
+        );
     }
 
     #[test]
@@ -256,7 +259,7 @@ mod tests {
         assert_eq!(
             result.kind,
             StaticLifetimeKind::RustLazyStatic,
-            "Expected values to be equal"
+            "lazy_static_init should be classified as RustLazyStatic"
         );
         assert!(
             !summary.evidence.is_empty(),
@@ -280,7 +283,7 @@ mod tests {
         assert_eq!(
             result.kind,
             StaticLifetimeKind::StaticLocal,
-            "Expected values to be equal"
+            "__cxa_guard_acquire should be classified as StaticLocal"
         );
     }
 
@@ -295,7 +298,7 @@ mod tests {
         assert_eq!(
             result.kind,
             StaticLifetimeKind::JavaClassInit,
-            "Expected values to be equal"
+            "<clinit> should be classified as JavaClassInit"
         );
     }
 
@@ -315,7 +318,7 @@ mod tests {
         assert_eq!(
             result.kind,
             StaticLifetimeKind::PythonModuleInit,
-            "Expected values to be equal"
+            "PyInit_* should be classified as PythonModuleInit"
         );
     }
 
@@ -335,9 +338,12 @@ mod tests {
         assert_eq!(
             result.kind,
             StaticLifetimeKind::GenericOnceInit,
-            "Expected values to be equal"
+            "config_init_once should be classified as GenericOnceInit"
         );
-        assert!(result.is_single_init, "Expected condition to be true");
+        assert!(
+            result.is_single_init,
+            "config_init_once should be single init"
+        );
     }
 
     #[test]
@@ -404,12 +410,12 @@ mod tests {
         assert_eq!(
             lifetime_domain_for(StaticLifetimeKind::GlobalVariable),
             LifetimeDomain::ProcessStatic,
-            "Expected values to be equal"
+            "GlobalVariable should map to ProcessStatic lifetime domain"
         );
         assert_eq!(
             lifetime_domain_for(StaticLifetimeKind::RustLazyStatic),
             LifetimeDomain::ProcessStatic,
-            "Expected values to be equal"
+            "RustLazyStatic should map to ProcessStatic lifetime domain"
         );
     }
 
@@ -418,7 +424,7 @@ mod tests {
         assert_eq!(
             pointer_contract_for(StaticLifetimeKind::GlobalVariable),
             PointerContract::StaticLifetime,
-            "Expected values to be equal"
+            "GlobalVariable should map to StaticLifetime pointer contract"
         );
     }
 }

@@ -132,17 +132,17 @@ mod tests {
         assert_eq!(
             RiskScore::new(-0.5).value(),
             0.0,
-            "Expected values to be equal"
+            "Negative score should be clamped to 0.0"
         );
         assert_eq!(
             RiskScore::new(1.5).value(),
             1.0,
-            "Expected values to be equal"
+            "Score > 1.0 should be clamped to 1.0"
         );
         assert_eq!(
             RiskScore::new(0.5).value(),
             0.5,
-            "Expected values to be equal"
+            "Score 0.5 should remain 0.5"
         );
     }
 
@@ -150,19 +150,19 @@ mod tests {
     fn test_risk_score_levels() {
         assert!(
             RiskScore::new(0.8).is_high(),
-            "Expected condition to be true"
+            "Score 0.8 should be classified as high"
         );
         assert!(
             RiskScore::new(0.5).is_medium(),
-            "Expected condition to be true"
+            "Score 0.5 should be classified as medium"
         );
         assert!(
             RiskScore::new(0.2).is_low(),
-            "Expected condition to be true"
+            "Score 0.2 should be classified as low"
         );
         assert!(
             !RiskScore::new(0.2).is_high(),
-            "Expected condition to be true"
+            "Score 0.2 should NOT be classified as high"
         );
     }
 

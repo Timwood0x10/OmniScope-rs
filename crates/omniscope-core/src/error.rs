@@ -204,7 +204,7 @@ mod tests {
         };
         assert!(
             err.to_string().contains("Unsupported LLVM version"),
-            "Expected condition to be true"
+            "UnsupportedVersion error must contain 'Unsupported LLVM version'"
         );
     }
 
@@ -214,7 +214,7 @@ mod tests {
         let err: OmniScopeError = io_err.into();
         assert!(
             err.to_string().contains("I/O error"),
-            "Expected condition to be true"
+            "IO error must contain 'I/O error'"
         );
     }
 
@@ -226,7 +226,7 @@ mod tests {
         };
         assert!(
             err.to_string().contains("FFIBoundary"),
-            "Expected condition to be true"
+            "PassFailed error must contain the pass name 'FFIBoundary'"
         );
     }
 }

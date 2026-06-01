@@ -20,21 +20,21 @@ fn test_pyobject_new() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "PyObject_New should be registered as Allocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::PythonCApi,
-        "Expected values to be equal"
+        "PyObject_New should be registered with PythonCApi source"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "PyObject_New should have Py_DECREF as paired release"
     );
     assert_eq!(
         c.ownership,
         OwnershipSemantics::ReferenceCounted,
-        "Expected values to be equal"
+        "PyObject_New should have ReferenceCounted ownership semantics"
     );
 }
 
@@ -53,11 +53,11 @@ fn test_py_buildvalue() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "Py_BuildValue should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "Py_BuildValue should have Py_DECREF as paired release"
     );
 }
 
@@ -76,11 +76,11 @@ fn test_py_unicode() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "PyUnicode_FromString should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "PyUnicode_FromString should have Py_DECREF as paired release"
     );
 }
 
@@ -99,11 +99,11 @@ fn test_py_bytes() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "PyBytes_FromString should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "PyBytes_FromString should have Py_DECREF as paired release"
     );
 }
 
@@ -122,11 +122,11 @@ fn test_py_list() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "PyList_New should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "PyList_New should have Py_DECREF as paired release"
     );
 }
 
@@ -145,11 +145,11 @@ fn test_py_dict() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "PyDict_New should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "PyDict_New should have Py_DECREF as paired release"
     );
 }
 
@@ -168,11 +168,11 @@ fn test_py_incref() {
     assert_eq!(
         c.contract_type,
         ContractType::Retainer,
-        "Expected values to be equal"
+        "Py_INCREF should be registered as Retainer contract type"
     );
     assert!(
         c.paired_release.contains(&"Py_DECREF".to_string()),
-        "Expected condition to be true"
+        "Py_INCREF should have Py_DECREF as paired release"
     );
 }
 
@@ -190,7 +190,7 @@ fn test_py_decref() {
     assert_eq!(
         c.contract_type,
         ContractType::Releaser,
-        "Expected values to be equal"
+        "Py_DECREF should be registered as Releaser contract type"
     );
 }
 
@@ -209,10 +209,10 @@ fn test_pygil_lock() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "PyGILState_Ensure should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"PyGILState_Release".to_string()),
-        "Expected condition to be true"
+        "PyGILState_Ensure should have PyGILState_Release as paired release"
     );
 }

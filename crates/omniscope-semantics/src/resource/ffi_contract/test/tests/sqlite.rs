@@ -19,16 +19,16 @@ fn test_sqlite3_open() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "sqlite3_open should be registered as Allocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::SQLite,
-        "Expected values to be equal"
+        "sqlite3_open should be registered with SQLite source"
     );
     assert!(
         c.paired_release.contains(&"sqlite3_close".to_string()),
-        "Expected condition to be true"
+        "sqlite3_open should have sqlite3_close as paired release"
     );
 }
 
@@ -47,12 +47,12 @@ fn test_sqlite3_close() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "sqlite3_close should be registered as Deallocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::SQLite,
-        "Expected values to be equal"
+        "sqlite3_close should be registered with SQLite source"
     );
 }
 
@@ -71,12 +71,12 @@ fn test_sqlite3_exec() {
     assert_eq!(
         c.contract_type,
         ContractType::Borrower,
-        "Expected values to be equal"
+        "sqlite3_exec should be registered as Borrower contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::SQLite,
-        "Expected values to be equal"
+        "sqlite3_exec should be registered with SQLite source"
     );
 }
 
@@ -95,11 +95,11 @@ fn test_sqlite3_prepare() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "sqlite3_prepare_v2 should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"sqlite3_finalize".to_string()),
-        "Expected condition to be true"
+        "sqlite3_prepare_v2 should have sqlite3_finalize as paired release"
     );
 }
 
@@ -117,7 +117,7 @@ fn test_sqlite3_finalize() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "sqlite3_finalize should be registered as Deallocator contract type"
     );
 }
 
@@ -135,6 +135,6 @@ fn test_sqlite3_column_text() {
     assert_eq!(
         c.contract_type,
         ContractType::Borrower,
-        "Expected values to be equal"
+        "sqlite3_column_text should be registered as Borrower contract type"
     );
 }

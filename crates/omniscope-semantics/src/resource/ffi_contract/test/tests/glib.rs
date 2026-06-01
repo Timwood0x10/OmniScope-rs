@@ -19,16 +19,16 @@ fn test_g_malloc() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "g_malloc should be registered as Allocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::Glib,
-        "Expected values to be equal"
+        "g_malloc should have Glib source"
     );
     assert!(
         c.paired_release.contains(&"g_free".to_string()),
-        "Expected condition to be true"
+        "g_malloc should have g_free as paired release"
     );
 }
 
@@ -47,11 +47,11 @@ fn test_g_new() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "g_new should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"g_free".to_string()),
-        "Expected condition to be true"
+        "g_new should have g_free as paired release"
     );
 }
 
@@ -70,11 +70,11 @@ fn test_g_strdup() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "g_strdup should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"g_free".to_string()),
-        "Expected condition to be true"
+        "g_strdup should have g_free as paired release"
     );
 }
 
@@ -92,7 +92,7 @@ fn test_g_free() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "g_free should be registered as Deallocator contract type"
     );
 }
 
@@ -111,11 +111,11 @@ fn test_g_object_ref() {
     assert_eq!(
         c.contract_type,
         ContractType::Retainer,
-        "Expected values to be equal"
+        "g_object_ref should be registered as Retainer contract type"
     );
     assert!(
         c.paired_release.contains(&"g_object_unref".to_string()),
-        "Expected condition to be true"
+        "g_object_ref should have g_object_unref as paired release"
     );
 }
 
@@ -133,6 +133,6 @@ fn test_g_object_unref() {
     assert_eq!(
         c.contract_type,
         ContractType::Releaser,
-        "Expected values to be equal"
+        "g_object_unref should be registered as Releaser contract type"
     );
 }

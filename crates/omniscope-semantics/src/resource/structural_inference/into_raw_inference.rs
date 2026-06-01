@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(
             result.kind,
             IntoRawKind::BoxIntoRaw,
-            "Expected values to be equal"
+            "Box::into_raw must be classified as BoxIntoRaw"
         );
         assert!(
             summary.is_ownership_transfer(),
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(
             result.kind,
             IntoRawKind::CStringIntoRaw,
-            "Expected values to be equal"
+            "CString::into_raw must be classified as CStringIntoRaw"
         );
     }
 
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(
             result.kind,
             IntoRawKind::VecIntoRaw,
-            "Expected values to be equal"
+            "Vec::into_raw must be classified as VecIntoRaw"
         );
     }
 

@@ -20,21 +20,21 @@ fn test_malloc() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "malloc should be registered as Allocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::Posix,
-        "Expected values to be equal"
+        "malloc should be registered with Posix source"
     );
     assert!(
         c.paired_release.contains(&"free".to_string()),
-        "Expected condition to be true"
+        "malloc should have free as paired release"
     );
     assert_eq!(
         c.ownership,
         OwnershipSemantics::CallerOwns,
-        "Expected values to be equal"
+        "malloc should have CallerOwns ownership semantics"
     );
 }
 
@@ -53,12 +53,12 @@ fn test_free() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "free should be registered as Deallocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::Posix,
-        "Expected values to be equal"
+        "free should be registered with Posix source"
     );
 }
 
@@ -77,11 +77,11 @@ fn test_calloc() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "calloc should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"free".to_string()),
-        "Expected condition to be true"
+        "calloc should have free as paired release"
     );
 }
 
@@ -100,11 +100,11 @@ fn test_realloc() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "realloc should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"free".to_string()),
-        "Expected condition to be true"
+        "realloc should have free as paired release"
     );
 }
 
@@ -123,11 +123,11 @@ fn test_strdup() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "strdup should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"free".to_string()),
-        "Expected condition to be true"
+        "strdup should have free as paired release"
     );
 }
 
@@ -146,11 +146,11 @@ fn test_strndup() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "strndup should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"free".to_string()),
-        "Expected condition to be true"
+        "strndup should have free as paired release"
     );
 }
 
@@ -169,11 +169,11 @@ fn test_open() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "open should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"close".to_string()),
-        "Expected condition to be true"
+        "open should have close as paired release"
     );
 }
 
@@ -191,7 +191,7 @@ fn test_close() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "close should be registered as Deallocator contract type"
     );
 }
 
@@ -210,11 +210,11 @@ fn test_socket() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "socket should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"close".to_string()),
-        "Expected condition to be true"
+        "socket should have close as paired release"
     );
 }
 
@@ -233,11 +233,11 @@ fn test_fopen() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "fopen should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"fclose".to_string()),
-        "Expected condition to be true"
+        "fopen should have fclose as paired release"
     );
 }
 
@@ -255,6 +255,6 @@ fn test_fclose() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "fclose should be registered as Deallocator contract type"
     );
 }

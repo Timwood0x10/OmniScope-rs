@@ -60,14 +60,17 @@ mod tests {
         });
         assert!(
             err.to_string().contains("Missing required configuration"),
-            "Expected condition to be true"
+            "Config error must contain 'Missing required configuration'"
         );
 
         // Test diagnostics
         let aggregator = DiagnosticAggregator::new();
         let diag = Diagnostic::new(0, Severity::Error, "E0001", "test error");
         aggregator.emit(diag);
-        assert!(aggregator.has_errors(), "Expected condition to be true");
+        assert!(
+            aggregator.has_errors(),
+            "DiagnosticAggregator must report errors after emitting an Error diagnostic"
+        );
 
         // Test facts
         let fact_store = FactStore::new();
@@ -77,13 +80,21 @@ mod tests {
             fact::FactLocation::new(std::path::PathBuf::from("test.rs"), 10),
         );
         fact_store.add(fact);
-        assert_eq!(fact_store.count(), 1, "Expected values to be equal");
+        assert_eq!(
+            fact_store.count(),
+            1,
+            "FactStore must contain exactly 1 fact after adding one"
+        );
 
         // Test profiler
         let profiler = Profiler::new();
         {
             let _timer = ScopedTimer::new(&profiler, "test");
         }
-        assert_eq!(profiler.all_spans().len(), 1, "Expected values to be equal");
+        assert_eq!(
+            profiler.all_spans().len(),
+            1,
+            "Profiler must record exactly 1 span after one timer"
+        );
     }
 }

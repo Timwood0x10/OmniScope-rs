@@ -20,21 +20,21 @@ fn test_openssl_malloc() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "OPENSSL_malloc should be registered as Allocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::OpenSSL,
-        "Expected values to be equal"
+        "OPENSSL_malloc should be registered with OpenSSL source"
     );
     assert!(
         c.paired_release.contains(&"OPENSSL_free".to_string()),
-        "Expected condition to be true"
+        "OPENSSL_malloc should have OPENSSL_free as paired release"
     );
     assert_eq!(
         c.ownership,
         OwnershipSemantics::CallerOwns,
-        "Expected values to be equal"
+        "OPENSSL_malloc should have CallerOwns ownership semantics"
     );
 }
 
@@ -53,12 +53,12 @@ fn test_openssl_free() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "OPENSSL_free should be registered as Deallocator contract type"
     );
     assert_eq!(
         c.source,
         ContractSource::OpenSSL,
-        "Expected values to be equal"
+        "OPENSSL_free should be registered with OpenSSL source"
     );
 }
 
@@ -77,11 +77,11 @@ fn test_openssl_strdup() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "OPENSSL_strdup should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"OPENSSL_free".to_string()),
-        "Expected condition to be true"
+        "OPENSSL_strdup should have OPENSSL_free as paired release"
     );
 }
 
@@ -99,7 +99,7 @@ fn test_openssl_clear_free() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "OPENSSL_clear_free should be registered as Deallocator contract type"
     );
 }
 
@@ -118,11 +118,11 @@ fn test_openssl_secure_malloc() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "CRYPTO_secure_malloc should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"CRYPTO_secure_free".to_string()),
-        "Expected condition to be true"
+        "CRYPTO_secure_malloc should have CRYPTO_secure_free as paired release"
     );
 }
 
@@ -141,11 +141,11 @@ fn test_evp_md_ctx() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "EVP_MD_CTX_new should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"EVP_MD_CTX_free".to_string()),
-        "Expected condition to be true"
+        "EVP_MD_CTX_new should have EVP_MD_CTX_free as paired release"
     );
 }
 
@@ -164,12 +164,12 @@ fn test_evp_cipher_ctx() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "EVP_CIPHER_CTX_new should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release
             .contains(&"EVP_CIPHER_CTX_free".to_string()),
-        "Expected condition to be true"
+        "EVP_CIPHER_CTX_new should have EVP_CIPHER_CTX_free as paired release"
     );
 }
 
@@ -188,15 +188,15 @@ fn test_bio_new() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "BIO_new should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"BIO_free".to_string()),
-        "Expected condition to be true"
+        "BIO_new should have BIO_free as paired release"
     );
     assert!(
         c.paired_release.contains(&"BIO_free_all".to_string()),
-        "Expected condition to be true"
+        "BIO_new should have BIO_free_all as paired release"
     );
 }
 
@@ -215,11 +215,11 @@ fn test_ssl_ctx() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "SSL_CTX_new should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"SSL_CTX_free".to_string()),
-        "Expected condition to be true"
+        "SSL_CTX_new should have SSL_CTX_free as paired release"
     );
 }
 
@@ -237,6 +237,6 @@ fn test_x509_free() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "X509_free should be registered as Deallocator contract type"
     );
 }

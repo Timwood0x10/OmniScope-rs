@@ -220,7 +220,11 @@ mod tests {
     fn test_gate_allows_unknown_issue() {
         let issue = make_issue(IssueKind::NullDereference, "foo");
         let verdict = check_issue(&issue, |_, _| false);
-        assert_eq!(verdict, GateVerdict::Allow, "Expected values to be equal");
+        assert_eq!(
+            verdict,
+            GateVerdict::Allow,
+            "Unknown issue should be allowed through the gate"
+        );
     }
 
     #[test]
@@ -232,7 +236,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressHeapOrigin,
-            "Expected values to be equal"
+            "Borrow escape with heap provenance should be suppressed"
         );
     }
 
@@ -245,7 +249,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressGlobalOrigin,
-            "Expected values to be equal"
+            "Borrow escape with global provenance should be suppressed"
         );
     }
 
@@ -258,7 +262,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressRaii,
-            "Expected values to be equal"
+            "Use-after-free with RAII drop should be suppressed"
         );
     }
 
@@ -271,7 +275,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressOwnershipTransfer,
-            "Expected values to be equal"
+            "Cross-language free with into_raw transfer should be suppressed"
         );
     }
 
@@ -284,7 +288,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressNonMemorySyscall,
-            "Expected values to be equal"
+            "Cross-language free with file operation should be suppressed"
         );
     }
 
@@ -297,7 +301,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressLibraryRelease,
-            "Expected values to be equal"
+            "Cross-language free with library release should be suppressed"
         );
     }
 
@@ -314,7 +318,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressHeapOrigin,
-            "Expected values to be equal"
+            "Borrow escape with heap provenance should be suppressed via kinds map"
         );
     }
 
@@ -325,7 +329,11 @@ mod tests {
 
         let issue = make_issue(IssueKind::BorrowEscape, "some_func");
         let verdict = check_issue_with_kinds(&issue, &resolutions);
-        assert_eq!(verdict, GateVerdict::Allow, "Expected values to be equal");
+        assert_eq!(
+            verdict,
+            GateVerdict::Allow,
+            "Issue should be allowed when no matching kind is found"
+        );
     }
 
     #[test]
@@ -337,7 +345,7 @@ mod tests {
         assert_eq!(
             verdict,
             GateVerdict::SuppressRaii,
-            "Expected values to be equal"
+            "Double-free with RAII drop should be suppressed"
         );
     }
 

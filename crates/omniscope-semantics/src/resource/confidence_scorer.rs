@@ -268,37 +268,37 @@ mod tests {
         assert_eq!(
             ConfidenceTier::from_score(0.90),
             ConfidenceTier::Critical,
-            "Expected values to be equal"
+            "Score 0.90 should be classified as Critical tier"
         );
         assert_eq!(
             ConfidenceTier::from_score(0.85),
             ConfidenceTier::Critical,
-            "Expected values to be equal"
+            "Score 0.85 should be classified as Critical tier"
         );
         assert_eq!(
             ConfidenceTier::from_score(0.75),
             ConfidenceTier::High,
-            "Expected values to be equal"
+            "Score 0.75 should be classified as High tier"
         );
         assert_eq!(
             ConfidenceTier::from_score(0.70),
             ConfidenceTier::High,
-            "Expected values to be equal"
+            "Score 0.70 should be classified as High tier"
         );
         assert_eq!(
             ConfidenceTier::from_score(0.60),
             ConfidenceTier::Medium,
-            "Expected values to be equal"
+            "Score 0.60 should be classified as Medium tier"
         );
         assert_eq!(
             ConfidenceTier::from_score(0.50),
             ConfidenceTier::Medium,
-            "Expected values to be equal"
+            "Score 0.50 should be classified as Medium tier"
         );
         assert_eq!(
             ConfidenceTier::from_score(0.30),
             ConfidenceTier::Informational,
-            "Expected values to be equal"
+            "Score 0.30 should be classified as Informational tier"
         );
     }
 
@@ -306,15 +306,15 @@ mod tests {
     fn test_base_severity() {
         assert!(
             base_severity_for_kind("use_after_free") > 0.6,
-            "Expected condition to be true"
+            "use_after_free should have base severity > 0.6"
         );
         assert!(
             base_severity_for_kind("borrow_escape") > 0.4,
-            "Expected condition to be true"
+            "borrow_escape should have base severity > 0.4"
         );
         assert!(
             base_severity_for_kind("unknown_kind") > 0.0,
-            "Expected condition to be true"
+            "unknown_kind should have base severity > 0.0"
         );
     }
 
@@ -323,17 +323,17 @@ mod tests {
         assert_eq!(
             provenance_clarity_bonus(true, false),
             0.20,
-            "Expected values to be equal"
+            "DI metadata should give +0.20 provenance bonus"
         );
         assert_eq!(
             provenance_clarity_bonus(false, true),
             0.10,
-            "Expected values to be equal"
+            "Use-def analysis should give +0.10 provenance bonus"
         );
         assert_eq!(
             provenance_clarity_bonus(false, false),
             -0.10,
-            "Expected values to be equal"
+            "No provenance should give -0.10 penalty"
         );
     }
 
@@ -342,19 +342,19 @@ mod tests {
         assert_eq!(
             corpus_frequency_penalty(0),
             0.0,
-            "Expected values to be equal"
+            "Zero corpus frequency should have no penalty"
         );
         assert!(
             corpus_frequency_penalty(1) < 0.0,
-            "Expected condition to be true"
+            "Corpus frequency 1 should have negative penalty"
         );
         assert!(
             corpus_frequency_penalty(100) < corpus_frequency_penalty(1),
-            "Expected condition to be true"
+            "Higher corpus frequency should have stronger penalty"
         );
         assert!(
             corpus_frequency_penalty(10000) >= -0.30,
-            "Expected condition to be true"
+            "Corpus frequency penalty should be capped at -0.30"
         ); // capped
     }
 
@@ -363,20 +363,20 @@ mod tests {
         assert_eq!(
             dataflow_proximity_bonus(0),
             0.0,
-            "Expected values to be equal"
+            "Zero dataflow distance should have no bonus"
         ); // no taint path
         assert!(
             dataflow_proximity_bonus(1) > 0.1,
-            "Expected condition to be true"
+            "Distance 1 should have > 0.1 proximity bonus"
         );
         assert!(
             dataflow_proximity_bonus(5) < dataflow_proximity_bonus(1),
-            "Expected condition to be true"
+            "Distance 5 should have lower bonus than distance 1"
         );
         assert_eq!(
             dataflow_proximity_bonus(100),
             0.0015,
-            "Expected values to be equal"
+            "Distance 100 should have near-zero proximity bonus"
         ); // near zero
     }
 
@@ -385,17 +385,17 @@ mod tests {
         assert_eq!(
             multi_detector_consensus_bonus(1),
             0.0,
-            "Expected values to be equal"
+            "Single detector should have no consensus bonus"
         );
         assert_eq!(
             multi_detector_consensus_bonus(2),
             0.15,
-            "Expected values to be equal"
+            "Two detectors should give +0.15 consensus bonus"
         );
         assert_eq!(
             multi_detector_consensus_bonus(5),
             0.15,
-            "Expected values to be equal"
+            "Five detectors should also give +0.15 consensus bonus"
         );
     }
 
@@ -406,7 +406,7 @@ mod tests {
         let bd = score_issue("use_after_free", &ctx);
         assert!(
             bd.total() >= 0.0 && bd.total() <= 1.0,
-            "Expected condition to be true"
+            "Score breakdown total should be clamped between 0.0 and 1.0"
         );
     }
 
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(
             ConfidenceTier::from_score(bd.total()),
             ConfidenceTier::Informational,
-            "Expected values to be equal"
+            "High corpus frequency with weak signals should be Informational tier"
         );
     }
 
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(
             ConfidenceTier::from_score(bd.total()),
             ConfidenceTier::Critical,
-            "Expected values to be equal"
+            "Strong signals with use_after_free should be Critical tier"
         );
     }
 
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(
             tier,
             ConfidenceTier::from_score(bd.total()),
-            "Expected values to be equal"
+            "classify_issue should return tier matching score classification"
         );
     }
 
@@ -474,14 +474,17 @@ mod tests {
         let ctx = ScoringContext::new(&srt);
         let bd = score_issue("use_after_free", &ctx);
         let formatted = bd.format();
-        assert!(formatted.contains("base="), "Expected condition to be true");
+        assert!(
+            formatted.contains("base="),
+            "Formatted breakdown should contain base component"
+        );
         assert!(
             formatted.contains("provenance="),
-            "Expected condition to be true"
+            "Formatted breakdown should contain provenance component"
         );
         assert!(
             formatted.contains("corpus_freq="),
-            "Expected condition to be true"
+            "Formatted breakdown should contain corpus_freq component"
         );
     }
 }

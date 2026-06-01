@@ -220,12 +220,12 @@ mod tests {
         assert_eq!(
             result.kind,
             RefcountKind::PythonRefcount,
-            "Expected values to be equal"
+            "Py_DECREF should be classified as PythonRefcount"
         );
         assert_eq!(
             result.family,
             FamilyId::PYTHON_OBJECT,
-            "Expected values to be equal"
+            "Py_DECREF should be associated with PYTHON_OBJECT family"
         );
         assert!(
             summary.releases_resource(),
@@ -241,13 +241,19 @@ mod tests {
     fn test_py_xdecref_conditional_release() {
         let (summary, result) =
             infer_refcount_release_summary("Py_XDECREF", 2, 200, LanguageHint::Python);
-        assert!(result.is_refcount_release, "Expected condition to be true");
+        assert!(
+            result.is_refcount_release,
+            "Py_XDECREF should be recognized as refcount release"
+        );
         assert_eq!(
             result.kind,
             RefcountKind::PythonRefcount,
-            "Expected values to be equal"
+            "Py_XDECREF should be classified as PythonRefcount"
         );
-        assert!(summary.releases_resource(), "Expected condition to be true");
+        assert!(
+            summary.releases_resource(),
+            "Py_XDECREF summary should release resource"
+        );
     }
 
     #[test]
@@ -270,9 +276,12 @@ mod tests {
         assert_eq!(
             result.kind,
             RefcountKind::RustArc,
-            "Expected values to be equal"
+            "Arc::drop should be classified as RustArc"
         );
-        assert!(summary.releases_resource(), "Expected condition to be true");
+        assert!(
+            summary.releases_resource(),
+            "Arc::drop summary should release resource"
+        );
     }
 
     #[test]
@@ -285,7 +294,7 @@ mod tests {
         assert_eq!(
             result.kind,
             RefcountKind::CoreFoundation,
-            "Expected values to be equal"
+            "CFRelease should be classified as CoreFoundation"
         );
     }
 
@@ -299,7 +308,7 @@ mod tests {
         assert_eq!(
             result.kind,
             RefcountKind::ComRefCount,
-            "Expected values to be equal"
+            "Release should be classified as ComRefCount"
         );
     }
 
@@ -314,7 +323,7 @@ mod tests {
         assert_eq!(
             result.kind,
             RefcountKind::ObjcArc,
-            "Expected values to be equal"
+            "objc_release should be classified as ObjcArc"
         );
     }
 
@@ -329,7 +338,7 @@ mod tests {
         assert_eq!(
             result.kind,
             RefcountKind::Generic,
-            "Expected values to be equal"
+            "ref_decref should be classified as Generic"
         );
         assert!(
             result.confidence < 0.7,

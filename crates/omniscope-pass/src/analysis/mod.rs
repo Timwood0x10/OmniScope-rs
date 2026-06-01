@@ -451,16 +451,20 @@ mod tests {
     #[test]
     fn test_ffi_boundary_pass_creation() {
         let pass = FFIBoundaryPass::new();
-        assert_eq!(pass.name(), "FFIBoundary", "Expected values to be equal");
+        assert_eq!(
+            pass.name(),
+            "FFIBoundary",
+            "Pass name must be 'FFIBoundary'"
+        );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "FFIBoundary must be an Analysis pass"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["RawFactCollector"],
-            "Expected values to be equal"
+            "FFIBoundary must depend on RawFactCollector"
         );
     }
 

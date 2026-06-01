@@ -22,13 +22,17 @@ fn test_semantic_tree_build() {
     ];
 
     let tree = build_semantic_tree(&ffi_calls);
-    assert_eq!(tree.nodes().len(), 4, "Expected values to be equal");
-    assert_eq!(tree.safe_pattern_count(), 2, "Expected values to be equal"); // getenv + strlen
+    assert_eq!(tree.nodes().len(), 4, "Tree should contain 4 nodes");
+    assert_eq!(
+        tree.safe_pattern_count(),
+        2,
+        "Should have 2 safe patterns (getenv + strlen)"
+    );
     assert_eq!(
         tree.genuine_concern_count(),
         0,
-        "Expected values to be equal"
-    ); // free score=0.54 >= 0.5
+        "Should have 0 genuine concerns (free score=0.54 >= 0.5)"
+    );
 }
 
 /// Objective: Verify that memory ownership filtering correctly identifies memory management nodes.
@@ -47,11 +51,15 @@ fn test_memory_ownership_filtering() {
 
     let tree = build_semantic_tree(&ffi_calls);
     let mem_nodes = tree.memory_ownership_nodes();
-    assert_eq!(mem_nodes.len(), 2, "Expected values to be equal"); // malloc + free
+    assert_eq!(
+        mem_nodes.len(),
+        2,
+        "Should have 2 memory ownership nodes (malloc + free)"
+    );
     assert!(
         mem_nodes
             .iter()
             .all(|n| n.syscall_semantic == SyscallSemantic::MemoryManagement),
-        "Expected condition to be true"
+        "All memory ownership nodes should have MemoryManagement syscall semantic"
     );
 }

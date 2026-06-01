@@ -279,16 +279,23 @@ mod tests {
             .note("this is a note")
             .help("try this instead");
 
-        assert_eq!(diag.id, 1, "Expected values to be equal");
+        assert_eq!(diag.id, 1, "Diagnostic should have correct ID");
         assert_eq!(
             diag.severity,
             Severity::Error,
-            "Expected values to be equal"
+            "Diagnostic should have Error severity"
         );
-        assert_eq!(diag.code, "E0001", "Expected values to be equal");
-        assert_eq!(diag.message, "test error", "Expected values to be equal");
-        assert_eq!(diag.notes.len(), 1, "Expected values to be equal");
-        assert_eq!(diag.helps.len(), 1, "Expected values to be equal");
+        assert_eq!(diag.code, "E0001", "Diagnostic should have correct code");
+        assert_eq!(
+            diag.message, "test error",
+            "Diagnostic should have correct message"
+        );
+        assert_eq!(diag.notes.len(), 1, "Diagnostic should have one note");
+        assert_eq!(
+            diag.helps.len(),
+            1,
+            "Diagnostic should have one help message"
+        );
     }
 
     #[test]
@@ -297,12 +304,19 @@ mod tests {
             .with_column(5)
             .with_function("main".to_string());
 
-        assert_eq!(loc.line, 10, "Expected values to be equal");
-        assert_eq!(loc.column, Some(5), "Expected values to be equal");
+        assert_eq!(
+            loc.line, 10,
+            "Source location should have correct line number"
+        );
+        assert_eq!(
+            loc.column,
+            Some(5),
+            "Source location should have correct column"
+        );
         assert_eq!(
             loc.function,
             Some("main".to_string()),
-            "Expected values to be equal"
+            "Source location should have correct function name"
         );
     }
 
@@ -316,11 +330,29 @@ mod tests {
         let id1 = aggregator.emit(diag1);
         let id2 = aggregator.emit(diag2);
 
-        assert_ne!(id1, id2, "Expected values to be not equal");
-        assert_eq!(aggregator.count(), 2, "Expected values to be equal");
-        assert_eq!(aggregator.error_count(), 1, "Expected values to be equal");
-        assert_eq!(aggregator.warning_count(), 1, "Expected values to be equal");
-        assert!(aggregator.has_errors(), "Expected condition to be true");
+        assert_ne!(
+            id1, id2,
+            "Aggregator should assign different IDs to different diagnostics"
+        );
+        assert_eq!(
+            aggregator.count(),
+            2,
+            "Aggregator should contain two diagnostics"
+        );
+        assert_eq!(
+            aggregator.error_count(),
+            1,
+            "Aggregator should have one error"
+        );
+        assert_eq!(
+            aggregator.warning_count(),
+            1,
+            "Aggregator should have one warning"
+        );
+        assert!(
+            aggregator.has_errors(),
+            "Aggregator should report that it has errors"
+        );
     }
 
     #[test]
@@ -334,23 +366,30 @@ mod tests {
         aggregator.emit(diag);
 
         let diags = aggregator.by_file(&file);
-        assert_eq!(diags.len(), 1, "Expected values to be equal");
+        assert_eq!(
+            diags.len(),
+            1,
+            "Aggregator should return one diagnostic for the file"
+        );
     }
 
     #[test]
     fn test_severity_checks() {
-        assert!(Severity::Error.is_error(), "Expected condition to be true");
+        assert!(
+            Severity::Error.is_error(),
+            "Error severity should be recognized as error"
+        );
         assert!(
             !Severity::Error.is_warning(),
-            "Expected condition to be true"
+            "Error severity should not be recognized as warning"
         );
         assert!(
             !Severity::Warning.is_error(),
-            "Expected condition to be true"
+            "Warning severity should not be recognized as error"
         );
         assert!(
             Severity::Warning.is_warning(),
-            "Expected condition to be true"
+            "Warning severity should be recognized as warning"
         );
     }
 }

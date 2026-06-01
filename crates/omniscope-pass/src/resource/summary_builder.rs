@@ -116,16 +116,20 @@ mod tests {
     #[test]
     fn test_summary_builder_creation() {
         let pass = SummaryBuilderPass::new();
-        assert_eq!(pass.name(), "SummaryBuilder", "Expected values to be equal");
+        assert_eq!(
+            pass.name(),
+            "SummaryBuilder",
+            "Pass name must be 'SummaryBuilder'"
+        );
         assert_eq!(
             pass.kind(),
             PassKind::Foundation,
-            "Expected values to be equal"
+            "SummaryBuilder must be a Foundation pass"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["RawFactCollector"],
-            "Expected values to be equal"
+            "SummaryBuilder must depend on RawFactCollector"
         );
     }
 
@@ -138,7 +142,7 @@ mod tests {
         assert!(malloc_summary.acquires_resource(), "malloc must acquire");
         assert!(
             malloc_summary.confidence > 0.9,
-            "Expected condition to be true"
+            "malloc must have high confidence (>0.9)"
         );
 
         // Unknown symbol — pattern inference

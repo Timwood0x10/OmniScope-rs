@@ -183,17 +183,17 @@ mod tests {
         assert_eq!(
             pass.name(),
             "SurfaceClassifier",
-            "Expected values to be equal"
+            "Pass name should be SurfaceClassifier"
         );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass kind should be Analysis"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["CallGraph"],
-            "Expected values to be equal"
+            "Dependencies should be CallGraph"
         );
     }
 

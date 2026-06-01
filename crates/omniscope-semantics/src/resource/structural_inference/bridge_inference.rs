@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(
             result.kind,
             BridgeKind::AsPtr,
-            "Expected values to be equal"
+            "as_ptr should be classified as AsPtr bridge"
         );
         assert!(summary.is_bridge(), "Summary must be classified as bridge");
         assert!(
@@ -271,7 +271,7 @@ mod tests {
     fn test_rust_as_mut_ptr_bridge() {
         let (summary, result) = infer_bridge_summary("as_mut_ptr", 2, 200, LanguageHint::Rust);
         assert!(result.is_bridge, "as_mut_ptr must be inferred as bridge");
-        assert!(summary.is_bridge(), "Expected condition to be true");
+        assert!(summary.is_bridge(), "as_mut_ptr summary should be bridge");
     }
 
     #[test]
@@ -294,9 +294,9 @@ mod tests {
         assert_eq!(
             result.kind,
             BridgeKind::DataAccessor,
-            "Expected values to be equal"
+            "data() should be classified as DataAccessor bridge"
         );
-        assert!(summary.is_bridge(), "Expected condition to be true");
+        assert!(summary.is_bridge(), "data() summary should be bridge");
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(
             result.kind,
             BridgeKind::DataAccessor,
-            "Expected values to be equal"
+            "c_str should be classified as DataAccessor bridge"
         );
     }
 

@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DestructorKind::RustDrop,
-            "Expected values to be equal"
+            "Rust drop should be classified as RustDrop"
         );
         assert!(
             summary.releases_resource(),
@@ -258,9 +258,12 @@ mod tests {
         assert_eq!(
             result.kind,
             DestructorKind::CppDestructor,
-            "Expected values to be equal"
+            "C++ destructor should be classified as CppDestructor"
         );
-        assert!(summary.releases_resource(), "Expected condition to be true");
+        assert!(
+            summary.releases_resource(),
+            "C++ destructor summary should release resource"
+        );
     }
 
     #[test]
@@ -279,9 +282,12 @@ mod tests {
         assert_eq!(
             result.kind,
             DestructorKind::CSharpDispose,
-            "Expected values to be equal"
+            "C# Dispose should be classified as CSharpDispose"
         );
-        assert!(summary.releases_resource(), "Expected condition to be true");
+        assert!(
+            summary.releases_resource(),
+            "C# Dispose summary should release resource"
+        );
     }
 
     #[test]
@@ -300,7 +306,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DestructorKind::PythonFinalizer,
-            "Expected values to be equal"
+            "Python __del__ should be classified as PythonFinalizer"
         );
     }
 
@@ -314,7 +320,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DestructorKind::CDestroy,
-            "Expected values to be equal"
+            "C-style destroy should be classified as CDestroy"
         );
     }
 
@@ -329,7 +335,7 @@ mod tests {
         assert_eq!(
             result.kind,
             DestructorKind::GenericCleanup,
-            "Expected values to be equal"
+            "close should be classified as GenericCleanup"
         );
         assert!(
             result.confidence < 0.7,

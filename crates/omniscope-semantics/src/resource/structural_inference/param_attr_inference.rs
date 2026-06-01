@@ -229,7 +229,10 @@ mod tests {
     fn test_c_const_readonly() {
         let (_, result) = infer_param_attr_summary("process_data_const", 4, 400, LanguageHint::C);
         assert!(result.has_param_attr, "const suffix must infer readonly");
-        assert_eq!(result.readonly_count, 1, "Expected values to be equal");
+        assert_eq!(
+            result.readonly_count, 1,
+            "const suffix must produce 1 readonly parameter"
+        );
     }
 
     #[test]

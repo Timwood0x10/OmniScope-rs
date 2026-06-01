@@ -447,22 +447,22 @@ mod tests {
         assert_eq!(
             LoadStrategy::Auto.to_string(),
             "auto",
-            "Expected values to be equal"
+            "Auto strategy should display as 'auto'"
         );
         assert_eq!(
             LoadStrategy::CppPass.to_string(),
             "cpp-pass",
-            "Expected values to be equal"
+            "CppPass strategy should display as 'cpp-pass'"
         );
         assert_eq!(
             LoadStrategy::LlvmSys.to_string(),
             "llvm-sys",
-            "Expected values to be equal"
+            "LlvmSys strategy should display as 'llvm-sys'"
         );
         assert_eq!(
             LoadStrategy::TextParser.to_string(),
             "text-parser",
-            "Expected values to be equal"
+            "TextParser strategy should display as 'text-parser'"
         );
     }
 
@@ -471,12 +471,12 @@ mod tests {
         assert_eq!(
             LoadStrategy::Auto,
             LoadStrategy::Auto,
-            "Expected values to be equal"
+            "Auto should equal Auto"
         );
         assert_ne!(
             LoadStrategy::Auto,
             LoadStrategy::TextParser,
-            "Expected values to be not equal"
+            "Auto should not equal TextParser"
         );
     }
 

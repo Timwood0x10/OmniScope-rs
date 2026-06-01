@@ -271,27 +271,27 @@ mod tests {
         assert_eq!(
             RiskScore::new(0.9).label(),
             "critical",
-            "Expected values to be equal"
+            "Score 0.9 should be labeled 'critical'"
         );
         assert_eq!(
             RiskScore::new(0.7).label(),
             "high",
-            "Expected values to be equal"
+            "Score 0.7 should be labeled 'high'"
         );
         assert_eq!(
             RiskScore::new(0.5).label(),
             "medium",
-            "Expected values to be equal"
+            "Score 0.5 should be labeled 'medium'"
         );
         assert_eq!(
             RiskScore::new(0.3).label(),
             "low",
-            "Expected values to be equal"
+            "Score 0.3 should be labeled 'low'"
         );
         assert_eq!(
             RiskScore::new(0.1).label(),
             "informational",
-            "Expected values to be equal"
+            "Score 0.1 should be labeled 'informational'"
         );
     }
 

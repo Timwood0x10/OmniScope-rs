@@ -400,16 +400,20 @@ mod tests {
     #[test]
     fn test_verifier_creation() {
         let pass = IssueVerifierPass::new();
-        assert_eq!(pass.name(), "IssueVerifier", "Expected values to be equal");
+        assert_eq!(
+            pass.name(),
+            "IssueVerifier",
+            "Pass name should be IssueVerifier"
+        );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass kind should be Analysis"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["IssueCandidateBuilder"],
-            "Expected values to be equal"
+            "Dependencies should be IssueCandidateBuilder"
         );
     }
 
@@ -429,7 +433,7 @@ mod tests {
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
-            "Expected values to be equal"
+            "Cross-family free should be confirmed issue"
         );
     }
 
@@ -485,7 +489,7 @@ mod tests {
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
-            "Expected values to be equal"
+            "Double release should be confirmed issue"
         );
     }
 

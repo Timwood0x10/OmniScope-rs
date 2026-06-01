@@ -196,12 +196,12 @@ mod tests {
         assert_eq!(
             evidence.kind,
             EvidenceKind::SameFamilyRelease,
-            "Expected values to be equal"
+            "Evidence kind must be SameFamilyRelease"
         );
         assert_eq!(
             evidence.family,
             Some(FamilyId::C_HEAP),
-            "Expected values to be equal"
+            "Evidence family must be C_HEAP"
         );
         assert!(
             evidence.is_high_confidence(),

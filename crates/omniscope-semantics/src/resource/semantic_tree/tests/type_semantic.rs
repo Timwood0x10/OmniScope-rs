@@ -13,7 +13,7 @@ fn test_type_semantic_interior_mutability() {
     assert_eq!(
         TypeSemantic::from_mangled_name(name),
         TypeSemantic::InteriorMutability,
-        "Expected values to be equal"
+        "Mutex mangled name must be classified as InteriorMutability"
     );
 }
 
@@ -27,7 +27,7 @@ fn test_type_semantic_once() {
     assert_eq!(
         TypeSemantic::from_mangled_name(name),
         TypeSemantic::Once,
-        "Expected values to be equal"
+        "OnceBox mangled name must be classified as Once"
     );
 }
 
@@ -41,7 +41,7 @@ fn test_type_semantic_drop() {
     assert_eq!(
         TypeSemantic::from_mangled_name(name),
         TypeSemantic::Drop,
-        "Expected values to be equal"
+        "drop_in_place mangled name must be classified as Drop"
     );
 }
 
@@ -54,6 +54,6 @@ fn test_type_semantic_non_rust() {
     assert_eq!(
         TypeSemantic::from_mangled_name("Bun__atexit"),
         TypeSemantic::Unknown,
-        "Expected values to be equal"
+        "Non-Rust mangled name must be classified as Unknown"
     );
 }

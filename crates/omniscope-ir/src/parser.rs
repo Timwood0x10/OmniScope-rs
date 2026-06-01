@@ -715,16 +715,28 @@ mod tests {
     fn test_parse_declaration() {
         let line = "declare i32 @external_func(i32, i32)";
         let func = parse_declaration(line).unwrap();
-        assert_eq!(func.name, "external_func", "Expected values to be equal");
-        assert!(func.is_declaration, "Expected condition to be true");
+        assert_eq!(
+            func.name, "external_func",
+            "Parsed declaration should have correct function name"
+        );
+        assert!(
+            func.is_declaration,
+            "Parsed declaration should be marked as declaration"
+        );
     }
 
     #[test]
     fn test_parse_definition() {
         let line = "define i32 @my_func(i32 %x) {";
         let func = parse_definition(line).unwrap();
-        assert_eq!(func.name, "my_func", "Expected values to be equal");
-        assert!(!func.is_declaration, "Expected condition to be true");
+        assert_eq!(
+            func.name, "my_func",
+            "Parsed definition should have correct function name"
+        );
+        assert!(
+            !func.is_declaration,
+            "Parsed definition should not be marked as declaration"
+        );
     }
 
     #[test]
@@ -739,9 +751,21 @@ mod tests {
         "#;
 
         let module = IRModule::parse_from_text(ir);
-        assert_eq!(module.declarations.len(), 1, "Expected values to be equal");
-        assert_eq!(module.functions.len(), 1, "Expected values to be equal");
-        assert_eq!(module.calls.len(), 1, "Expected values to be equal");
+        assert_eq!(
+            module.declarations.len(),
+            1,
+            "Module should contain one declaration"
+        );
+        assert_eq!(
+            module.functions.len(),
+            1,
+            "Module should contain one function definition"
+        );
+        assert_eq!(
+            module.calls.len(),
+            1,
+            "Module should contain one call instruction"
+        );
     }
 
     #[test]
@@ -760,20 +784,24 @@ mod tests {
         let module = IRModule::parse_from_text(ir);
         assert!(
             module.function_bodies.contains_key("my_strlen"),
-            "Expected condition to be true"
+            "Function body should be extracted for my_strlen"
         );
 
         let body = &module.function_bodies["my_strlen"];
-        assert_eq!(body.instructions.len(), 3, "Expected values to be equal"); // call + zext + ret
+        assert_eq!(
+            body.instructions.len(),
+            3,
+            "Function body should contain 3 instructions (call + zext + ret)"
+        ); // call + zext + ret
         assert_eq!(
             body.count_kind(IRInstructionKind::Call),
             1,
-            "Expected values to be equal"
+            "Function body should contain one call instruction"
         );
         assert_eq!(
             body.count_kind(IRInstructionKind::Ret),
             1,
-            "Expected values to be equal"
+            "Function body should contain one return instruction"
         );
     }
 
@@ -938,35 +966,39 @@ mod tests {
         assert_eq!(
             body.count_kind(IRInstructionKind::AtomicRmw),
             1,
-            "Expected values to be equal"
+            "Conditional release pattern should contain one atomicrmw instruction"
         );
         assert_eq!(
             body.count_kind(IRInstructionKind::Icmp),
             1,
-            "Expected values to be equal"
+            "Conditional release pattern should contain one icmp instruction"
         );
         assert_eq!(
             body.count_kind(IRInstructionKind::Branch),
             1,
-            "Expected values to be equal"
+            "Conditional release pattern should contain one branch instruction"
         );
         assert_eq!(
             body.count_kind(IRInstructionKind::Call),
             1,
-            "Expected values to be equal"
+            "Conditional release pattern should contain one call instruction"
         );
 
         // Verify atomicrmw sub
         let atomic_insts = body.atomic_rmw_with_op("sub");
-        assert_eq!(atomic_insts.len(), 1, "Expected values to be equal");
+        assert_eq!(
+            atomic_insts.len(),
+            1,
+            "Should find one atomicrmw sub instruction"
+        );
 
         // Verify icmp eq
         let icmp_insts = body.instructions_of_kind(IRInstructionKind::Icmp);
-        assert_eq!(icmp_insts.len(), 1, "Expected values to be equal");
+        assert_eq!(icmp_insts.len(), 1, "Should find one icmp instruction");
         assert_eq!(
             icmp_insts[0].icmp_pred.as_deref(),
             Some("eq"),
-            "Expected values to be equal"
+            "Icmp predicate should be 'eq'"
         );
     }
 }

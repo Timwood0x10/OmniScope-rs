@@ -339,13 +339,20 @@ mod tests {
             "C calling C++ mangled function must be detected as FFI"
         );
         let info = result.unwrap();
-        assert_eq!(info.caller_lang, Language::C, "Expected values to be equal");
+        assert_eq!(
+            info.caller_lang,
+            Language::C,
+            "Caller should be detected as C"
+        );
         assert_eq!(
             info.callee_lang,
             Language::Cpp,
-            "Expected values to be equal"
+            "Callee should be detected as C++ from mangled name"
         );
-        assert!(info.is_ffi_boundary, "Expected condition to be true");
+        assert!(
+            info.is_ffi_boundary,
+            "C to C++ mangled call should be FFI boundary"
+        );
     }
 
     /// Objective: Verify aggressive detection catches external calls from non-C to unknown.
@@ -372,7 +379,10 @@ mod tests {
             Language::C,
             "Callee must be resolved to C"
         );
-        assert!(info.is_ffi_boundary, "Expected condition to be true");
+        assert!(
+            info.is_ffi_boundary,
+            "Rust calling external unknown should be FFI boundary"
+        );
     }
 
     /// Objective: Verify aggressive detection skips LLVM intrinsics.

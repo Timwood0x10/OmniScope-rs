@@ -4,11 +4,11 @@ use super::super::*;
 use proptest::prelude::*;
 
 proptest! {
-    /// Objective: 验证 from_function_name 对任意字符串输入不会 panic
+    /// Objective: Verify from_function_name never panics for arbitrary string inputs
     ///
     /// Invariants:
-    /// - 对任意字符串输入，from_function_name 应返回 SemanticKind
-    /// - 不应抛出异常或 panic
+    /// - For arbitrary string inputs, from_function_name should return SemanticKind
+    /// - Should not throw exceptions or panic
     #[test]
     fn prop_from_function_name_never_panics(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -18,11 +18,11 @@ proptest! {
         // The property is that this doesn't panic
     }
 
-    /// Objective: 验证安全分数始终在有效范围内
+    /// Objective: Verify safety score always stays within valid range
     ///
     /// Invariants:
-    /// - 安全分数必须在 0.0 到 1.0 之间（包含边界值）
-    /// - 确保所有 SemanticKind 的安全分数都在有效范围内
+    /// - Safety score must be between 0.0 and 1.0 (inclusive boundaries)
+    /// - Ensure all SemanticKind safety scores are within valid range
     #[test]
     fn prop_safety_score_range(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -38,12 +38,12 @@ proptest! {
         );
     }
 
-    /// Objective: 验证 requires_cleanup 方法与语义类型的一致性
+    /// Objective: Verify requires_cleanup method consistency with semantic types
     ///
     /// Invariants:
-    /// - 需要清理的语义类型（如 PythonRefcountInc、CppUniquePtr 等）必须返回 true
-    /// - 其他语义类型必须返回 false
-    /// - 确保清理标志与语义类型定义一致
+    /// - Semantic types requiring cleanup (e.g., PythonRefcountInc, CppUniquePtr, etc.) must return true
+    /// - Other semantic types must return false
+    /// - Ensure cleanup flag is consistent with semantic type definitions
     #[test]
     fn prop_requires_cleanup_consistency(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -78,12 +78,12 @@ proptest! {
         );
     }
 
-    /// Objective: 验证 is_borrowed_or_temporary 方法与语义类型的一致性
+    /// Objective: Verify is_borrowed_or_temporary method consistency with semantic types
     ///
     /// Invariants:
-    /// - 借用或临时语义类型（如 PythonBorrowedRef、FromParameter 等）必须返回 true
-    /// - 其他语义类型必须返回 false
-    /// - 确保借用标志与语义类型定义一致
+    /// - Borrowed or temporary semantic types (e.g., PythonBorrowedRef, FromParameter, etc.) must return true
+    /// - Other semantic types must return false
+    /// - Ensure borrowed flag is consistent with semantic type definitions
     #[test]
     fn prop_is_borrowed_or_temporary_consistency(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -111,13 +111,13 @@ proptest! {
         );
     }
 
-    /// Objective: 验证抑制规则与语义类型的一致性
+    /// Objective: Verify suppression rules consistency with semantic types
     ///
     /// Invariants:
-    /// - write_to_immutable 抑制规则必须与语义类型定义一致
-    /// - borrow_escape 抑制规则必须与语义类型定义一致
-    /// - use_after_free 抑制规则必须与语义类型定义一致
-    /// - cross_language_free 抑制规则必须与语义类型定义一致
+    /// - write_to_immutable suppression rule must be consistent with semantic type definitions
+    /// - borrow_escape suppression rule must be consistent with semantic type definitions
+    /// - use_after_free suppression rule must be consistent with semantic type definitions
+    /// - cross_language_free suppression rule must be consistent with semantic type definitions
     #[test]
     fn prop_suppression_rules_consistency(
         func_name in "[a-zA-Z0-9_./:~]{0,200}"
@@ -226,14 +226,14 @@ proptest! {
         );
     }
 
-    /// Objective: 验证 Python 模式被正确检测
+    /// Objective: Verify Python patterns are correctly detected
     ///
     /// Invariants:
-    /// - Py_INCREF/Py_XINCREF 必须被识别为 PythonRefcountInc
-    /// - Py_DECREF/Py_XDECREF 必须被识别为 PythonRefcountDec
-    /// - PyList_GetItem 等必须被识别为 PythonBorrowedRef
-    /// - PyBytes_FromString 等必须被识别为 PythonOwnedRef
-    /// - PyGILState_Ensure/Release 必须被识别为 PythonGilProtected
+    /// - Py_INCREF/Py_XINCREF must be recognized as PythonRefcountInc
+    /// - Py_DECREF/Py_XDECREF must be recognized as PythonRefcountDec
+    /// - PyList_GetItem, etc. must be recognized as PythonBorrowedRef
+    /// - PyBytes_FromString, etc. must be recognized as PythonOwnedRef
+    /// - PyGILState_Ensure/Release must be recognized as PythonGilProtected
     #[test]
     fn prop_python_patterns_detected(
         prefix in "(Py_INCREF|Py_XINCREF|Py_DECREF|Py_XDECREF|PyList_GetItem|PyTuple_GetItem|PyDict_GetItem|PyBytes_FromString|PyLong_FromLong|PyFloat_FromDouble|PyObject_Call|PyUnicode_FromString|PyBool_FromLong|PyGILState_Ensure|PyGILState_Release)",
@@ -244,22 +244,22 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "Py_INCREF" | "Py_XINCREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountInc, "Expected values to be equal"),
-            "Py_DECREF" | "Py_XDECREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountDec, "Expected values to be equal"),
-            "PyList_GetItem" | "PyTuple_GetItem" | "PyDict_GetItem" => prop_assert_eq!(kind, SemanticKind::PythonBorrowedRef, "Expected values to be equal"),
-            "PyBytes_FromString" | "PyLong_FromLong" | "PyFloat_FromDouble" | "PyObject_Call" | "PyUnicode_FromString" | "PyBool_FromLong" => prop_assert_eq!(kind, SemanticKind::PythonOwnedRef, "Expected values to be equal"),
-            "PyGILState_Ensure" | "PyGILState_Release" => prop_assert_eq!(kind, SemanticKind::PythonGilProtected, "Expected values to be equal"),
+            "Py_INCREF" | "Py_XINCREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountInc, "Python reference counting increment functions should be classified as PythonRefcountInc"),
+            "Py_DECREF" | "Py_XDECREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountDec, "Python reference counting decrement functions should be classified as PythonRefcountDec"),
+            "PyList_GetItem" | "PyTuple_GetItem" | "PyDict_GetItem" => prop_assert_eq!(kind, SemanticKind::PythonBorrowedRef, "Python container access functions should be classified as PythonBorrowedRef"),
+            "PyBytes_FromString" | "PyLong_FromLong" | "PyFloat_FromDouble" | "PyObject_Call" | "PyUnicode_FromString" | "PyBool_FromLong" => prop_assert_eq!(kind, SemanticKind::PythonOwnedRef, "Python object creation functions should be classified as PythonOwnedRef"),
+            "PyGILState_Ensure" | "PyGILState_Release" => prop_assert_eq!(kind, SemanticKind::PythonGilProtected, "Python GIL state functions should be classified as PythonGilProtected"),
             _ => {} // Other prefixes don't match Python patterns
         }
     }
 
-    /// Objective: 验证 Go 模式被正确检测
+    /// Objective: Verify Go patterns are correctly detected
     ///
     /// Invariants:
-    /// - defer C.free 必须被识别为 GoDeferCleanup
-    /// - runtime.SetFinalizer 必须被识别为 GoFinalizer
-    /// - _Cgo_/_cgo_ 必须被识别为 GoCgoWrapper
-    /// - runtime.mallocgc 等必须被识别为 GoRuntimeAlloc
+    /// - defer C.free must be recognized as GoDeferCleanup
+    /// - runtime.SetFinalizer must be recognized as GoFinalizer
+    /// - _Cgo_/_cgo_ must be recognized as GoCgoWrapper
+    /// - runtime.mallocgc, etc. must be recognized as GoRuntimeAlloc
     #[test]
     fn prop_go_patterns_detected(
         prefix in "(defer C.free|runtime.SetFinalizer|_Cgo_|_cgo_|runtime.mallocgc|runtime.newobject|runtime.newarray)",
@@ -270,21 +270,21 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "defer C.free" => prop_assert_eq!(kind, SemanticKind::GoDeferCleanup, "Expected values to be equal"),
-            "runtime.SetFinalizer" => prop_assert_eq!(kind, SemanticKind::GoFinalizer, "Expected values to be equal"),
-            "_Cgo_" | "_cgo_" => prop_assert_eq!(kind, SemanticKind::GoCgoWrapper, "Expected values to be equal"),
-            "runtime.mallocgc" | "runtime.newobject" | "runtime.newarray" => prop_assert_eq!(kind, SemanticKind::GoRuntimeAlloc, "Expected values to be equal"),
+            "defer C.free" => prop_assert_eq!(kind, SemanticKind::GoDeferCleanup, "Go defer cleanup should be classified as GoDeferCleanup"),
+            "runtime.SetFinalizer" => prop_assert_eq!(kind, SemanticKind::GoFinalizer, "Go finalizer should be classified as GoFinalizer"),
+            "_Cgo_" | "_cgo_" => prop_assert_eq!(kind, SemanticKind::GoCgoWrapper, "CGO wrapper functions should be classified as GoCgoWrapper"),
+            "runtime.mallocgc" | "runtime.newobject" | "runtime.newarray" => prop_assert_eq!(kind, SemanticKind::GoRuntimeAlloc, "Go runtime allocation functions should be classified as GoRuntimeAlloc"),
             _ => {} // Other prefixes don't match Go patterns
         }
     }
 
-    /// Objective: 验证 C++ 模式被正确检测
+    /// Objective: Verify C++ patterns are correctly detected
     ///
     /// Invariants:
-    /// - unique_ptr/make_unique/std::unique_ptr 必须被识别为 CppUniquePtr
-    /// - shared_ptr/make_shared/std::shared_ptr 必须被识别为 CppSharedPtr
-    /// - ~ 必须被识别为 CppDestructor
-    /// - __cxa_throw 等必须被识别为 CppExceptionPath
+    /// - unique_ptr/make_unique/std::unique_ptr must be recognized as CppUniquePtr
+    /// - shared_ptr/make_shared/std::shared_ptr must be recognized as CppSharedPtr
+    /// - ~ must be recognized as CppDestructor
+    /// - __cxa_throw, etc. must be recognized as CppExceptionPath
     #[test]
     fn prop_cpp_patterns_detected(
         prefix in "(unique_ptr|make_unique|std::unique_ptr|shared_ptr|make_shared|std::shared_ptr|~|__cxa_throw|__cxa_begin_catch|__cxa_end_catch|__cxa_allocate_exception)",
@@ -295,20 +295,20 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "unique_ptr" | "make_unique" | "std::unique_ptr" => prop_assert_eq!(kind, SemanticKind::CppUniquePtr, "Expected values to be equal"),
-            "shared_ptr" | "make_shared" | "std::shared_ptr" => prop_assert_eq!(kind, SemanticKind::CppSharedPtr, "Expected values to be equal"),
-            "~" => prop_assert_eq!(kind, SemanticKind::CppDestructor, "Expected values to be equal"),
-            "__cxa_throw" | "__cxa_begin_catch" | "__cxa_end_catch" | "__cxa_allocate_exception" => prop_assert_eq!(kind, SemanticKind::CppExceptionPath, "Expected values to be equal"),
+            "unique_ptr" | "make_unique" | "std::unique_ptr" => prop_assert_eq!(kind, SemanticKind::CppUniquePtr, "C++ unique pointer functions should be classified as CppUniquePtr"),
+            "shared_ptr" | "make_shared" | "std::shared_ptr" => prop_assert_eq!(kind, SemanticKind::CppSharedPtr, "C++ shared pointer functions should be classified as CppSharedPtr"),
+            "~" => prop_assert_eq!(kind, SemanticKind::CppDestructor, "C++ destructor functions should be classified as CppDestructor"),
+            "__cxa_throw" | "__cxa_begin_catch" | "__cxa_end_catch" | "__cxa_allocate_exception" => prop_assert_eq!(kind, SemanticKind::CppExceptionPath, "C++ exception handling functions should be classified as CppExceptionPath"),
             _ => {} // Other prefixes don't match C++ patterns
         }
     }
 
-    /// Objective: 验证 C# 模式被正确检测
+    /// Objective: Verify C# patterns are correctly detected
     ///
     /// Invariants:
-    /// - SafeHandle/ReleaseHandle/CriticalHandle 必须被识别为 CsharpSafeHandle
-    /// - Finalize 必须被识别为 CsharpFinalizer
-    /// - DllImport/Marshal.AllocHGlobal/Marshal.FreeHGlobal 必须被识别为 CsharpPinvokeMarshal
+    /// - SafeHandle/ReleaseHandle/CriticalHandle must be recognized as CsharpSafeHandle
+    /// - Finalize must be recognized as CsharpFinalizer
+    /// - DllImport/Marshal.AllocHGlobal/Marshal.FreeHGlobal must be recognized as CsharpPinvokeMarshal
     #[test]
     fn prop_csharp_patterns_detected(
         prefix in "(SafeHandle|ReleaseHandle|CriticalHandle|Finalize|DllImport|Marshal.AllocHGlobal|Marshal.FreeHGlobal)",
@@ -319,19 +319,19 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "SafeHandle" | "ReleaseHandle" | "CriticalHandle" => prop_assert_eq!(kind, SemanticKind::CsharpSafeHandle, "Expected values to be equal"),
-            "Finalize" => prop_assert_eq!(kind, SemanticKind::CsharpFinalizer, "Expected values to be equal"),
-            "DllImport" | "Marshal.AllocHGlobal" | "Marshal.FreeHGlobal" => prop_assert_eq!(kind, SemanticKind::CsharpPinvokeMarshal, "Expected values to be equal"),
+            "SafeHandle" | "ReleaseHandle" | "CriticalHandle" => prop_assert_eq!(kind, SemanticKind::CsharpSafeHandle, "C# SafeHandle functions should be classified as CsharpSafeHandle"),
+            "Finalize" => prop_assert_eq!(kind, SemanticKind::CsharpFinalizer, "C# Finalize function should be classified as CsharpFinalizer"),
+            "DllImport" | "Marshal.AllocHGlobal" | "Marshal.FreeHGlobal" => prop_assert_eq!(kind, SemanticKind::CsharpPinvokeMarshal, "C# P/Invoke functions should be classified as CsharpPinvokeMarshal"),
             _ => {} // Other prefixes don't match C# patterns
         }
     }
 
-    /// Objective: 验证 Java JNI 模式被正确检测
+    /// Objective: Verify Java JNI patterns are correctly detected
     ///
     /// Invariants:
-    /// - NewLocalRef/DeleteLocalRef 必须被识别为 JavaLocalRef
-    /// - NewGlobalRef/DeleteGlobalRef 必须被识别为 JavaGlobalRef
-    /// - NewWeakGlobalRef/DeleteWeakGlobalRef 必须被识别为 JavaWeakRef
+    /// - NewLocalRef/DeleteLocalRef must be recognized as JavaLocalRef
+    /// - NewGlobalRef/DeleteGlobalRef must be recognized as JavaGlobalRef
+    /// - NewWeakGlobalRef/DeleteWeakGlobalRef must be recognized as JavaWeakRef
     #[test]
     fn prop_java_patterns_detected(
         prefix in "(NewLocalRef|DeleteLocalRef|NewGlobalRef|DeleteGlobalRef|NewWeakGlobalRef|DeleteWeakGlobalRef)",
@@ -342,19 +342,19 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "NewLocalRef" | "DeleteLocalRef" => prop_assert_eq!(kind, SemanticKind::JavaLocalRef, "Expected values to be equal"),
-            "NewGlobalRef" | "DeleteGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaGlobalRef, "Expected values to be equal"),
-            "NewWeakGlobalRef" | "DeleteWeakGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaWeakRef, "Expected values to be equal"),
+            "NewLocalRef" | "DeleteLocalRef" => prop_assert_eq!(kind, SemanticKind::JavaLocalRef, "Java local reference functions should be classified as JavaLocalRef"),
+            "NewGlobalRef" | "DeleteGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaGlobalRef, "Java global reference functions should be classified as JavaGlobalRef"),
+            "NewWeakGlobalRef" | "DeleteWeakGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaWeakRef, "Java weak reference functions should be classified as JavaWeakRef"),
             _ => {} // Other prefixes don't match Java patterns
         }
     }
 
-    /// Objective: 验证随机函数名返回 Unknown 语义类型
+    /// Objective: Verify random function names return Unknown semantic type
     ///
     /// Invariants:
-    /// - 不匹配已知模式的随机函数名必须返回 SemanticKind::Unknown
-    /// - 已知模式应被排除在检查之外
-    /// - 确保未知函数不会被错误分类
+    /// - Random function names not matching known patterns must return SemanticKind::Unknown
+    /// - Known patterns should be excluded from the check
+    /// - Ensure unknown functions are not misclassified
     #[test]
     fn prop_random_function_names_unknown(
         func_name in "[a-zA-Z_][a-zA-Z0-9_]{0,30}"

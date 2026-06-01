@@ -233,11 +233,11 @@ mod tests {
     #[test]
     fn test_borrow_escape_pass_creation() {
         let pass = BorrowEscapePass::new();
-        assert_eq!(pass.name(), "BorrowEscape", "Expected values to be equal");
+        assert_eq!(pass.name(), "BorrowEscape", "Pass should have correct name");
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass should be Analysis kind"
         );
     }
 
@@ -246,19 +246,19 @@ mod tests {
         let pass = BorrowEscapePass::new();
         assert!(
             pass.has_heap_provenance("_RNvNtCsgXhsEb1m4tm_4core9panicking5alloc"),
-            "Expected condition to be true"
+            "Mangled alloc function should be recognized as heap provenance"
         );
         assert!(
             pass.has_heap_provenance("malloc_wrapper"),
-            "Expected condition to be true"
+            "malloc_wrapper should be recognized as heap provenance"
         );
         assert!(
             pass.has_heap_provenance("Box_new"),
-            "Expected condition to be true"
+            "Box_new should be recognized as heap provenance"
         );
         assert!(
             !pass.has_heap_provenance("local_var"),
-            "Expected condition to be true"
+            "local_var should NOT be recognized as heap provenance"
         );
     }
 
@@ -267,19 +267,19 @@ mod tests {
         let pass = BorrowEscapePass::new();
         assert!(
             pass.has_global_provenance("static_var"),
-            "Expected condition to be true"
+            "static_var should be recognized as global provenance"
         );
         assert!(
             pass.has_global_provenance("global_config"),
-            "Expected condition to be true"
+            "global_config should be recognized as global provenance"
         );
         assert!(
             pass.has_global_provenance("@global"),
-            "Expected condition to be true"
+            "@global should be recognized as global provenance"
         );
         assert!(
             !pass.has_global_provenance("local_var"),
-            "Expected condition to be true"
+            "local_var should NOT be recognized as global provenance"
         );
     }
 
@@ -288,15 +288,15 @@ mod tests {
         let pass = BorrowEscapePass::new();
         assert!(
             pass.is_function_parameter("func->param"),
-            "Expected condition to be true"
+            "func->param should be recognized as function parameter"
         );
         assert!(
             pass.is_function_parameter("func->arg"),
-            "Expected condition to be true"
+            "func->arg should be recognized as function parameter"
         );
         assert!(
             !pass.is_function_parameter("func->local"),
-            "Expected condition to be true"
+            "func->local should NOT be recognized as function parameter"
         );
     }
 }

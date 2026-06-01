@@ -98,10 +98,10 @@ mod tests {
         let mut pool = MemoryPool::new();
 
         let value = pool.alloc(42);
-        assert_eq!(*value, 42, "Expected values to be equal");
+        assert_eq!(*value, 42, "Allocated value should be 42");
 
         *value = 100;
-        assert_eq!(*value, 100, "Expected values to be equal");
+        assert_eq!(*value, 100, "Modified value should be 100");
     }
 
     #[test]
@@ -111,8 +111,8 @@ mod tests {
         let data = [1, 2, 3, 4, 5];
         let slice = pool.alloc_slice(&data);
 
-        assert_eq!(slice.len(), 5, "Expected values to be equal");
-        assert_eq!(slice[0], 1, "Expected values to be equal");
+        assert_eq!(slice.len(), 5, "Slice length should be 5");
+        assert_eq!(slice[0], 1, "First element should be 1");
     }
 
     #[test]
@@ -120,13 +120,16 @@ mod tests {
         let mut pool = MemoryPool::new();
 
         let s = pool.alloc_str("hello world");
-        assert_eq!(s, "hello world", "Expected values to be equal");
+        assert_eq!(s, "hello world", "Allocated string should be 'hello world'");
     }
 
     #[test]
     fn test_memory_pool_with_capacity() {
         let mut pool = MemoryPool::with_capacity(1024);
         let _ = pool.alloc(42);
-        assert!(pool.allocated_bytes() > 0, "Expected condition to be true");
+        assert!(
+            pool.allocated_bytes() > 0,
+            "Should have allocated some bytes"
+        );
     }
 }

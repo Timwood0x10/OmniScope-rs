@@ -17,7 +17,7 @@ fn test_by_source_openssl() {
         assert_eq!(
             c.source,
             ContractSource::OpenSSL,
-            "Expected values to be equal"
+            "All contracts should have OpenSSL source"
         );
     }
 }
@@ -36,7 +36,7 @@ fn test_by_source_sqlite() {
         assert_eq!(
             c.source,
             ContractSource::SQLite,
-            "Expected values to be equal"
+            "All contracts should have SQLite source"
         );
     }
 }
@@ -55,7 +55,7 @@ fn test_by_source_python() {
         assert_eq!(
             c.source,
             ContractSource::PythonCApi,
-            "Expected values to be equal"
+            "All contracts should have Python/C API source"
         );
     }
 }
@@ -71,7 +71,11 @@ fn test_by_source_jni() {
     let contracts = db.by_source(ContractSource::JNI);
     assert!(!contracts.is_empty(), "Must have JNI contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::JNI, "Expected values to be equal");
+        assert_eq!(
+            c.source,
+            ContractSource::JNI,
+            "All contracts should have JNI source"
+        );
     }
 }
 
@@ -89,7 +93,7 @@ fn test_by_source_posix() {
         assert_eq!(
             c.source,
             ContractSource::Posix,
-            "Expected values to be equal"
+            "All contracts should have Posix source"
         );
     }
 }
@@ -108,7 +112,7 @@ fn test_by_source_glib() {
         assert_eq!(
             c.source,
             ContractSource::Glib,
-            "Expected values to be equal"
+            "All contracts should have Glib source"
         );
     }
 }
@@ -127,7 +131,7 @@ fn test_by_source_libuv() {
         assert_eq!(
             c.source,
             ContractSource::Libuv,
-            "Expected values to be equal"
+            "All contracts should have Libuv source"
         );
     }
 }

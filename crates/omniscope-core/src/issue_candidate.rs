@@ -201,17 +201,23 @@ mod tests {
         .with_release_function("operator delete")
         .with_verdict(VerifierVerdict::ConfirmedIssue);
 
-        assert!(candidate.is_verified(), "Expected condition to be true");
-        assert!(candidate.is_reportable(), "Expected condition to be true");
+        assert!(
+            candidate.is_verified(),
+            "Verified candidate should be recognized as verified"
+        );
+        assert!(
+            candidate.is_reportable(),
+            "ConfirmedIssue candidate should be reportable"
+        );
         assert_eq!(
             candidate.to_issue_kind(),
             IssueKind::CrossFamilyFree,
-            "Expected values to be equal"
+            "CrossFamilyFree candidate should map to CrossFamilyFree issue kind"
         );
         assert_eq!(
             candidate.severity(),
             Severity::Error,
-            "Expected values to be equal"
+            "CrossFamilyFree candidate should have Error severity"
         );
     }
 
@@ -225,7 +231,10 @@ mod tests {
         )
         .with_verdict(VerifierVerdict::ExplainedSafe);
 
-        assert!(candidate.is_verified(), "Expected condition to be true");
+        assert!(
+            candidate.is_verified(),
+            "Verified candidate should be recognized as verified"
+        );
         assert!(
             !candidate.is_reportable(),
             "ExplainedSafe should NOT be reportable"
@@ -233,7 +242,7 @@ mod tests {
         assert_eq!(
             candidate.severity(),
             Severity::Note,
-            "Expected values to be equal"
+            "ExplainedSafe candidate should have Note severity"
         );
     }
 
@@ -248,7 +257,7 @@ mod tests {
             )
             .to_issue_kind(),
             IssueKind::CrossFamilyFree,
-            "Expected values to be equal"
+            "CrossFamilyFree candidate should map to CrossFamilyFree issue kind"
         );
         assert_eq!(
             IssueCandidate::new(
@@ -259,13 +268,13 @@ mod tests {
             )
             .to_issue_kind(),
             IssueKind::UseAfterFree,
-            "Expected values to be equal"
+            "UseAfterRelease candidate should map to UseAfterFree issue kind"
         );
         assert_eq!(
             IssueCandidate::new(3, IssueCandidateKind::DoubleRelease, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
             IssueKind::DoubleFree,
-            "Expected values to be equal"
+            "DoubleRelease candidate should map to DoubleFree issue kind"
         );
         assert_eq!(
             IssueCandidate::new(
@@ -276,31 +285,31 @@ mod tests {
             )
             .to_issue_kind(),
             IssueKind::ConditionalLeak,
-            "Expected values to be equal"
+            "ConditionalLeak candidate should map to ConditionalLeak issue kind"
         );
         assert_eq!(
             IssueCandidate::new(5, IssueCandidateKind::BorrowEscape, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
             IssueKind::BorrowEscape,
-            "Expected values to be equal"
+            "BorrowEscape candidate should map to BorrowEscape issue kind"
         );
         assert_eq!(
             IssueCandidate::new(6, IssueCandidateKind::CallbackEscape, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
             IssueKind::CallbackEscapeIssue,
-            "Expected values to be equal"
+            "CallbackEscape candidate should map to CallbackEscapeIssue issue kind"
         );
         assert_eq!(
             IssueCandidate::new(7, IssueCandidateKind::NeedsModel, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
             IssueKind::NeedsModel,
-            "Expected values to be equal"
+            "NeedsModel candidate should map to NeedsModel issue kind"
         );
         assert_eq!(
             IssueCandidate::new(8, IssueCandidateKind::UseAfterFree, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
             IssueKind::UseAfterFree,
-            "Expected values to be equal"
+            "UseAfterFree candidate should map to UseAfterFree issue kind"
         );
     }
 }

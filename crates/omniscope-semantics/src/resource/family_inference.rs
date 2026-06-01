@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(
             result.effect,
             Some(SymbolEffect::Acquire),
-            "Expected values to be equal"
+            "foo_alloc should be inferred as Acquire effect"
         );
         assert!(
             result.confidence > 0.0,
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(
             result.effect,
             Some(SymbolEffect::Release),
-            "Expected values to be equal"
+            "bar_destroy should be inferred as Release effect"
         );
     }
 
@@ -191,8 +191,11 @@ mod tests {
     fn test_unknown_symbol_no_inference() {
         let registry = FamilyRegistry::new();
         let result = infer_family("my_func", &registry);
-        assert_eq!(result.family_id, None, "Expected values to be equal");
-        assert_eq!(result.effect, None, "Expected values to be equal");
+        assert_eq!(
+            result.family_id, None,
+            "Unknown symbol should have no family ID"
+        );
+        assert_eq!(result.effect, None, "Unknown symbol should have no effect");
     }
 
     #[test]
@@ -200,17 +203,17 @@ mod tests {
         assert_eq!(
             infer_language_hint("_ZN3foo3barEv"),
             LanguageHint::Cpp,
-            "Expected values to be equal"
+            "C++ mangled name should be detected as Cpp"
         );
         assert_eq!(
             infer_language_hint("__rust_alloc"),
             LanguageHint::Rust,
-            "Expected values to be equal"
+            "Rust runtime function should be detected as Rust"
         );
         assert_eq!(
             infer_language_hint("PyObject_New"),
             LanguageHint::Python,
-            "Expected values to be equal"
+            "Python C API function should be detected as Python"
         );
     }
 

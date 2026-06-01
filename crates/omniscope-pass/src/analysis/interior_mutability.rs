@@ -158,12 +158,12 @@ mod tests {
         assert_eq!(
             pass.name(),
             "InteriorMutability",
-            "Expected values to be equal"
+            "Pass should have correct name"
         );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass should be Analysis kind"
         );
     }
 
@@ -172,31 +172,31 @@ mod tests {
         let pass = InteriorMutabilityPass::new();
         assert!(
             pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell10UnsafeCell"),
-            "Expected condition to be true"
+            "Mangled UnsafeCell should be recognized as interior mutability"
         );
         assert!(
             pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync5Mutex"),
-            "Expected condition to be true"
+            "Mangled Mutex should be recognized as interior mutability"
         );
         assert!(
             pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std6Atomic"),
-            "Expected condition to be true"
+            "Mangled Atomic should be recognized as interior mutability"
         );
         assert!(
             pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell4Cell"),
-            "Expected condition to be true"
+            "Mangled Cell should be recognized as interior mutability"
         );
         assert!(
             pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell7RefCell"),
-            "Expected condition to be true"
+            "Mangled RefCell should be recognized as interior mutability"
         );
         assert!(
             pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync7OnceLock"),
-            "Expected condition to be true"
+            "Mangled OnceLock should be recognized as interior mutability"
         );
         assert!(
             !pass.has_interior_mutability("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic"),
-            "Expected condition to be true"
+            "Mangled panic should NOT be recognized as interior mutability"
         );
     }
 
@@ -213,11 +213,14 @@ mod tests {
         );
 
         let resolutions = semantic_tree.all_resolutions("test_symbol");
-        assert!(!resolutions.is_empty(), "Expected condition to be true");
+        assert!(
+            !resolutions.is_empty(),
+            "Semantic tree should have resolutions for interior mutability"
+        );
         assert_eq!(
             resolutions[0].kind,
             SemanticKind::InteriorMutability,
-            "Expected values to be equal"
+            "Resolution should be InteriorMutability kind"
         );
     }
 }

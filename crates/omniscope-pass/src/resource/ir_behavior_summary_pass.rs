@@ -152,17 +152,17 @@ mod tests {
         assert_eq!(
             pass.name(),
             "IRBehaviorSummary",
-            "Expected values to be equal"
+            "Pass name should be IRBehaviorSummary"
         );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass kind should be Analysis"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["RawFactCollector"],
-            "Expected values to be equal"
+            "Dependencies should be RawFactCollector"
         );
     }
 
@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(
             result.stats.get("behaviors_extracted"),
             Some(&0),
-            "Expected values to be equal"
+            "No IR module should result in 0 behaviors extracted"
         );
     }
 
@@ -203,16 +203,16 @@ mod tests {
         assert_eq!(
             result.stats.get("conditional_release"),
             Some(&1),
-            "Expected values to be equal"
+            "Conditional release should be detected"
         );
         assert_eq!(
             result.stats.get("summaries_from_behavior"),
             Some(&1),
-            "Expected values to be equal"
+            "Should generate 1 summary from behavior"
         );
 
         // Verify that behaviors were stored in context
         let behaviors: Vec<FunctionBehavior> = ctx.get("function_behaviors").unwrap();
-        assert_eq!(behaviors.len(), 1, "Expected values to be equal");
+        assert_eq!(behaviors.len(), 1, "Should have 1 behavior extracted");
     }
 }

@@ -389,55 +389,67 @@ mod tests {
         assert_eq!(
             result.category,
             PosixSyscallCategory::File,
-            "Expected values to be equal"
+            "close should be classified as File POSIX syscall"
         );
         assert!(
             result.category.is_non_memory(),
-            "Expected condition to be true"
+            "File operations should be non-memory"
         );
     }
 
     #[test]
     fn test_unlink_is_file_op() {
         let (_, result) = infer_posix_syscall_summary("unlink", 2, 200, LanguageHint::C);
-        assert!(result.is_posix_syscall, "Expected condition to be true");
+        assert!(
+            result.is_posix_syscall,
+            "unlink should be recognized as POSIX syscall"
+        );
         assert_eq!(
             result.category,
             PosixSyscallCategory::File,
-            "Expected values to be equal"
+            "unlink should be classified as File POSIX syscall"
         );
     }
 
     #[test]
     fn test_socket_is_network_op() {
         let (_, result) = infer_posix_syscall_summary("socket", 3, 300, LanguageHint::C);
-        assert!(result.is_posix_syscall, "Expected condition to be true");
+        assert!(
+            result.is_posix_syscall,
+            "socket should be recognized as POSIX syscall"
+        );
         assert_eq!(
             result.category,
             PosixSyscallCategory::Network,
-            "Expected values to be equal"
+            "socket should be classified as Network POSIX syscall"
         );
     }
 
     #[test]
     fn test_execve_is_process_op() {
         let (_, result) = infer_posix_syscall_summary("execve", 4, 400, LanguageHint::C);
-        assert!(result.is_posix_syscall, "Expected condition to be true");
+        assert!(
+            result.is_posix_syscall,
+            "execve should be recognized as POSIX syscall"
+        );
         assert_eq!(
             result.category,
             PosixSyscallCategory::Process,
-            "Expected values to be equal"
+            "execve should be classified as Process POSIX syscall"
         );
     }
 
     #[test]
     fn test_mmap_is_memory_op() {
         let (_, result) = infer_posix_syscall_summary("mmap", 5, 500, LanguageHint::C);
-        assert!(result.is_posix_syscall, "Expected condition to be true");
+        assert!(
+            result.is_posix_syscall,
+            "mmap should be recognized as POSIX syscall"
+        );
         assert_eq!(
             result.category,
             PosixSyscallCategory::Memory,
-            "Expected values to be equal"
+            "mmap should be classified as Memory POSIX syscall"
         );
         assert!(!result.category.is_non_memory(), "mmap is a memory op");
     }
@@ -451,11 +463,14 @@ mod tests {
     #[test]
     fn test_clock_gettime_is_time() {
         let (_, result) = infer_posix_syscall_summary("clock_gettime", 7, 700, LanguageHint::C);
-        assert!(result.is_posix_syscall, "Expected condition to be true");
+        assert!(
+            result.is_posix_syscall,
+            "clock_gettime should be recognized as POSIX syscall"
+        );
         assert_eq!(
             result.category,
             PosixSyscallCategory::TimeSignal,
-            "Expected values to be equal"
+            "clock_gettime should be classified as TimeSignal POSIX syscall"
         );
     }
 }

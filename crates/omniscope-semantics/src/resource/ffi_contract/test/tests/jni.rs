@@ -19,12 +19,16 @@ fn test_jni_find_class() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "FindClass should be registered as Allocator contract type"
     );
-    assert_eq!(c.source, ContractSource::JNI, "Expected values to be equal");
+    assert_eq!(
+        c.source,
+        ContractSource::JNI,
+        "FindClass should have JNI source"
+    );
     assert!(
         c.paired_release.contains(&"DeleteLocalRef".to_string()),
-        "Expected condition to be true"
+        "FindClass should have DeleteLocalRef as paired release"
     );
 }
 
@@ -43,11 +47,11 @@ fn test_jni_new_string() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "NewStringUTF should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"DeleteLocalRef".to_string()),
-        "Expected condition to be true"
+        "NewStringUTF should have DeleteLocalRef as paired release"
     );
 }
 
@@ -66,11 +70,11 @@ fn test_jni_new_object() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "NewObject should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"DeleteLocalRef".to_string()),
-        "Expected condition to be true"
+        "NewObject should have DeleteLocalRef as paired release"
     );
 }
 
@@ -88,7 +92,7 @@ fn test_jni_delete_local_ref() {
     assert_eq!(
         c.contract_type,
         ContractType::Deallocator,
-        "Expected values to be equal"
+        "DeleteLocalRef should be registered as Deallocator contract type"
     );
 }
 
@@ -107,10 +111,10 @@ fn test_jni_new_global_ref() {
     assert_eq!(
         c.contract_type,
         ContractType::Allocator,
-        "Expected values to be equal"
+        "NewGlobalRef should be registered as Allocator contract type"
     );
     assert!(
         c.paired_release.contains(&"DeleteGlobalRef".to_string()),
-        "Expected condition to be true"
+        "NewGlobalRef should have DeleteGlobalRef as paired release"
     );
 }

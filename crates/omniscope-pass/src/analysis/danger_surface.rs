@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass kind should be Analysis"
         );
         assert_eq!(
             pass.dependencies(),

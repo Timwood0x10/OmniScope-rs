@@ -282,16 +282,16 @@ mod tests {
         assert_eq!(
             pass.name(),
             "RawFactCollector",
-            "Expected values to be equal"
+            "Pass name must be 'RawFactCollector'"
         );
         assert_eq!(
             pass.kind(),
             PassKind::Foundation,
-            "Expected values to be equal"
+            "RawFactCollector must be a Foundation pass"
         );
         assert!(
             pass.dependencies().is_empty(),
-            "Expected condition to be true"
+            "RawFactCollector must have no dependencies"
         );
     }
 

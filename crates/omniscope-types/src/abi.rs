@@ -152,14 +152,14 @@ mod tests {
         assert_eq!(
             i32_type.size_bytes(),
             Some(4),
-            "Expected values to be equal"
+            "32-bit integer should have 4 bytes size"
         );
 
         let f64_type = AbiType::Float { bits: 64 };
         assert_eq!(
             f64_type.size_bytes(),
             Some(8),
-            "Expected values to be equal"
+            "64-bit float should have 8 bytes size"
         );
 
         let ptr_type = AbiType::Pointer {
@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(
             ptr_type.size_bytes(),
             Some(8),
-            "Expected values to be equal"
+            "Pointer should have 8 bytes size (64-bit)"
         );
     }
 
@@ -179,14 +179,26 @@ mod tests {
             bits: 32,
             signed: true,
         };
-        assert!(int_type.is_integer(), "Expected condition to be true");
-        assert!(!int_type.is_pointer(), "Expected condition to be true");
+        assert!(
+            int_type.is_integer(),
+            "Integer type should be recognized as integer"
+        );
+        assert!(
+            !int_type.is_pointer(),
+            "Integer type should NOT be recognized as pointer"
+        );
 
         let ptr_type = AbiType::Pointer {
             inner: None,
             mutable: false,
         };
-        assert!(ptr_type.is_pointer(), "Expected condition to be true");
-        assert!(!ptr_type.is_integer(), "Expected condition to be true");
+        assert!(
+            ptr_type.is_pointer(),
+            "Pointer type should be recognized as pointer"
+        );
+        assert!(
+            !ptr_type.is_integer(),
+            "Pointer type should NOT be recognized as integer"
+        );
     }
 }

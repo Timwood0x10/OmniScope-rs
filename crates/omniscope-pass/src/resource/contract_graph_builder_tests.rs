@@ -11,17 +11,17 @@ fn test_contract_graph_builder_creation() {
     assert_eq!(
         pass.name(),
         "ContractGraphBuilder",
-        "Expected values to be equal"
+        "Pass name must be 'ContractGraphBuilder'"
     );
     assert_eq!(
         pass.kind(),
         PassKind::Analysis,
-        "Expected values to be equal"
+        "ContractGraphBuilder must be an Analysis pass"
     );
     assert_eq!(
         pass.dependencies(),
         vec!["StructuralInference"],
-        "Expected values to be equal"
+        "ContractGraphBuilder must depend on StructuralInference"
     );
 }
 

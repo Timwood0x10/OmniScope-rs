@@ -312,13 +312,13 @@ pub enum OwnershipError {
 mod tests {
     use super::*;
 
-    /// Objective: 验证从 Acquired 状态到 Released 状态的转换
+    /// Objective: Verify transition from Acquired state to Released state
     ///
     /// Invariants:
-    /// - 初始状态应为 Acquired，且是泄漏候选
-    /// - Release 事件后状态应为 Released
-    /// - 转换不应返回错误
-    /// - Released 状态不再是泄漏候选
+    /// - Initial state should be Acquired and is a leak candidate
+    /// - State should be Released after Release event
+    /// - Transition should not return an error
+    /// - Released state is no longer a leak candidate
     #[test]
     fn test_acquire_release_transition() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
@@ -337,12 +337,12 @@ mod tests {
         );
     }
 
-    /// Objective: 验证双重释放会返回 DoubleRelease 错误
+    /// Objective: Verify double release returns DoubleRelease error
     ///
     /// Invariants:
-    /// - 第一次 Release 应成功，状态变为 Released
-    /// - 第二次 Release 应返回 DoubleRelease 错误
-    /// - 错误应包含实例 ID 和资源族信息
+    /// - First Release should succeed, state changes to Released
+    /// - Second Release should return DoubleRelease error
+    /// - Error should contain instance ID and resource family information
     #[test]
     fn test_double_release_error() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
@@ -353,32 +353,32 @@ mod tests {
         assert!(result.is_err(), "Double release must be an error");
     }
 
-    /// Objective: 验证从 Acquired 状态到 Escaped 状态的转换
+    /// Objective: Verify transition from Acquired state to Escaped state
     ///
     /// Invariants:
-    /// - 初始状态应为 Acquired
-    /// - Escape 事件后状态应为 Escaped(ReturnToCaller)
-    /// - 转换不应返回错误
-    /// - Escaped 状态不再是泄漏候选
+    /// - Initial state should be Acquired
+    /// - State should be Escaped(ReturnToCaller) after Escape event
+    /// - Transition should not return an error
+    /// - Escaped state is no longer a leak candidate
     #[test]
     fn test_escape_transition() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Owned);
         let result = instance.transition(OwnershipEvent::Escape {
             kind: EscapeKind::ReturnToCaller,
         });
-        assert!(result.is_ok(), "Expected condition to be true");
+        assert!(result.is_ok(), "Escape transition should succeed");
         assert!(
             !instance.is_leak_candidate(),
             "Escaped resource is NOT a leak candidate"
         );
     }
 
-    /// Objective: 验证释放借用的资源会返回 ReleaseBorrowed 错误
+    /// Objective: Verify releasing a borrowed resource returns ReleaseBorrowed error
     ///
     /// Invariants:
-    /// - 初始状态应为 Borrowed
-    /// - Release 事件应返回 ReleaseBorrowed 错误
-    /// - 状态应保持 Borrowed 不变
+    /// - Initial state should be Borrowed
+    /// - Release event should return ReleaseBorrowed error
+    /// - State should remain Borrowed unchanged
     #[test]
     fn test_release_borrowed_error() {
         let mut instance = ResourceInstance::new(1, FamilyId::C_HEAP, PointerContract::Borrowed);
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(
             instance.state,
             OwnershipState::Retained,
-            "Expected values to be equal"
+            "State should be Retained after Retain event"
         );
 
         // Retained → Escaped
@@ -848,7 +848,7 @@ mod tests {
         assert_eq!(
             instance.state,
             OwnershipState::Retained,
-            "Expected values to be equal"
+            "State should be Retained after Retain event"
         );
 
         // Retained → Acquired (refcount still > 0)
@@ -878,7 +878,7 @@ mod tests {
         assert_eq!(
             instance.state,
             OwnershipState::Acquired,
-            "Expected values to be equal"
+            "State should be Acquired after creation"
         );
 
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 20 });
@@ -914,7 +914,7 @@ mod tests {
         assert_eq!(
             instance.state,
             OwnershipState::Retained,
-            "Expected values to be equal"
+            "State should be Retained after Retain event"
         );
 
         // Py_DECREF (refcount > 0 after decrement)
@@ -986,7 +986,7 @@ mod tests {
         assert_eq!(
             instance.state,
             OwnershipState::Released,
-            "Expected values to be equal"
+            "State should be Released after ConditionalRelease from Escaped"
         );
     }
 
@@ -998,21 +998,21 @@ mod tests {
     #[test]
     fn test_new_borrowed_factory() {
         let instance = ResourceInstance::new_borrowed(42, FamilyId::C_HEAP);
-        assert_eq!(instance.id, 42, "Expected values to be equal");
+        assert_eq!(instance.id, 42, "Borrowed instance should have correct ID");
         assert_eq!(
             instance.family,
             FamilyId::C_HEAP,
-            "Expected values to be equal"
+            "Borrowed instance should have correct family"
         );
         assert_eq!(
             instance.state,
             OwnershipState::Borrowed,
-            "Expected values to be equal"
+            "Borrowed instance should be in Borrowed state"
         );
         assert_eq!(
             instance.contract,
             PointerContract::Borrowed,
-            "Expected values to be equal"
+            "Borrowed instance should have Borrowed contract"
         );
         assert!(
             !instance.is_leak_candidate(),

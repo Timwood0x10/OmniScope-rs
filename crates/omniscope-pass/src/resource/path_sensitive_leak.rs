@@ -374,27 +374,31 @@ mod tests {
     #[test]
     fn test_pass_creation() {
         let pass = LeakDetectionPass::new();
-        assert_eq!(pass.name(), "LeakDetection", "Expected values to be equal");
+        assert_eq!(
+            pass.name(),
+            "LeakDetection",
+            "Pass name should be LeakDetection"
+        );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass kind should be Analysis"
         );
         assert_eq!(
             pass.dependencies(),
             vec!["OwnershipSolver"],
-            "Expected values to be equal"
+            "Dependencies should be OwnershipSolver"
         );
         assert_eq!(
             pass.path_budget, DEFAULT_PATH_BUDGET,
-            "Expected values to be equal"
+            "Default path budget should be DEFAULT_PATH_BUDGET"
         );
     }
 
     #[test]
     fn test_custom_path_budget() {
         let pass = LeakDetectionPass::new().with_path_budget(128);
-        assert_eq!(pass.path_budget, 128, "Expected values to be equal");
+        assert_eq!(pass.path_budget, 128, "Custom path budget should be 128");
     }
 
     #[test]
@@ -424,7 +428,7 @@ mod tests {
         );
         assert!(
             !result.is_conditional_leak(),
-            "Expected condition to be true"
+            "Definite leak should NOT be conditional leak"
         );
         assert!(
             result.leak_confidence() > 0.8,
@@ -435,7 +439,10 @@ mod tests {
     #[test]
     fn test_path_analysis_conditional_leak() {
         let result = PathAnalysisResult::new(4, 2, 2, false);
-        assert!(!result.is_definite_leak(), "Expected condition to be true");
+        assert!(
+            !result.is_definite_leak(),
+            "Conditional leak should NOT be definite leak"
+        );
         assert!(
             result.is_conditional_leak(),
             "Some paths leaking is a conditional leak"
@@ -449,10 +456,13 @@ mod tests {
     #[test]
     fn test_path_analysis_no_leak() {
         let result = PathAnalysisResult::new(3, 0, 3, false);
-        assert!(!result.is_definite_leak(), "Expected condition to be true");
+        assert!(
+            !result.is_definite_leak(),
+            "No leak should NOT be definite leak"
+        );
         assert!(
             !result.is_conditional_leak(),
-            "Expected condition to be true"
+            "No leak should NOT be conditional leak"
         );
         assert_eq!(
             result.leak_confidence(),

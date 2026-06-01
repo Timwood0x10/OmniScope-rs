@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(
             result.kind,
             EscapeKind::ReturnToCaller,
-            "Expected values to be equal"
+            "ReturnToCaller context must produce ReturnToCaller escape kind"
         );
     }
 
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(
             result.contract,
             PointerContract::StaticLifetime,
-            "Expected values to be equal"
+            "StaticInit must produce StaticLifetime contract"
         );
     }
 

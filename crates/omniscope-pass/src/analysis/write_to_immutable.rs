@@ -221,12 +221,12 @@ mod tests {
         assert_eq!(
             pass.name(),
             "WriteToImmutable",
-            "Expected values to be equal"
+            "Pass name should be WriteToImmutable"
         );
         assert_eq!(
             pass.kind(),
             PassKind::Analysis,
-            "Expected values to be equal"
+            "Pass kind should be Analysis"
         );
     }
 
@@ -279,15 +279,15 @@ mod tests {
         let pass = WriteToImmutablePass::new();
         assert!(
             pass.is_function_parameter("func->param"),
-            "Expected condition to be true"
+            "func->param should be recognized as function parameter"
         );
         assert!(
             pass.is_function_parameter("func->arg"),
-            "Expected condition to be true"
+            "func->arg should be recognized as function parameter"
         );
         assert!(
             !pass.is_function_parameter("func->local"),
-            "Expected condition to be true"
+            "func->local should NOT be recognized as function parameter"
         );
     }
 }

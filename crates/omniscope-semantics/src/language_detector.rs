@@ -160,7 +160,7 @@ mod tests {
         let detector = LanguageDetector::new();
         assert!(
             !detector.patterns.is_empty(),
-            "Expected condition to be true"
+            "Language detector should have patterns"
         );
     }
 
@@ -169,10 +169,14 @@ mod tests {
         let detector = LanguageDetector::new();
 
         let lang = detector.detect_from_function("_ZN4core3str4len");
-        assert_eq!(lang, Language::Rust, "Expected values to be equal");
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust mangled name should be detected as Rust"
+        );
 
         let lang = detector.detect_from_module("lib.rs");
-        assert_eq!(lang, Language::Rust, "Expected values to be equal");
+        assert_eq!(lang, Language::Rust, "Rust file should be detected as Rust");
     }
 
     #[test]
@@ -180,10 +184,14 @@ mod tests {
         let detector = LanguageDetector::new();
 
         let lang = detector.detect_from_function("_Z3fooi");
-        assert_eq!(lang, Language::Cpp, "Expected values to be equal");
+        assert_eq!(
+            lang,
+            Language::Cpp,
+            "C++ mangled name should be detected as C++"
+        );
 
         let lang = detector.detect_from_module("main.cpp");
-        assert_eq!(lang, Language::Cpp, "Expected values to be equal");
+        assert_eq!(lang, Language::Cpp, "C++ file should be detected as C++");
     }
 
     #[test]
@@ -191,7 +199,7 @@ mod tests {
         let detector = LanguageDetector::new();
 
         let lang = detector.detect_from_module("main.c");
-        assert_eq!(lang, Language::C, "Expected values to be equal");
+        assert_eq!(lang, Language::C, "C file should be detected as C");
     }
 
     #[test]
@@ -201,6 +209,10 @@ mod tests {
         let functions = vec!["_ZN4core3str4len", "_ZN5alloc5alloc", "unknown_func"];
 
         let lang = detector.detect_from_functions(&functions);
-        assert_eq!(lang, Language::Rust, "Expected values to be equal");
+        assert_eq!(
+            lang,
+            Language::Rust,
+            "Rust functions should be detected as Rust"
+        );
     }
 }

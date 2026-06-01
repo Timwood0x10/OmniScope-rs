@@ -267,11 +267,15 @@ mod tests {
         assert_eq!(
             effect.family(),
             Some(FamilyId::RUST_GLOBAL),
-            "Expected values to be equal"
+            "Acquire effect must return its family"
         );
 
         let borrowed = Effect::ReturnsBorrowed;
-        assert_eq!(borrowed.family(), None, "Expected values to be equal");
+        assert_eq!(
+            borrowed.family(),
+            None,
+            "ReturnsBorrowed must have no family"
+        );
     }
 
     #[test]

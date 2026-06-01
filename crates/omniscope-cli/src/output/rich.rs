@@ -462,27 +462,27 @@ mod tests {
         assert_eq!(
             lang_label(omniscope_types::Language::C),
             "C",
-            "Expected values to be equal"
+            "C language should display as 'C'"
         );
         assert_eq!(
             lang_label(omniscope_types::Language::Cpp),
             "C++",
-            "Expected values to be equal"
+            "C++ language should display as 'C++'"
         );
         assert_eq!(
             lang_label(omniscope_types::Language::Rust),
             "Rust",
-            "Expected values to be equal"
+            "Rust language should display as 'Rust'"
         );
         assert_eq!(
             lang_label(omniscope_types::Language::Python),
             "Python",
-            "Expected values to be equal"
+            "Python language should display as 'Python'"
         );
         assert_eq!(
             lang_label(omniscope_types::Language::Unknown),
             "?",
-            "Expected values to be equal"
+            "Unknown language should display as '?'"
         );
     }
 
@@ -491,27 +491,27 @@ mod tests {
         assert_eq!(
             sanitize_ir_vars("'%call'"),
             "'return value'",
-            "Expected values to be equal"
+            "IR variable '%call' should be sanitized to 'return value'"
         );
         assert_eq!(
             sanitize_ir_vars("'%call2'"),
             "'return value'",
-            "Expected values to be equal"
+            "IR variable '%call2' should be sanitized to 'return value'"
         );
         assert_eq!(
             sanitize_ir_vars("'%0'"),
             "'<ir-reg>'",
-            "Expected values to be equal"
+            "IR variable '%0' should be sanitized to '<ir-reg>'"
         );
         assert_eq!(
             sanitize_ir_vars("no IR vars"),
             "no IR vars",
-            "Expected values to be equal"
+            "Text without IR variables should remain unchanged"
         );
         assert_eq!(
             sanitize_ir_vars("'%call' and '%1'"),
             "'return value' and '<ir-reg>'",
-            "Expected values to be equal"
+            "Multiple IR variables should be sanitized correctly"
         );
     }
 }
