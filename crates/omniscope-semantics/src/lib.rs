@@ -25,10 +25,12 @@ pub use resource::family_registry::{
     FamilyEntry, FamilyRegistry, ResourceFamilyOwned, SymbolEffect,
 };
 pub use resource::ffi_contract;
+pub use resource::go_adapter::{GoAdapter, GoFFISafety, GoFunctionAnalysis, GoSemanticPattern};
 pub use resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior, ReturnSource};
 pub use resource::ownership_state::{
     OwnershipError, OwnershipEvent, OwnershipState, ResourceInstance,
 };
+pub use resource::python_adapter::{PythonAdapter, PythonPattern, PythonSemantic};
 pub use resource::semantic_engine::{
     assess_ffi_safety, FFISafetyAssessment, FFIVerdict, IREvidence,
 };

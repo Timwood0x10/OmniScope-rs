@@ -153,6 +153,12 @@ omniscope analyze -i file.ll --load-strategy text-parser
 
 # Output as SARIF for GitHub Code Scanning
 omniscope analyze -i file.bc --format sarif -o results.sarif
+
+# Only show FFI boundary issues (cross-language memory safety)
+omniscope analyze -i file.bc --boundary-only
+
+# Boundary-only with short flag
+omniscope analyze -i file.bc -b
 ```
 
 ## Test Suite

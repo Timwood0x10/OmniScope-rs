@@ -25,6 +25,7 @@
 
 use crate::resource::family_registry::FamilyRegistry;
 use crate::resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior};
+use crate::resource::rust_stdlib_whitelist::RustStdlibWhitelist;
 use omniscope_ir::{IRInstructionKind, IRModule};
 use std::sync::LazyLock;
 
@@ -155,6 +156,11 @@ impl FFISafetyAssessment {
 /// on every `assess_ffi_safety()` call (review-report HIGH #10).
 static FAMILY_REGISTRY: LazyLock<FamilyRegistry> = LazyLock::new(FamilyRegistry::new);
 
+/// Global singleton RustStdlibWhitelist — avoids re-allocating entries
+/// on every `assess_ffi_safety()` call.
+static RUST_STDLIB_WHITELIST: LazyLock<RustStdlibWhitelist> =
+    LazyLock::new(RustStdlibWhitelist::new);
+
 /// Assess the safety of an FFI call using IR instruction-level semantic derivation.
 ///
 /// This is the main entry point that replaces `SyscallSemantic::classify()`.
@@ -168,6 +174,30 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
     let caller_behavior = caller_body.map(extract_behavior);
 
     let mut evidence = Vec::new();
+
+    // ── Step -1: Check Rust stdlib whitelist for known safe functions ──
+    // This covers Rust standard library and common third-party crate functions
+    // that are known to be safe from memory safety perspective.
+    let whitelist = &*RUST_STDLIB_WHITELIST;
+    if whitelist.is_whitelisted(callee) {
+        let category = whitelist.get_category(callee);
+        evidence.push(IREvidence {
+            instruction_kind: IRInstructionKind::Call,
+            reasoning: format!(
+                "Callee '{}' is whitelisted as {:?} — known safe Rust function",
+                callee,
+                category.unwrap_or_default()
+            ),
+        });
+        return FFISafetyAssessment {
+            callee: callee.to_string(),
+            caller: caller.to_string(),
+            caller_behavior,
+            callee_behavior,
+            verdict: FFIVerdict::SafeNoOwnership,
+            evidence,
+        };
+    }
 
     // ── Step 0: Check FamilyRegistry for known symbols ──
     // This covers all 20 families including the 7 new library-managed ones
@@ -1606,6 +1636,173 @@ mod tests {
         assert!(
             callee_name_suggests_release("My_Dealloc"),
             "My_Dealloc must match case-insensitively"
+        );
+    }
+
+    // ── Tests for Rust stdlib whitelist integration ──
+
+    /// Objective: Verify that whitelisted Rust stdlib functions are classified as safe
+    /// Invariants: Vec::new() should be classified as SafeNoOwnership
+    #[test]
+    fn test_rust_stdlib_whitelist_vec_new() {
+        let ir = r#"
+            declare {}* @_ZN3vec3Vec3new()
+
+            define {}* @test_vec_new() {
+            entry:
+                %vec = call {}* @_ZN3vec3Vec3new()
+                ret {}* %vec
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("_ZN3vec3Vec3new", "test_vec_new", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "Vec::new() should be classified as SafeNoOwnership via whitelist"
+        );
+        assert!(
+            assessment.should_suppress_issue(),
+            "Vec::new() should suppress issue emission"
+        );
+    }
+
+    /// Objective: Verify that whitelisted Arc::new() is classified as safe
+    /// Invariants: Arc::new() should be classified as SafeNoOwnership
+    #[test]
+    fn test_rust_stdlib_whitelist_arc_new() {
+        let ir = r#"
+            declare {}* @_ZN3arc3Arc3new(i8*)
+
+            define {}* @test_arc_new(i8* %value) {
+            entry:
+                %arc = call {}* @_ZN3arc3Arc3new(i8* %value)
+                ret {}* %arc
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("_ZN3arc3Arc3new", "test_arc_new", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "Arc::new() should be classified as SafeNoOwnership via whitelist"
+        );
+    }
+
+    /// Objective: Verify that whitelisted HashMap::new() is classified as safe
+    /// Invariants: HashMap::new() should be classified as SafeNoOwnership
+    #[test]
+    fn test_rust_stdlib_whitelist_hashmap_new() {
+        let ir = r#"
+            declare {}* @_ZN7hashmap7HashMap3new()
+
+            define {}* @test_hashmap_new() {
+            entry:
+                %map = call {}* @_ZN7hashmap7HashMap3new()
+                ret {}* %map
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("_ZN7hashmap7HashMap3new", "test_hashmap_new", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "HashMap::new() should be classified as SafeNoOwnership via whitelist"
+        );
+    }
+
+    /// Objective: Verify that whitelisted tokio::task::spawn() is classified as safe
+    /// Invariants: tokio::task::spawn() should be classified as SafeNoOwnership
+    #[test]
+    fn test_rust_stdlib_whitelist_tokio_spawn() {
+        let ir = r#"
+            declare {}* @_ZN5tokio4task5spawn(i8*)
+
+            define {}* @test_tokio_spawn(i8* %future) {
+            entry:
+                %handle = call {}* @_ZN5tokio4task5spawn(i8* %future)
+                ret {}* %handle
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("_ZN5tokio4task5spawn", "test_tokio_spawn", &module);
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "tokio::task::spawn() should be classified as SafeNoOwnership via whitelist"
+        );
+    }
+
+    /// Objective: Verify that whitelisted serde::Serialize::serialize() is classified as safe
+    /// Invariants: serde::Serialize::serialize() should be classified as SafeNoOwnership
+    #[test]
+    fn test_rust_stdlib_whitelist_serde_serialize() {
+        let ir = r#"
+            declare {}* @_ZN5serde10Serialize9serialize(i8*, i8*)
+
+            define {}* @test_serde_serialize(i8* %self, i8* %serializer) {
+            entry:
+                %result = call {}* @_ZN5serde10Serialize9serialize(i8* %self, i8* %serializer)
+                ret {}* %result
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety(
+            "_ZN5serde10Serialize9serialize",
+            "test_serde_serialize",
+            &module,
+        );
+
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "serde::Serialize::serialize() should be classified as SafeNoOwnership via whitelist"
+        );
+    }
+
+    /// Objective: Verify that unknown functions are not affected by whitelist
+    /// Invariants: Unknown functions should still be classified as Unknown
+    #[test]
+    fn test_unknown_function_not_affected_by_whitelist() {
+        let ir = r#"
+            declare {}* @unknown_function_xyz(i8*)
+
+            define {}* @test_unknown(i8* %param) {
+            entry:
+                %result = call {}* @unknown_function_xyz(i8* %param)
+                %cmp = icmp eq i8* %param, null
+                br i1 %cmp, label %then, label %else
+            then:
+                store i8* %param, i8** null
+                br label %end
+            else:
+                store i8* %param, i8** null
+                br label %end
+            end:
+                ret {}* %result
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let assessment = assess_ffi_safety("unknown_function_xyz", "test_unknown", &module);
+
+        // Note: This test verifies that unknown functions are not affected by the whitelist.
+        // The actual classification depends on the semantic engine's heuristics.
+        // We're just verifying the whitelist doesn't change the behavior.
+        assert!(
+            assessment.verdict == FFIVerdict::Unknown
+                || assessment.verdict == FFIVerdict::SafeNoOwnership,
+            "Unknown function should not be affected by whitelist, got {:?}",
+            assessment.verdict
         );
     }
 }

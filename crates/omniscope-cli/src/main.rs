@@ -72,6 +72,10 @@ struct AnalyzeCommand {
     /// IR loading strategy (auto, llvm-sys, cpp-pass, text-parser)
     #[arg(long, default_value = "auto")]
     strategy: String,
+
+    /// Only show FFI boundary issues (cross-language memory safety)
+    #[arg(short = 'b', long)]
+    boundary_only: bool,
 }
 
 #[derive(clap::Args)]
@@ -175,6 +179,13 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
         result.duration_ms()
     );
 
+    // Apply boundary-only filter if requested
+    let result = if cmd.boundary_only {
+        filter_boundary_issues(result)
+    } else {
+        result
+    };
+
     // Format output according to selected format
     let fmt = OutputFormat::from_str_ignore_case(&cmd.format);
     let output = match fmt {
@@ -220,6 +231,49 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     tracing::info!("Analysis completed in {:?}", duration);
 
     Ok(())
+}
+
+/// Filters pipeline result to only include FFI boundary issues.
+///
+/// This creates a new `PipelineResult` containing only issues that
+/// cross language boundaries (FFI safety issues). Local memory issues
+/// like double-free or use-after-free are excluded.
+fn filter_boundary_issues(
+    result: omniscope_pipeline::PipelineResult,
+) -> omniscope_pipeline::PipelineResult {
+    // Filter issues to only include FFI boundary issues
+    let boundary_issues: Vec<omniscope_core::Issue> = result
+        .issues
+        .into_iter()
+        .filter(|issue| issue.kind.is_ffi_boundary())
+        .collect();
+
+    // Create a new pipeline result with filtered issues
+    // We need to adjust the pass_results to reflect the filtered count
+    let mut filtered_pass_results = result.pass_results;
+    for pr in &mut filtered_pass_results {
+        // Count how many issues from this pass are boundary issues
+        // Note: We filter based on issue kind since we don't track which pass created which issue
+        let boundary_count = pr
+            .issues
+            .iter()
+            .filter(|issue| issue.kind.is_ffi_boundary())
+            .count();
+        pr.issues_found = boundary_count;
+        // Clear the issues vector since we'll use the aggregated boundary_issues
+        pr.issues.clear();
+    }
+
+    let total_nodes = filtered_pass_results.iter().map(|r| r.nodes_analyzed).sum();
+
+    omniscope_pipeline::PipelineResult {
+        pass_results: filtered_pass_results,
+        total_issues: boundary_issues.len(),
+        total_nodes,
+        duration: result.duration,
+        stats: result.stats,
+        issues: boundary_issues,
+    }
 }
 
 /// Runs the audit command — language-specific FFI audit.
@@ -311,4 +365,222 @@ fn run_info(cmd: InfoCommand) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omniscope_core::{Issue, IssueKind, Severity};
+    use omniscope_pass::PassResult;
+    use std::time::Duration;
+
+    /// Objective: Verify that boundary-only filter correctly filters FFI boundary issues.
+    /// Invariants: Only issues with FFI boundary kinds (CrossLanguageFree, OwnershipViolation, etc.) should remain.
+    #[test]
+    fn test_filter_boundary_issues() {
+        // Create test issues with mixed kinds
+        let issues = vec![
+            Issue::new(
+                1,
+                IssueKind::CrossLanguageFree,
+                Severity::Error,
+                "Rust frees C-allocated memory",
+            ),
+            Issue::new(
+                2,
+                IssueKind::DoubleFree,
+                Severity::Warning,
+                "Double free of allocation",
+            ),
+            Issue::new(
+                3,
+                IssueKind::OwnershipViolation,
+                Severity::Error,
+                "Ownership transfer violation across FFI",
+            ),
+            Issue::new(
+                4,
+                IssueKind::MemoryLeak,
+                Severity::Note,
+                "Memory leak in local scope",
+            ),
+            Issue::new(
+                5,
+                IssueKind::FfiTypeMismatch,
+                Severity::Warning,
+                "ABI type mismatch at boundary",
+            ),
+        ];
+
+        // Create a pass result with the issues
+        let mut pass_result = PassResult::new("FFIBoundary").with_nodes(10);
+        for issue in &issues {
+            pass_result.add_issue(issue.clone());
+        }
+
+        let pass_results = vec![pass_result];
+        let result = omniscope_pipeline::PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(100),
+        );
+
+        // Apply the filter
+        let filtered = filter_boundary_issues(result);
+
+        // Verify only FFI boundary issues remain
+        assert_eq!(
+            filtered.issues.len(),
+            3,
+            "Should have 3 FFI boundary issues (CrossLanguageFree, OwnershipViolation, FfiTypeMismatch)"
+        );
+
+        // Verify the correct issue kinds are present
+        let kinds: Vec<IssueKind> = filtered.issues.iter().map(|i| i.kind).collect();
+        assert!(
+            kinds.contains(&IssueKind::CrossLanguageFree),
+            "Filtered issues must contain CrossLanguageFree"
+        );
+        assert!(
+            kinds.contains(&IssueKind::OwnershipViolation),
+            "Filtered issues must contain OwnershipViolation"
+        );
+        assert!(
+            kinds.contains(&IssueKind::FfiTypeMismatch),
+            "Filtered issues must contain FfiTypeMismatch"
+        );
+
+        // Verify local memory issues are excluded
+        assert!(
+            !kinds.contains(&IssueKind::DoubleFree),
+            "Filtered issues must not contain DoubleFree"
+        );
+        assert!(
+            !kinds.contains(&IssueKind::MemoryLeak),
+            "Filtered issues must not contain MemoryLeak"
+        );
+
+        // Verify total count is updated
+        assert_eq!(
+            filtered.total_issues, 3,
+            "Total issues count must be updated to 3"
+        );
+    }
+
+    /// Objective: Verify that boundary-only filter handles empty issue list.
+    /// Invariants: Empty input should produce empty output with zero counts.
+    #[test]
+    fn test_filter_boundary_issues_empty() {
+        let pass_result = PassResult::new("FFIBoundary").with_nodes(5);
+        let result = omniscope_pipeline::PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(50),
+        );
+
+        let filtered = filter_boundary_issues(result);
+
+        assert!(
+            filtered.issues.is_empty(),
+            "Filtered issues must be empty when input has no issues"
+        );
+        assert_eq!(
+            filtered.total_issues, 0,
+            "Total issues must be 0 when no issues exist"
+        );
+    }
+
+    /// Objective: Verify that boundary-only filter handles all-local issues.
+    /// Invariants: When all issues are local memory issues, result should have zero boundary issues.
+    #[test]
+    fn test_filter_boundary_issues_all_local() {
+        let issues = vec![
+            Issue::new(
+                1,
+                IssueKind::DoubleFree,
+                Severity::Error,
+                "Double free detected",
+            ),
+            Issue::new(
+                2,
+                IssueKind::UseAfterFree,
+                Severity::Warning,
+                "Use after free detected",
+            ),
+            Issue::new(
+                3,
+                IssueKind::MemoryLeak,
+                Severity::Note,
+                "Memory leak detected",
+            ),
+        ];
+
+        let mut pass_result = PassResult::new("MemorySafety").with_nodes(15);
+        for issue in &issues {
+            pass_result.add_issue(issue.clone());
+        }
+
+        let result = omniscope_pipeline::PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(75),
+        );
+
+        let filtered = filter_boundary_issues(result);
+
+        assert!(
+            filtered.issues.is_empty(),
+            "Filtered issues must be empty when all issues are local memory issues"
+        );
+        assert_eq!(
+            filtered.total_issues, 0,
+            "Total issues must be 0 when no boundary issues exist"
+        );
+    }
+
+    /// Objective: Verify that boundary-only filter preserves issue details.
+    /// Invariants: Issue ID, severity, description, and other fields must be preserved.
+    #[test]
+    fn test_filter_boundary_issues_preserves_details() {
+        let issue = Issue::new(
+            42,
+            IssueKind::CrossLanguageFree,
+            Severity::Error,
+            "Critical: Rust frees C-allocated memory at FFI boundary",
+        )
+        .with_location(omniscope_core::IssueLocation::new(
+            std::path::PathBuf::from("ffi_bridge.rs"),
+            123,
+        ));
+
+        let mut pass_result = PassResult::new("FFIBoundary").with_nodes(8);
+        pass_result.add_issue(issue);
+
+        let result = omniscope_pipeline::PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(200),
+        );
+
+        let filtered = filter_boundary_issues(result);
+
+        assert_eq!(filtered.issues.len(), 1, "Must have exactly one issue");
+
+        let filtered_issue = &filtered.issues[0];
+        assert_eq!(filtered_issue.id, 42, "Issue ID must be preserved as 42");
+        assert_eq!(
+            filtered_issue.kind,
+            IssueKind::CrossLanguageFree,
+            "Issue kind must be preserved as CrossLanguageFree"
+        );
+        assert_eq!(
+            filtered_issue.severity,
+            Severity::Error,
+            "Issue severity must be preserved as Error"
+        );
+        assert!(
+            filtered_issue.description.contains("Critical"),
+            "Issue description must be preserved"
+        );
+        assert!(
+            filtered_issue.location.is_some(),
+            "Issue location must be preserved"
+        );
+    }
 }
