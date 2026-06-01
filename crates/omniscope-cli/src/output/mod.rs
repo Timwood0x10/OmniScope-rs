@@ -65,6 +65,7 @@ pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
         IssueKind::UncheckedReturn => "unchecked_return",
         IssueKind::FfiUnsafeCall => "ffi_unsafe_call",
         IssueKind::CallbackEscape => "callback_escape",
+        IssueKind::LengthTruncation => "length_truncation",
         IssueKind::DoubleFree => "double_free",
         IssueKind::UseAfterFree => "use_after_free",
         IssueKind::InvalidFree => "invalid_free",

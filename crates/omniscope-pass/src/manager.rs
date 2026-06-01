@@ -129,6 +129,11 @@ impl PassManager {
     /// The IR module is stored in the pass context so that passes like
     /// RawFactCollector can extract allocation/deallocation/FFI facts
     /// from the actual IR data.
+    ///
+    /// When an IR module is provided, a [`ModuleIndex`] is also built
+    /// and stored in the context. This pre-computes and caches common
+    /// metadata (language detection, registry lookups, call classification)
+    /// so that downstream passes avoid redundant computation.
     pub fn run_all_with_ir(
         &mut self,
         ir_module: Option<omniscope_ir::IRModule>,
@@ -136,6 +141,12 @@ impl PassManager {
         self.compute_order()?;
         let mut ctx = PassContext::new();
         if let Some(module) = ir_module {
+            // Build the shared instruction metadata cache before running passes.
+            // This performs a single traversal of module.calls, functions, and
+            // declarations, caching language detection, registry lookups, and
+            // classification results for all downstream passes.
+            let index = crate::module_index::ModuleIndex::build(&module);
+            ctx.store("module_index", index);
             ctx.store("ir_module", module);
         }
         let results = self.run_with_context(&mut ctx)?;

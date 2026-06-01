@@ -8,9 +8,11 @@
 //! - Noise reduction and FP precision guard
 //! - Resource contract passes (new architecture)
 //! - Pass manager for orchestration
+//! - Shared instruction metadata cache (ModuleIndex) for performance
 
 pub mod analysis;
 pub mod manager;
+pub mod module_index;
 pub mod pass;
 pub mod resource;
 
@@ -37,4 +39,5 @@ pub use resource::summary_builder::SummaryBuilderPass;
 
 // Re-exports — Infrastructure
 pub use manager::PassManager;
+pub use module_index::ModuleIndex;
 pub use pass::{Pass, PassContext, PassKind, PassResult};

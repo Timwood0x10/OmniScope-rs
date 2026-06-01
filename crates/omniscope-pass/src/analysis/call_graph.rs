@@ -61,67 +61,127 @@ impl Pass for CallGraphPass {
             }
         };
 
-        let detector = LanguageDetector::new();
         let mut nodes: Vec<CallGraphNode> = Vec::new();
         let mut edges: Vec<CallGraphEdge> = Vec::new();
         let mut cross_lang_edges: Vec<CrossLangEdge> = Vec::new();
 
-        // Phase 1: Build function nodes from definitions and declarations
-        for (name, func) in &module.functions {
-            let language = detector.detect_from_function(name);
-            let kind = classify_function(name, false, language);
-            nodes.push(CallGraphNode {
-                name: name.clone(),
-                kind,
-                param_count: func.params.len(),
-                is_declaration: func.is_declaration,
-                language: Some(language),
-            });
-        }
+        // Try to use ModuleIndex for cached language detection
+        let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
 
-        for (name, func) in &module.declarations {
-            let language = detector.detect_from_function(name);
-            let kind = classify_function(name, true, language);
-            nodes.push(CallGraphNode {
-                name: name.clone(),
-                kind,
-                param_count: func.params.len(),
-                is_declaration: func.is_declaration,
-                language: Some(language),
-            });
-        }
-
-        // Phase 2: Build edges from call instructions
-        for call in &module.calls {
-            let caller_lang = detector.detect_from_function(&call.caller);
-            let callee_lang = detector.detect_from_function(&call.callee);
-            let is_cross_lang = caller_lang != Language::Unknown
-                && callee_lang != Language::Unknown
-                && caller_lang != callee_lang;
-
-            edges.push(CallGraphEdge {
-                caller: call.caller.clone(),
-                callee: call.callee.clone(),
-                is_cross_lang,
-                caller_lang: Some(caller_lang),
-                callee_lang: Some(callee_lang),
-            });
-
-            // Phase 3: Detect FFI boundaries from cross-language edges
-            if is_cross_lang {
-                let is_ffi = is_ffi_boundary(&call.caller, &call.callee, caller_lang, callee_lang);
-                cross_lang_edges.push(CrossLangEdge {
-                    caller_name: call.caller.clone(),
-                    callee_name: call.callee.clone(),
-                    is_ffi_boundary: is_ffi,
-                    caller_lang,
-                    callee_lang,
-                    calling_convention: None, // populated later by FFIBoundaryPass
+        if let Some(ref index) = module_index {
+            // Fast path: use pre-computed metadata from ModuleIndex
+            // Phase 1: Build function nodes from cached function metadata
+            for (name, meta) in &index.function_metas {
+                let kind = classify_function(name, meta.is_declaration, meta.language);
+                nodes.push(CallGraphNode {
+                    name: name.clone(),
+                    kind,
+                    param_count: meta.param_count,
+                    is_declaration: meta.is_declaration,
+                    language: Some(meta.language),
                 });
-                debug!(
-                    "CrossLangEdge: {} ({:?}) -> {} ({:?}), ffi={}",
-                    call.caller, caller_lang, call.callee, callee_lang, is_ffi
-                );
+            }
+
+            // Phase 2: Build edges from cached call metadata
+            for call_meta in &index.call_metas {
+                let is_cross_lang = call_meta.is_cross_language;
+
+                edges.push(CallGraphEdge {
+                    caller: call_meta.caller_name.clone(),
+                    callee: call_meta.callee_name.clone(),
+                    is_cross_lang,
+                    caller_lang: Some(call_meta.caller_lang),
+                    callee_lang: Some(call_meta.callee_lang),
+                });
+
+                // Phase 3: Detect FFI boundaries from cross-language edges
+                if is_cross_lang {
+                    let is_ffi = is_ffi_boundary(
+                        &call_meta.caller_name,
+                        &call_meta.callee_name,
+                        call_meta.caller_lang,
+                        call_meta.callee_lang,
+                    );
+                    cross_lang_edges.push(CrossLangEdge {
+                        caller_name: call_meta.caller_name.clone(),
+                        callee_name: call_meta.callee_name.clone(),
+                        is_ffi_boundary: is_ffi,
+                        caller_lang: call_meta.caller_lang,
+                        callee_lang: call_meta.callee_lang,
+                        calling_convention: None,
+                    });
+                    debug!(
+                        "CrossLangEdge: {} ({:?}) -> {} ({:?}), ffi={}",
+                        call_meta.caller_name,
+                        call_meta.caller_lang,
+                        call_meta.callee_name,
+                        call_meta.callee_lang,
+                        is_ffi
+                    );
+                }
+            }
+        } else {
+            // Fallback path: recompute metadata (legacy behavior)
+            let detector = LanguageDetector::new();
+
+            // Phase 1: Build function nodes from definitions and declarations
+            for (name, func) in &module.functions {
+                let language = detector.detect_from_function(name);
+                let kind = classify_function(name, false, language);
+                nodes.push(CallGraphNode {
+                    name: name.clone(),
+                    kind,
+                    param_count: func.params.len(),
+                    is_declaration: func.is_declaration,
+                    language: Some(language),
+                });
+            }
+
+            for (name, func) in &module.declarations {
+                let language = detector.detect_from_function(name);
+                let kind = classify_function(name, true, language);
+                nodes.push(CallGraphNode {
+                    name: name.clone(),
+                    kind,
+                    param_count: func.params.len(),
+                    is_declaration: func.is_declaration,
+                    language: Some(language),
+                });
+            }
+
+            // Phase 2: Build edges from call instructions
+            for call in &module.calls {
+                let caller_lang = detector.detect_from_function(&call.caller);
+                let callee_lang = detector.detect_from_function(&call.callee);
+                let is_cross_lang = caller_lang != Language::Unknown
+                    && callee_lang != Language::Unknown
+                    && caller_lang != callee_lang;
+
+                edges.push(CallGraphEdge {
+                    caller: call.caller.clone(),
+                    callee: call.callee.clone(),
+                    is_cross_lang,
+                    caller_lang: Some(caller_lang),
+                    callee_lang: Some(callee_lang),
+                });
+
+                // Phase 3: Detect FFI boundaries from cross-language edges
+                if is_cross_lang {
+                    let is_ffi =
+                        is_ffi_boundary(&call.caller, &call.callee, caller_lang, callee_lang);
+                    cross_lang_edges.push(CrossLangEdge {
+                        caller_name: call.caller.clone(),
+                        callee_name: call.callee.clone(),
+                        is_ffi_boundary: is_ffi,
+                        caller_lang,
+                        callee_lang,
+                        calling_convention: None,
+                    });
+                    debug!(
+                        "CrossLangEdge: {} ({:?}) -> {} ({:?}), ffi={}",
+                        call.caller, caller_lang, call.callee, callee_lang, is_ffi
+                    );
+                }
             }
         }
 
@@ -194,6 +254,11 @@ fn classify_function(name: &str, is_declaration: bool, language: Language) -> Fu
 /// Check if a function name is a language runtime intrinsic.
 ///
 /// Runtime intrinsics should not be treated as user FFI boundaries.
+///
+/// Note: For C++, we only filter actual compiler/runtime support functions
+/// (`__cxxabiv1::*`, `__cxa_*`), NOT all `_Z`-prefixed mangled names.
+/// User C++ functions like `_ZdlPv` (operator delete) are legitimate FFI
+/// boundaries when called from C code.
 fn is_runtime_intrinsic(name: &str, language: Language) -> bool {
     match language {
         Language::Rust => {
@@ -207,7 +272,12 @@ fn is_runtime_intrinsic(name: &str, language: Language) -> bool {
                 || name.starts_with("_Unwind_")
                 || name.starts_with("_tlv_")
         }
-        Language::Cpp => name.starts_with("_Z") || name.starts_with("__cxxabiv1"),
+        Language::Cpp => {
+            // Only filter actual compiler runtime support, not all _Z mangled names
+            name.starts_with("__cxxabiv1")
+                || name.starts_with("__cxa_")
+                || name.starts_with("__gxx_")
+        }
         _ => false,
     }
 }

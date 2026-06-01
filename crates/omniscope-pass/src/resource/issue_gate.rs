@@ -22,6 +22,18 @@
 //! | CrossLanguageFree     | File/Network/ProcessOp     | R-4  |
 //! | CrossLanguageFree     | LibraryRelease             | R-7  |
 //! | DoubleFree            | RaiiDropRelease            | R-3  |
+//! | UncheckedReturn       | HeapProvenance (allocator) | R-9  |
+//! | FfiUnsafeCall         | File/Network/ProcessOp     | R-4  |
+//! | FfiUnsafeCall         | LibraryRelease             | R-7  |
+//! | FfiUnsafeCall         | IntoRawTransfer            | R-6  |
+//! | FfiUnsafeCall         | RaiiDropRelease            | R-3  |
+//! | FfiUnsafeCall         | HeapProvenance/GlobalProvenance | R-1 |
+//! | FfiUnsafeCall         | FromParameter              | R-8  |
+//! | FfiUnsafeCall         | CppDestructor/UniquePtr/SharedPtr | C++ RAII |
+//! | FfiUnsafeCall         | GoDeferCleanup/GoFinalizer | Go cleanup |
+//! | FfiUnsafeCall         | PythonRefcount*/BorrowedRef/OwnedRef/GilProtected | Python |
+//! | FfiUnsafeCall         | CsharpSafeHandle/CsharpFinalizer | C# SafeHandle |
+//! | FfiUnsafeCall         | JavaLocalRef/GlobalRef/WeakRef | Java JNI |
 
 use omniscope_core::Issue;
 use omniscope_semantics::SemanticKind;
@@ -49,6 +61,9 @@ pub enum GateVerdict {
     SuppressLibraryRelease,
     /// Issue suppressed because the pointer comes from a function parameter (R-8).
     SuppressFromParameter,
+    /// Issue suppressed because the callee is a known allocator (R-9).
+    /// Suppresses UncheckedReturn for malloc/calloc/aligned_alloc etc.
+    SuppressAllocatorReturn,
 }
 
 impl GateVerdict {
@@ -75,6 +90,9 @@ impl GateVerdict {
             }
             GateVerdict::SuppressFromParameter => {
                 "R-8: pointer from function parameter, not stack escape"
+            }
+            GateVerdict::SuppressAllocatorReturn => {
+                "R-9: callee is a system/library allocator, unchecked return is expected noise"
             }
         }
     }
@@ -152,6 +170,19 @@ where
             return GateVerdict::SuppressRaii;
         }
 
+        // ── UncheckedReturn: R-9 allocator provenance ──
+        // System/library allocators (malloc, calloc, aligned_alloc, etc.) are
+        // expected to be used without explicit null checks in many codebases.
+        // Suppressing when HeapProvenance is detected covers these cases.
+        omniscope_core::IssueKind::UncheckedReturn => {
+            if has_kind(key, SemanticKind::HeapProvenance) {
+                return GateVerdict::SuppressAllocatorReturn;
+            }
+            if has_kind(key, SemanticKind::GoRuntimeAlloc) {
+                return GateVerdict::SuppressAllocatorReturn;
+            }
+        }
+
         // ── CrossFamilyFree: same logic as CrossLanguageFree ──
         omniscope_core::IssueKind::CrossFamilyFree => {
             if has_kind(key, SemanticKind::IntoRawTransfer) {
@@ -169,12 +200,71 @@ where
         }
 
         // ── FfiUnsafeCall: suppress for non-memory syscalls and safe patterns ──
-        omniscope_core::IssueKind::FfiUnsafeCall
+        omniscope_core::IssueKind::FfiUnsafeCall => {
+            // R-4: POSIX non-memory syscalls
             if has_kind(key, SemanticKind::FileOperation)
                 || has_kind(key, SemanticKind::NetworkOperation)
-                || has_kind(key, SemanticKind::ProcessOperation) =>
-        {
-            return GateVerdict::SuppressNonMemorySyscall;
+                || has_kind(key, SemanticKind::ProcessOperation)
+            {
+                return GateVerdict::SuppressNonMemorySyscall;
+            }
+            // R-7: Library allocator releases (zlib/openssl/sqlite/mimalloc)
+            if has_kind(key, SemanticKind::LibraryRelease) {
+                return GateVerdict::SuppressLibraryRelease;
+            }
+            // R-6: Ownership transfer via into_raw
+            if has_kind(key, SemanticKind::IntoRawTransfer) {
+                return GateVerdict::SuppressOwnershipTransfer;
+            }
+            // R-3: RAII drop/dealloc patterns
+            if has_kind(key, SemanticKind::RaiiDropRelease) {
+                return GateVerdict::SuppressRaii;
+            }
+            // R-1: Heap/global provenance (not a stack escape)
+            if has_kind(key, SemanticKind::HeapProvenance)
+                || has_kind(key, SemanticKind::GlobalProvenance)
+            {
+                return GateVerdict::SuppressHeapOrigin;
+            }
+            // R-8: From function parameter (not stack escape)
+            if has_kind(key, SemanticKind::FromParameter) {
+                return GateVerdict::SuppressFromParameter;
+            }
+            // C++ RAII patterns (destructor, smart pointers)
+            if has_kind(key, SemanticKind::CppDestructor)
+                || has_kind(key, SemanticKind::CppUniquePtr)
+                || has_kind(key, SemanticKind::CppSharedPtr)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Go cleanup patterns (defer, finalizer)
+            if has_kind(key, SemanticKind::GoDeferCleanup)
+                || has_kind(key, SemanticKind::GoFinalizer)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Python reference counting patterns
+            if has_kind(key, SemanticKind::PythonRefcountInc)
+                || has_kind(key, SemanticKind::PythonRefcountDec)
+                || has_kind(key, SemanticKind::PythonBorrowedRef)
+                || has_kind(key, SemanticKind::PythonOwnedRef)
+                || has_kind(key, SemanticKind::PythonGilProtected)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // C# SafeHandle and finalizer patterns
+            if has_kind(key, SemanticKind::CsharpSafeHandle)
+                || has_kind(key, SemanticKind::CsharpFinalizer)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Java JNI reference patterns
+            if has_kind(key, SemanticKind::JavaLocalRef)
+                || has_kind(key, SemanticKind::JavaGlobalRef)
+                || has_kind(key, SemanticKind::JavaWeakRef)
+            {
+                return GateVerdict::SuppressRaii;
+            }
         }
 
         // Other issue kinds have no SRT-based suppression yet.
@@ -362,11 +452,40 @@ mod tests {
             GateVerdict::SuppressNonMemorySyscall,
             GateVerdict::SuppressLibraryRelease,
             GateVerdict::SuppressFromParameter,
+            GateVerdict::SuppressAllocatorReturn,
         ] {
             assert!(
                 !verdict.reason().is_empty(),
                 "reason should not be empty for {verdict:?}"
             );
         }
+    }
+
+    /// Objective: Verify UncheckedReturn with heap provenance (allocator) is suppressed.
+    /// Invariants: malloc/calloc return values flagged as UncheckedReturn must be suppressed.
+    #[test]
+    fn test_gate_suppresses_unchecked_return_allocator() {
+        let issue = make_issue(IssueKind::UncheckedReturn, "malloc");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "malloc" && kind == SemanticKind::HeapProvenance
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressAllocatorReturn,
+            "UncheckedReturn for system allocator (malloc) must be suppressed"
+        );
+    }
+
+    /// Objective: Verify UncheckedReturn without heap provenance passes the gate.
+    /// Invariants: Non-allocator FFI calls still produce UncheckedReturn.
+    #[test]
+    fn test_gate_allows_unchecked_return_non_allocator() {
+        let issue = make_issue(IssueKind::UncheckedReturn, "fopen");
+        let verdict = check_issue(&issue, |_, _| false);
+        assert_eq!(
+            verdict,
+            GateVerdict::Allow,
+            "UncheckedReturn for non-allocator FFI (fopen) must pass the gate"
+        );
     }
 }

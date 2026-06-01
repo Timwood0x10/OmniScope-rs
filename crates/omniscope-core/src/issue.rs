@@ -41,6 +41,10 @@ pub enum IssueKind {
     /// Callback escape across language boundary.
     CallbackEscape,
 
+    // === Length/Size Truncation Issues ===
+    /// Length truncation (e.g., usize → uint32_t, size_t → int).
+    LengthTruncation,
+
     // === Local-Only Memory Issues (10% auxiliary priority) ===
     /// Double free of the same allocation.
     DoubleFree,
@@ -101,6 +105,7 @@ impl IssueKind {
                 | IssueKind::UncheckedReturn
                 | IssueKind::FfiUnsafeCall
                 | IssueKind::CallbackEscape
+                | IssueKind::LengthTruncation
         )
     }
 
@@ -157,6 +162,7 @@ impl IssueKind {
             IssueKind::UncheckedReturn => Some(252), // CWE-252: Unchecked Return Value
             IssueKind::FfiUnsafeCall => Some(119), // CWE-119: Improper Restriction of Memory Buffer Operations
             IssueKind::CallbackEscape => Some(749), // CWE-749: Exposed Dangerous Method or Function
+            IssueKind::LengthTruncation => Some(197), // CWE-197: Numeric Truncation Error
             // Local memory issues
             IssueKind::DoubleFree => Some(415), // CWE-415: Double Free
             IssueKind::UseAfterFree => Some(416), // CWE-416: Use After Free

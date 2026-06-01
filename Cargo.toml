@@ -56,6 +56,10 @@ harness = false
 name = "memory_pool"
 harness = false
 
+[[bench]]
+name = "regression_bench"
+harness = false
+
 [workspace]
 members = [
     "crates/omniscope-core",
@@ -103,6 +107,9 @@ indexmap = "2.2"
 
 # === Date/Time ===
 chrono = { version = "0.4", features = ["serde"] }
+
+# === Compile-time Hash Maps ===
+phf = { version = "0.11", features = ["macros"] }
 
 # === Logging ===
 tracing = "0.1"

@@ -109,8 +109,11 @@ fn scan_function_body(
                     if is_declared || is_ffi {
                         // Only track pointer-returning calls — non-pointer returns can't be null
                         if returns_pointer(&inst.raw_text) {
-                            // Skip known non-null APIs
-                            if !is_non_null_api(callee_name) {
+                            // Skip known non-null APIs and system allocators
+                            // System allocators (malloc, calloc, etc.) generate excessive
+                            // noise when flagged for unchecked returns because OOM handling
+                            // is typically done at a higher layer.
+                            if !is_non_null_api(callee_name) && !is_system_allocator(callee_name) {
                                 // If the call returns into a register, track it
                                 if let Some(ref dest) = inst.dest {
                                     ffi_return_regs.insert(dest.clone());
@@ -350,6 +353,43 @@ fn is_non_null_api(name: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Known system and library allocator functions.
+///
+/// These are standard memory allocation APIs whose return values are
+/// commonly used without explicit null checks in production code.
+/// Reporting unchecked returns for these generates excessive noise
+/// (false positives) because:
+/// - OOM handling is often done at a higher layer (panic handler, abort)
+/// - Allocation wrappers handle null returns internally
+/// - The code pattern may include checks the static analyzer cannot see
+///
+/// This is NOT a whitelist — it covers well-known system-level allocator
+/// APIs that are structurally identical across all codebases.
+fn is_system_allocator(name: &str) -> bool {
+    matches!(
+        name,
+        // C standard library allocators
+        "malloc" | "calloc" | "realloc" | "aligned_alloc"
+            | "posix_memalign" | "valloc" | "pvalloc" | "memalign"
+            // Windows allocators
+            | "HeapAlloc" | "HeapReAlloc" | "LocalAlloc" | "LocalReAlloc"
+            | "GlobalAlloc" | "GlobalReAlloc" | "VirtualAlloc"
+            // mimalloc
+            | "mi_malloc" | "mi_calloc" | "mi_realloc" | "mi_zalloc"
+            | "mi_malloc_aligned" | "mi_realloc_aligned"
+            | "mi_malloc_aligned_ctz"
+            // jemalloc
+            | "je_malloc" | "je_calloc" | "je_realloc" | "je_mallocx"
+            | "je_rallocx" | "je_xallocx"
+            // tcmalloc
+            | "tc_malloc" | "tc_calloc" | "tc_realloc"
+            | "tc_malloc_skip_new_handler" | "tc_malloc_nothrow"
+    ) || name.starts_with("__rust_alloc")
+        || name.starts_with("mi_")
+        || name.starts_with("je_")
+        || name.starts_with("tc_")
 }
 
 /// Functions that are null-sinks — passing a null pointer to them
@@ -650,6 +690,122 @@ mod tests {
             result.get_issues().is_empty(),
             "Box::into_raw must NOT produce FFI unchecked return issues, got {} issues",
             result.get_issues().len()
+        );
+    }
+
+    /// FP guard: System allocators (malloc, calloc, aligned_alloc) are skipped
+    /// to suppress malloc_unchecked noise. OOM handling is typically at a higher layer.
+    #[test]
+    fn test_e2e_system_allocator_suppressed() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        // malloc without null check — should NOT produce UncheckedReturn
+        let ir = r#"
+            declare ptr @malloc(i64)
+            declare ptr @calloc(i64, i64)
+            declare ptr @aligned_alloc(i64, i64)
+
+            define void @alloc_patterns() {
+                %p1 = call ptr @malloc(i64 100)
+                %v1 = load i8, ptr %p1
+                %p2 = call ptr @calloc(i64 10, i64 10)
+                %v2 = load i8, ptr %p2
+                %p3 = call ptr @aligned_alloc(i64 16, i64 256)
+                %v3 = load i8, ptr %p3
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let unchecked_issues: Vec<_> = result
+            .get_issues()
+            .iter()
+            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .collect();
+        assert!(
+            unchecked_issues.is_empty(),
+            "System allocators (malloc/calloc/aligned_alloc) must NOT produce UncheckedReturn issues, got {} issues",
+            unchecked_issues.len()
+        );
+    }
+
+    /// FP guard: mimalloc / jemalloc / tcmalloc allocators are skipped.
+    #[test]
+    fn test_e2e_custom_allocator_suppressed() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        let ir = r#"
+            declare ptr @mi_malloc(i64)
+            declare ptr @je_malloc(i64)
+            declare ptr @tc_malloc(i64)
+
+            define void @custom_alloc() {
+                %p1 = call ptr @mi_malloc(i64 64)
+                %v1 = load i8, ptr %p1
+                %p2 = call ptr @je_malloc(i64 128)
+                %v2 = load i8, ptr %p2
+                %p3 = call ptr @tc_malloc(i64 256)
+                %v3 = load i8, ptr %p3
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let unchecked_issues: Vec<_> = result
+            .get_issues()
+            .iter()
+            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .collect();
+        assert!(
+            unchecked_issues.is_empty(),
+            "Custom allocators (mi_malloc/je_malloc/tc_malloc) must NOT produce UncheckedReturn issues, got {} issues",
+            unchecked_issues.len()
+        );
+    }
+
+    /// TP: Non-allocator FFI calls returning ptr still produce UncheckedReturn.
+    #[test]
+    fn test_e2e_non_allocator_still_detected() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        // fopen is NOT an allocator — should still be flagged
+        let ir = r#"
+            declare ptr @fopen(ptr, ptr)
+
+            define void @file_open() {
+                %f = call ptr @fopen(ptr %path, ptr %mode)
+                %v = load i8, ptr %f
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let unchecked_issues: Vec<_> = result
+            .get_issues()
+            .iter()
+            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .collect();
+        assert!(
+            !unchecked_issues.is_empty(),
+            "Non-allocator FFI (fopen) must still produce UncheckedReturn issue"
         );
     }
 }

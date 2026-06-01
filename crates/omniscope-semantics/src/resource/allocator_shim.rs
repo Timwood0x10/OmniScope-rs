@@ -50,6 +50,11 @@ impl AllocatorShimDetector {
             "jemalloc_".to_string(), // jemalloc (full name)
             "tcmalloc_".to_string(), // tcmalloc (full name)
             "mimalloc_".to_string(), // mimalloc (full name)
+            "_R".to_string(),        // Rust v0 mangling (used by modern Rust)
+            "_ZN".to_string(),       // C++ Itanium mangling (also used by Rust)
+            "__rust_".to_string(),   // Rust runtime intrinsics
+            "__rdl_".to_string(),    // Rust allocator variants
+            "__rg_".to_string(),     // Rust allocator variants
         ]
         .into_iter()
         .collect();
@@ -260,8 +265,14 @@ impl AllocatorShimDetector {
 
     /// Checks if a function name is a Rust allocator.
     ///
-    /// Returns true for Rust compiler intrinsics and standard library
-    /// allocator functions.
+    /// Returns true for Rust compiler intrinsics, standard library
+    /// allocator functions, and mangled Rust names.
+    ///
+    /// # Detection Strategy
+    ///
+    /// 1. **Exact matches** for compiler intrinsics (`__rust_alloc`, etc.)
+    /// 2. **Exact matches** for standard library allocators (`alloc::alloc::alloc`, etc.)
+    /// 3. **Prefix matches** for mangled Rust names (`_R`, `_ZN5alloc`, etc.)
     ///
     /// # Examples
     ///
@@ -271,15 +282,21 @@ impl AllocatorShimDetector {
     /// let detector = AllocatorShimDetector::new();
     /// assert!(detector.is_rust_allocator("__rust_alloc"));
     /// assert!(detector.is_rust_allocator("std::alloc::alloc"));
+    /// assert!(detector.is_rust_allocator("_RNvXs_NtC...4alloc5boxed8Box3i328into_raw"));
     /// assert!(!detector.is_rust_allocator("malloc"));
     /// ```
     pub fn is_rust_allocator(&self, func_name: &str) -> bool {
-        matches!(
+        // Exact matches for compiler intrinsics and standard library allocators
+        if matches!(
             func_name,
             "__rust_alloc"
                 | "__rust_dealloc"
                 | "__rust_realloc"
                 | "__rust_alloc_zeroed"
+                | "__rdl_alloc"
+                | "__rdl_dealloc"
+                | "__rg_alloc"
+                | "__rg_dealloc"
                 | "alloc::alloc::alloc"
                 | "alloc::alloc::dealloc"
                 | "alloc::alloc::realloc"
@@ -288,7 +305,28 @@ impl AllocatorShimDetector {
                 | "std::alloc::dealloc"
                 | "std::alloc::realloc"
                 | "std::alloc::alloc_zeroed"
-        )
+        ) {
+            return true;
+        }
+
+        // Prefix matches for mangled Rust names
+        // Modern Rust v0 mangling (used by Rust 1.37+)
+        if func_name.starts_with("_R") {
+            return true;
+        }
+
+        // Rust Itanium mangling (older Rust)
+        if func_name.starts_with("_ZN4core")
+            || func_name.starts_with("_ZN5alloc")
+            || func_name.starts_with("_ZN3std")
+            || func_name.starts_with("_ZN7cstring")
+            || func_name.starts_with("_ZN12alloc")
+            || func_name.starts_with("_ZN9alloc1raw8dealloc17h")
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Checks if a function name is a custom allocator shim.
@@ -406,7 +444,7 @@ mod tests {
     }
 
     /// Objective: Verify Rust allocator detection works correctly.
-    /// Invariants: All Rust compiler intrinsics and std allocators are recognized.
+    /// Invariants: All Rust compiler intrinsics, std allocators, and mangled names are recognized.
     #[test]
     fn test_rust_allocator_detection() {
         let detector = AllocatorShimDetector::new();
@@ -429,6 +467,24 @@ mod tests {
             "__rust_alloc_zeroed should be recognized as Rust allocator"
         );
 
+        // Additional compiler intrinsics (Rust allocator variants)
+        assert!(
+            detector.is_rust_allocator("__rdl_alloc"),
+            "__rdl_alloc should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("__rdl_dealloc"),
+            "__rdl_dealloc should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("__rg_alloc"),
+            "__rg_alloc should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("__rg_dealloc"),
+            "__rg_dealloc should be recognized as Rust allocator"
+        );
+
         // Standard library allocators
         assert!(
             detector.is_rust_allocator("std::alloc::alloc"),
@@ -437,6 +493,42 @@ mod tests {
         assert!(
             detector.is_rust_allocator("alloc::alloc::dealloc"),
             "alloc::alloc::dealloc should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("alloc::alloc::alloc_zeroed"),
+            "alloc::alloc::alloc_zeroed should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("std::alloc::realloc"),
+            "std::alloc::realloc should be recognized as Rust allocator"
+        );
+
+        // Mangled Rust names (Modern Rust v0 mangling)
+        assert!(
+            detector.is_rust_allocator("_RNvXs_NtC...4alloc5boxed8Box3i328into_raw"),
+            "_RNvXs_NtC...4alloc5boxed8Box3i328into_raw should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("_R4alloc5alloc5alloc17h"),
+            "_R4alloc5alloc5alloc17h should be recognized as Rust allocator"
+        );
+
+        // Mangled Rust names (Itanium mangling)
+        assert!(
+            detector.is_rust_allocator("_ZN5alloc5alloc5alloc17h"),
+            "_ZN5alloc5alloc5alloc17h should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("_ZN4core3ptr7drop_in_place17h"),
+            "_ZN4core3ptr7drop_in_place17h should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("_ZN3std9panicking5alloc17h"),
+            "_ZN3std9panicking5alloc17h should be recognized as Rust allocator"
+        );
+        assert!(
+            detector.is_rust_allocator("_ZN9alloc1raw8dealloc17h"),
+            "_ZN9alloc1raw8dealloc17h should be recognized as Rust allocator"
         );
 
         // Negative cases
@@ -447,6 +539,10 @@ mod tests {
         assert!(
             !detector.is_rust_allocator("mi_malloc"),
             "mi_malloc should not be recognized as Rust allocator"
+        );
+        assert!(
+            !detector.is_rust_allocator("custom_alloc"),
+            "custom_alloc should not be recognized as Rust allocator"
         );
     }
 
@@ -884,7 +980,7 @@ mod tests {
         /// - Rust allocators cannot be recognized as custom allocators
         #[test]
         fn prop_rust_allocators_are_not_custom(
-            func_name in "(__rust_alloc|__rust_dealloc|__rust_realloc|__rust_alloc_zeroed|alloc::alloc::alloc|alloc::alloc::dealloc|alloc::alloc::realloc|alloc::alloc::alloc_zeroed|std::alloc::alloc|std::alloc::dealloc|std::alloc::realloc|std::alloc::alloc_zeroed)"
+            func_name in "(__rust_alloc|__rust_dealloc|__rust_realloc|__rust_alloc_zeroed|__rdl_alloc|__rdl_dealloc|__rg_alloc|__rg_dealloc|alloc::alloc::alloc|alloc::alloc::dealloc|alloc::alloc::realloc|alloc::alloc::alloc_zeroed|std::alloc::alloc|std::alloc::dealloc|std::alloc::realloc|std::alloc::alloc_zeroed|_RNvXs_NtC...4alloc5boxed8Box3i328into_raw|_ZN5alloc5alloc5alloc17h|_ZN4core3ptr7drop_in_place17h|_ZN3std9panicking5alloc17h)"
         ) {
             // Property: Rust allocators should not be recognized as custom allocators
             let detector = AllocatorShimDetector::new();
@@ -915,11 +1011,12 @@ mod tests {
             let detector = AllocatorShimDetector::new();
 
             // Skip known prefixes and functions
-            let known_prefixes = ["mi_", "je_", "tc_", "mi", "je", "tc", "jemalloc_", "tcmalloc_", "mimalloc_"];
+            let known_prefixes = ["mi_", "je_", "tc_", "mi", "je", "tc", "jemalloc_", "tcmalloc_", "mimalloc_", "_R", "_ZN4core", "_ZN5alloc", "_ZN3std", "_ZN7cstring", "_ZN12alloc", "_ZN9alloc1raw8dealloc17h"];
             let known_functions = [
                 "malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "valloc", "pvalloc", "memalign", "aligned_free",
                 "HeapAlloc", "HeapFree", "HeapReAlloc", "LocalAlloc", "LocalFree", "LocalReAlloc", "GlobalAlloc", "GlobalFree", "GlobalReAlloc", "VirtualAlloc", "VirtualFree",
                 "__rust_alloc", "__rust_dealloc", "__rust_realloc", "__rust_alloc_zeroed",
+                "__rdl_alloc", "__rdl_dealloc", "__rg_alloc", "__rg_dealloc",
                 "alloc::alloc::alloc", "alloc::alloc::dealloc", "alloc::alloc::realloc", "alloc::alloc::alloc_zeroed",
                 "std::alloc::alloc", "std::alloc::dealloc", "std::alloc::realloc", "std::alloc::alloc_zeroed",
                 "mi_malloc", "mi_free", "mi_calloc", "mi_realloc", "mi_zalloc", "mi_malloc_aligned", "mi_free_aligned", "mi_realloc_aligned",

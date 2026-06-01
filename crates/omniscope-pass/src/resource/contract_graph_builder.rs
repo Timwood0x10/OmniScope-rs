@@ -512,6 +512,26 @@ impl Pass for ContractGraphBuilderPass {
                 }
             }
 
+            // ── Cross-function pointer lifetime propagation ──
+            // When a callee function releases a pointer parameter (orphan release),
+            // propagate the lifetime back to the caller's acquire. This handles
+            // patterns like: caller mallocs → passes ptr to callee → callee frees.
+            //
+            // Algorithm:
+            // 1. Build a call graph: caller → set of callees
+            // 2. For each callee that has orphan releases (no matching acquire),
+            //    find the caller that allocated the pointer
+            // 3. Create cross-function edges connecting the acquire in the caller
+            //    to the release in the callee
+            propagate_ptr_lifetime_across_functions(
+                &mut graph,
+                module,
+                &registry,
+                &ffi_db,
+                &calls_by_caller,
+                &func_id_map,
+            );
+
             // Keep the IRModule in context
             ctx.store("ir_module", module.clone());
         }
@@ -530,6 +550,197 @@ impl Pass for ContractGraphBuilderPass {
 impl Default for ContractGraphBuilderPass {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Propagates pointer lifetime across function boundaries.
+///
+/// When a callee function releases a pointer parameter (orphan release),
+/// this function propagates the lifetime back to the caller's acquire.
+/// This handles patterns like: caller mallocs → passes ptr to callee → callee frees.
+///
+/// # Arguments
+/// * `graph` - The contract graph to add edges to
+/// * `module` - The IR module containing function definitions
+/// * `registry` - The family registry for symbol lookup
+/// * `ffi_db` - The FFI contract database
+/// * `calls_by_caller` - Map of caller function name to list of callees
+/// * `func_id_map` - Map of function name to function ID
+fn propagate_ptr_lifetime_across_functions(
+    graph: &mut ContractGraph,
+    module: &omniscope_ir::IRModule,
+    registry: &omniscope_semantics::FamilyRegistry,
+    ffi_db: &FFIContractDB,
+    calls_by_caller: &std::collections::HashMap<&str, Vec<&str>>,
+    func_id_map: &std::collections::HashMap<&str, u64>,
+) {
+    // Build a reverse call graph: callee → set of callers
+    let mut callers_of: std::collections::HashMap<&str, std::collections::HashSet<&str>> =
+        std::collections::HashMap::new();
+    for (&caller, callees) in calls_by_caller {
+        for &callee in callees {
+            callers_of.entry(callee).or_default().insert(caller);
+        }
+    }
+
+    // For each function definition, check if it has releases that are not
+    // matched to acquires (orphan releases). If so, propagate the lifetime
+    // to the caller's acquire.
+    for func_name in module.functions.keys() {
+        let func_name = func_name.trim_start_matches('@');
+
+        // Get the callees of this function
+        let callees = match calls_by_caller.get(func_name) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // Collect releases and acquires in this function
+        let mut func_releases: Vec<(FamilyId, &str)> = Vec::new();
+        let mut func_acquires: Vec<(FamilyId, &str)> = Vec::new();
+
+        for &callee in callees {
+            if let Some(entry) = registry.lookup(callee) {
+                match entry.effect {
+                    omniscope_semantics::SymbolEffect::Release
+                    | omniscope_semantics::SymbolEffect::ConditionalRelease => {
+                        func_releases.push((entry.family_id, callee));
+                    }
+                    omniscope_semantics::SymbolEffect::Acquire
+                    | omniscope_semantics::SymbolEffect::Retain
+                    | omniscope_semantics::SymbolEffect::Reclaim => {
+                        func_acquires.push((entry.family_id, callee));
+                    }
+                    _ => {}
+                }
+            } else if let Some(contract) = ffi_db.lookup(callee) {
+                match contract.contract_type {
+                    ContractType::Deallocator | ContractType::Releaser => {
+                        if let Some(family) = contract.family_id {
+                            func_releases.push((family, callee));
+                        }
+                    }
+                    ContractType::Allocator => {
+                        if let Some(family) = contract.family_id {
+                            func_acquires.push((family, callee));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Check if there are orphan releases (releases without matching acquires)
+        // If the function has more releases than acquires, some releases are orphaned
+        let orphan_releases = func_releases.len() > func_acquires.len();
+        if !orphan_releases {
+            continue;
+        }
+
+        // Get the callers of this function
+        let callers = match callers_of.get(func_name) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // For each caller, check if it has matching acquires for the orphan releases
+        for &caller_name in callers {
+            let caller_func_id = match func_id_map.get(caller_name) {
+                Some(&id) => id,
+                None => continue,
+            };
+
+            // Get the callees of the caller
+            let caller_callees = match calls_by_caller.get(caller_name) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Collect acquires in the caller
+            let mut caller_acquires: Vec<(FamilyId, &str)> = Vec::new();
+            for &callee in caller_callees {
+                if callee == func_name {
+                    continue; // Skip the callee we're processing
+                }
+                if let Some(entry) = registry.lookup(callee) {
+                    if matches!(
+                        entry.effect,
+                        omniscope_semantics::SymbolEffect::Acquire
+                            | omniscope_semantics::SymbolEffect::Retain
+                            | omniscope_semantics::SymbolEffect::Reclaim
+                    ) {
+                        caller_acquires.push((entry.family_id, callee));
+                    }
+                } else if let Some(contract) = ffi_db.lookup(callee) {
+                    if contract.contract_type == ContractType::Allocator {
+                        if let Some(family) = contract.family_id {
+                            caller_acquires.push((family, callee));
+                        }
+                    }
+                }
+            }
+
+            // Match orphan releases in callee to acquires in caller
+            for &(release_family, release_callee) in &func_releases {
+                // Find a matching acquire in the caller (same family preferred)
+                let matching_acquire = caller_acquires
+                    .iter()
+                    .find(|(f, _)| *f == release_family)
+                    .or_else(|| caller_acquires.first());
+
+                if let Some((acquire_family, acquire_callee)) = matching_acquire {
+                    // Create a cross-function edge:
+                    // Acquire in caller → Release in callee
+                    let instance_id = graph.alloc_instance();
+
+                    // Add acquire edge in caller
+                    graph.add_edge(ContractEdge {
+                        source: 0,
+                        target: instance_id,
+                        effect: Effect::Acquire {
+                            family: *acquire_family,
+                            result: instance_id,
+                        },
+                        function: caller_func_id,
+                        function_name: acquire_callee.to_string(),
+                        caller_name: caller_name.to_string(),
+                        family: Some(*acquire_family),
+                    });
+
+                    // Add release edge in callee (pointing to the same instance)
+                    let is_cross_family = *acquire_family != release_family;
+                    let effect = if is_cross_family {
+                        Effect::ConditionalRelease {
+                            family: release_family,
+                            arg: 0,
+                        }
+                    } else {
+                        Effect::Release {
+                            family: release_family,
+                            arg: 0,
+                        }
+                    };
+
+                    graph.add_edge(ContractEdge {
+                        source: instance_id,
+                        target: 0,
+                        effect,
+                        function: *func_id_map.get(func_name).unwrap_or(&0),
+                        function_name: release_callee.to_string(),
+                        caller_name: func_name.to_string(),
+                        family: Some(release_family),
+                    });
+
+                    // Remove the matched acquire from caller_acquires to avoid double-matching
+                    if let Some(pos) = caller_acquires
+                        .iter()
+                        .position(|(f, c)| *f == *acquire_family && *c == *acquire_callee)
+                    {
+                        caller_acquires.remove(pos);
+                    }
+                }
+            }
+        }
     }
 }
 

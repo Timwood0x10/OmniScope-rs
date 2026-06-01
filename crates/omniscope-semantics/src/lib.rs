@@ -6,6 +6,7 @@
 //! - Zone classification for optimization (safe/escape/boundary)
 //! - Surface classification for function provenance
 //! - Resource contract analysis (family, contract, effect, summary, evidence)
+//! - ABI layout analysis for struct padding, alignment, and cross-language compatibility
 
 pub mod language_detector;
 pub mod resource;
@@ -16,6 +17,9 @@ pub use language_detector::LanguageDetector;
 pub use surface_classifier::{Confidence, FunctionSurface, SurfaceClassifier, SurfaceHint};
 
 // Re-exports — Resource contract modules
+pub use resource::abi_layout_detector::{
+    AbiIssue, AbiLayoutDetector, LanguageAbiRules, StructField, StructLayout,
+};
 pub use resource::confidence_scorer::{
     classify_issue, score_issue, ConfidenceTier, ScoreBreakdown, ScoringContext,
 };
@@ -32,10 +36,15 @@ pub use resource::family_registry::{
 pub use resource::ffi_contract;
 pub use resource::go_adapter::{GoAdapter, GoFFISafety, GoFunctionAnalysis, GoSemanticPattern};
 pub use resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior, ReturnSource};
+pub use resource::length_truncation_detector::{
+    describe_truncation, extract_truncation_patterns, truncation_cwe_id, TruncationAnalysis,
+    TruncationConfidence, TruncationPattern, TypeWidth,
+};
 pub use resource::ownership_state::{
     OwnershipError, OwnershipEvent, OwnershipState, ResourceInstance,
 };
 pub use resource::python_adapter::{PythonAdapter, PythonPattern, PythonSemantic};
+pub use resource::rust_stdlib_whitelist::RustStdlibWhitelist;
 pub use resource::semantic_engine::{
     assess_ffi_safety, FFISafetyAssessment, FFIVerdict, IREvidence,
 };
@@ -51,6 +60,10 @@ pub use resource::structural_inference::{
 };
 pub use resource::summary::{ResourceSummary, SummaryStore};
 pub use resource::summary_inference::{behavior_to_summary, infer_summary_for_symbol};
+pub use resource::type_confusion_detector::{
+    type_confusion_cwe_id, ConfusionConfidence, TypeConfusionAnalysis, TypeConfusionDetector,
+    TypeConfusionKind, TypeConfusionPattern,
+};
 
 #[cfg(test)]
 mod tests {

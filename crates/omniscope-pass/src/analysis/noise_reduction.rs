@@ -126,9 +126,48 @@ impl NoiseReduction {
             "ffi_unsafe_call" => kinds.iter().any(|k| {
                 matches!(
                     k,
+                    // R-4: POSIX non-memory syscalls
                     SemanticKind::FileOperation
                         | SemanticKind::NetworkOperation
                         | SemanticKind::ProcessOperation
+                        // R-7: Library allocator releases
+                        | SemanticKind::LibraryRelease
+                        // R-6: Ownership transfer via into_raw
+                        | SemanticKind::IntoRawTransfer
+                        // R-3: RAII drop/dealloc patterns
+                        | SemanticKind::RaiiDropRelease
+                        // R-1: Heap/global provenance
+                        | SemanticKind::HeapProvenance
+                        | SemanticKind::GlobalProvenance
+                        // R-8: From function parameter
+                        | SemanticKind::FromParameter
+                        // C++ RAII patterns
+                        | SemanticKind::CppDestructor
+                        | SemanticKind::CppUniquePtr
+                        | SemanticKind::CppSharedPtr
+                        // Go cleanup patterns
+                        | SemanticKind::GoDeferCleanup
+                        | SemanticKind::GoFinalizer
+                        // Python reference counting
+                        | SemanticKind::PythonRefcountInc
+                        | SemanticKind::PythonRefcountDec
+                        | SemanticKind::PythonBorrowedRef
+                        | SemanticKind::PythonOwnedRef
+                        | SemanticKind::PythonGilProtected
+                        // C# SafeHandle and finalizer
+                        | SemanticKind::CsharpSafeHandle
+                        | SemanticKind::CsharpFinalizer
+                        // Java JNI references
+                        | SemanticKind::JavaLocalRef
+                        | SemanticKind::JavaGlobalRef
+                        | SemanticKind::JavaWeakRef
+                )
+            }),
+            // R-9: Suppress unchecked_return for allocators (malloc_unchecked noise)
+            "unchecked_return" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    SemanticKind::HeapProvenance | SemanticKind::GoRuntimeAlloc
                 )
             }),
             _ => false,

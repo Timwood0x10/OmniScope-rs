@@ -52,6 +52,102 @@ impl RawFactCollectorPass {
         Self
     }
 
+    /// Extracts raw facts from a ModuleIndex using pre-computed metadata.
+    ///
+    /// This is the fast path that avoids creating a new FamilyRegistry
+    /// and re-scanning all call instructions.
+    fn collect_from_module_index(index: &crate::module_index::ModuleIndex) -> Vec<RawResourceFact> {
+        let registry = &index.family_registry;
+
+        let estimated = index.call_metas.len() + index.function_metas.len();
+        let mut facts = Vec::with_capacity(estimated);
+
+        let mut func_name_to_id: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::with_capacity(estimated.max(32));
+        let mut next_func_id: u64 = 0;
+
+        let mut get_func_id = |name: &str| -> u64 {
+            if let Some(&id) = func_name_to_id.get(name) {
+                id
+            } else {
+                let id = next_func_id;
+                next_func_id = next_func_id.saturating_add(1);
+                func_name_to_id.insert(name.to_string(), id);
+                id
+            }
+        };
+
+        // Scan cached call metadata for alloc/dealloc symbols
+        for call_meta in &index.call_metas {
+            if call_meta.symbol_effect.is_none() {
+                continue;
+            }
+
+            let effect = call_meta.symbol_effect.unwrap();
+            let is_acquire = matches!(
+                effect,
+                omniscope_semantics::SymbolEffect::Acquire
+                    | omniscope_semantics::SymbolEffect::Retain
+                    | omniscope_semantics::SymbolEffect::Reclaim
+            );
+            let is_escape = matches!(effect, omniscope_semantics::SymbolEffect::Escape);
+            let contract = if is_acquire {
+                PointerContract::Owned
+            } else if is_escape {
+                PointerContract::Escaped
+            } else {
+                PointerContract::Unknown
+            };
+
+            let func_id = if call_meta.caller_name.is_empty() {
+                get_func_id(&call_meta.callee_name)
+            } else {
+                get_func_id(&call_meta.caller_name)
+            };
+
+            facts.push(RawResourceFact {
+                function: func_id,
+                function_name: call_meta.callee_name.clone(),
+                caller_name: call_meta.caller_name.clone(),
+                family: call_meta.family_id,
+                is_acquire,
+                contract,
+                arg_index: Some(0),
+            });
+        }
+
+        // Scan function metadata for known symbols not already found
+        for name in index.function_metas.keys() {
+            if let Some(entry) = registry.lookup(name) {
+                if facts.iter().any(|f| f.function_name == name.as_str()) {
+                    continue;
+                }
+                let is_acquire = matches!(
+                    entry.effect,
+                    omniscope_semantics::SymbolEffect::Acquire
+                        | omniscope_semantics::SymbolEffect::Retain
+                        | omniscope_semantics::SymbolEffect::Reclaim
+                );
+                let func_id = get_func_id(name);
+                facts.push(RawResourceFact {
+                    function: func_id,
+                    function_name: name.clone(),
+                    caller_name: String::new(),
+                    family: Some(entry.family_id),
+                    is_acquire,
+                    contract: if is_acquire {
+                        PointerContract::Owned
+                    } else {
+                        PointerContract::Unknown
+                    },
+                    arg_index: Some(0),
+                });
+            }
+        }
+
+        facts
+    }
+
     /// Extracts raw facts from an IRModule by scanning its call instructions
     /// and declarations against the FamilyRegistry.
     ///
@@ -216,22 +312,32 @@ impl Pass for RawFactCollectorPass {
 
         let mut raw_facts: Vec<RawResourceFact>;
 
-        // First: try to extract facts from the IRModule in the context.
-        // The pool is used for temporary string interning inside
-        // collect_from_ir, reducing per-name heap allocations.
-        let ir_module: Option<IRModule> = ctx.get("ir_module");
-        tracing::debug!(
-            "RawFactCollector: ir_module present = {}",
-            ir_module.is_some()
-        );
-        if let Some(ref module) = ir_module {
-            raw_facts = Self::collect_from_ir(module, ctx.pool_mut());
+        // Try to use ModuleIndex for cached metadata when available
+        let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
+
+        if let Some(ref index) = module_index {
+            // Fast path: use pre-computed metadata from ModuleIndex
+            raw_facts = Self::collect_from_module_index(index);
             tracing::debug!(
-                "RawFactCollector: collected {} facts from IR",
+                "RawFactCollector: collected {} facts from ModuleIndex",
                 raw_facts.len()
             );
         } else {
-            raw_facts = Vec::new();
+            // Fallback: try to extract facts from the IRModule in the context.
+            let ir_module: Option<IRModule> = ctx.get("ir_module");
+            tracing::debug!(
+                "RawFactCollector: ir_module present = {}",
+                ir_module.is_some()
+            );
+            if let Some(ref module) = ir_module {
+                raw_facts = Self::collect_from_ir(module, ctx.pool_mut());
+                tracing::debug!(
+                    "RawFactCollector: collected {} facts from IR",
+                    raw_facts.len()
+                );
+            } else {
+                raw_facts = Vec::new();
+            }
         }
 
         // Also scan existing facts for alloc/dealloc sites (legacy path)
@@ -248,11 +354,6 @@ impl Pass for RawFactCollectorPass {
                 };
                 raw_facts.push(raw);
             }
-        }
-
-        // Keep the IRModule in context for downstream passes
-        if let Some(module) = ir_module {
-            ctx.store("ir_module", module);
         }
 
         let fact_count = raw_facts.len();

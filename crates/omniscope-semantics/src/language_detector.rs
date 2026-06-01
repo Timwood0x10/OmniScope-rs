@@ -6,6 +6,7 @@ use omniscope_types::Language;
 use std::collections::HashMap;
 
 /// Language detector for identifying source language
+#[derive(Clone, Debug)]
 pub struct LanguageDetector {
     /// Language patterns to match
     patterns: Vec<LanguagePattern>,
@@ -119,6 +120,7 @@ impl Default for LanguageDetector {
 }
 
 /// Language pattern for matching
+#[derive(Clone, Debug)]
 struct LanguagePattern {
     language: Language,
     pattern: String,
@@ -153,6 +155,7 @@ impl LanguagePattern {
 }
 
 /// Match type for patterns
+#[derive(Clone, Debug)]
 enum MatchType {
     Prefix,
     Contains,

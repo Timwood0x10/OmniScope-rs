@@ -76,7 +76,6 @@ impl Pass for FFIBoundaryPass {
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
-        let registry = FamilyRegistry::new();
 
         // Try to get cross-lang edges from CallGraphPass (if registered)
         let cross_lang_edges: Vec<CrossLangEdge> = ctx.get("cross_lang_edges").unwrap_or_default();
@@ -103,7 +102,6 @@ impl Pass for FFIBoundaryPass {
             boundary_count += 1;
             self.emit_ffi_issue(
                 ctx,
-                &registry,
                 &FFIBoundaryInfo {
                     caller_name: edge.caller_name.clone(),
                     callee_name: edge.callee_name.clone(),
@@ -116,9 +114,46 @@ impl Pass for FFIBoundaryPass {
 
         // If no CallGraph edges, scan IRModule for FFI boundaries
         if cross_lang_edges.is_empty() {
-            if let Some(ref module) = ir_module {
-                // Use language detector to identify function languages
+            // Use ModuleIndex for cached metadata when available
+            let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
+
+            if let Some(ref index) = module_index {
+                // Fast path: use pre-computed metadata from ModuleIndex
+                for meta in index.ffi_boundary_calls() {
+                    let boundary_key = (meta.caller_name.clone(), meta.callee_name.clone());
+                    if seen_boundaries.insert(boundary_key) {
+                        boundary_count += 1;
+                        self.emit_ffi_issue(
+                            ctx,
+                            &FFIBoundaryInfo {
+                                caller_name: meta.caller_name.clone(),
+                                callee_name: meta.callee_name.clone(),
+                                caller_lang: meta.caller_lang,
+                                callee_lang: meta.callee_lang,
+                            },
+                            &mut issues,
+                        );
+                    }
+                }
+            } else if let Some(ref module) = ir_module {
+                // Fallback path: recompute metadata (legacy behavior)
                 let detector = omniscope_semantics::LanguageDetector::new();
+
+                // Pre-build a map of local function names for quick lookup
+                let local_functions: std::collections::HashSet<&str> = module
+                    .functions
+                    .keys()
+                    .map(|k| k.trim_start_matches('@'))
+                    .collect();
+
+                // Pre-build a map of function → callees for transitive FFI detection
+                let mut callees_of: std::collections::HashMap<&str, Vec<&str>> =
+                    std::collections::HashMap::new();
+                for call in &module.calls {
+                    let callee = call.callee.trim_start_matches('@');
+                    let caller = call.caller.trim_start_matches('@');
+                    callees_of.entry(caller).or_default().push(callee);
+                }
 
                 for call in &module.calls {
                     let callee_name = call.callee.trim_start_matches('@');
@@ -133,13 +168,10 @@ impl Pass for FFIBoundaryPass {
                     let callee_lang = detector.detect_from_function(callee_name);
 
                     // Determine caller language
-                    // If the caller is a defined function, default to C (common case for .c files)
-                    // unless the detector identifies it as something else
                     let caller_lang = if module.functions.contains_key(call.caller.as_str())
                         || module.functions.contains_key(&call.caller)
                     {
                         let detected = detector.detect_from_function(caller_name);
-                        // If unknown, assume C (most .ll files from C code)
                         if detected == omniscope_types::config::Language::Unknown {
                             omniscope_types::config::Language::C
                         } else {
@@ -154,12 +186,11 @@ impl Pass for FFIBoundaryPass {
                         && callee_lang != omniscope_types::config::Language::Unknown
                         && caller_lang != omniscope_types::config::Language::Unknown;
 
-                    // Check for C++ mangled name called from C — definite FFI boundary
+                    // Check for C++ mangled name called from C
                     let is_cpp_ffi = callee_name.starts_with("_Z")
                         && caller_lang == omniscope_types::config::Language::C;
 
-                    // Check for Rust/Go/Zig/Java calling external C functions
-                    // (callee language is Unknown but it's an external call = likely C)
+                    // Check for non-C calling external unknown function
                     let is_ffi_to_c = caller_lang != omniscope_types::config::Language::Unknown
                         && caller_lang != omniscope_types::config::Language::C
                         && callee_lang == omniscope_types::config::Language::Unknown
@@ -191,7 +222,6 @@ impl Pass for FFIBoundaryPass {
                             };
                             self.emit_ffi_issue(
                                 ctx,
-                                &registry,
                                 &FFIBoundaryInfo {
                                     caller_name: caller_name.to_string(),
                                     callee_name: callee_name.to_string(),
@@ -200,6 +230,48 @@ impl Pass for FFIBoundaryPass {
                                 },
                                 &mut issues,
                             );
+                        }
+                    } else if local_functions.contains(callee_name) {
+                        // Transitive FFI boundary detection:
+                        // If callee is a local function, check if it calls any FFI functions.
+                        // If so, emit a CrossLanguageFree issue for the caller → callee boundary.
+                        if let Some(nested_callees) = callees_of.get(callee_name) {
+                            for &nested_callee in nested_callees {
+                                let nested_lang = detector.detect_from_function(nested_callee);
+                                let is_nested_cpp_ffi = nested_callee.starts_with("_Z");
+                                let is_nested_cross_lang = nested_lang
+                                    != omniscope_types::config::Language::Unknown
+                                    && nested_lang != caller_lang;
+                                let is_nested_ffi_to_c = nested_lang
+                                    == omniscope_types::config::Language::Unknown
+                                    && !nested_callee.starts_with("llvm.");
+
+                                if is_nested_cpp_ffi || is_nested_cross_lang || is_nested_ffi_to_c {
+                                    let boundary_key =
+                                        (caller_name.to_string(), callee_name.to_string());
+                                    if seen_boundaries.insert(boundary_key) {
+                                        boundary_count += 1;
+                                        let final_callee = if is_nested_cpp_ffi {
+                                            omniscope_types::config::Language::Cpp
+                                        } else if is_nested_ffi_to_c {
+                                            omniscope_types::config::Language::C
+                                        } else {
+                                            nested_lang
+                                        };
+                                        self.emit_ffi_issue(
+                                            ctx,
+                                            &FFIBoundaryInfo {
+                                                caller_name: caller_name.to_string(),
+                                                callee_name: callee_name.to_string(),
+                                                caller_lang,
+                                                callee_lang: final_callee,
+                                            },
+                                            &mut issues,
+                                        );
+                                        break; // Only emit once per caller → callee pair
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -240,10 +312,18 @@ impl FFIBoundaryPass {
     fn emit_ffi_issue(
         &self,
         ctx: &mut PassContext,
-        registry: &FamilyRegistry,
         boundary: &FFIBoundaryInfo,
         issues: &mut Vec<Issue>,
     ) {
+        // Get registry — prefer cached version from ModuleIndex
+        // We need to clone the registry to avoid borrow conflicts with ctx
+        let registry: FamilyRegistry =
+            if let Some(index) = ctx.get_ref::<crate::module_index::ModuleIndex>("module_index") {
+                index.family_registry.clone()
+            } else {
+                FamilyRegistry::new()
+            };
+
         // ── IR instruction-level semantic derivation ──
         let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
 
