@@ -417,9 +417,21 @@ mod tests {
     #[test]
     fn test_structural_inference_pass_creation() {
         let pass = StructuralInferencePass::new();
-        assert_eq!(pass.name(), "StructuralInference");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["SummaryBuilder"]);
+        assert_eq!(
+            pass.name(),
+            "StructuralInference",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["SummaryBuilder"],
+            "Expected values to be equal"
+        );
     }
 
     #[test]

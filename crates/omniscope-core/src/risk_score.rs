@@ -268,11 +268,31 @@ mod tests {
     /// Invariants: Labels must match the expected ranges.
     #[test]
     fn test_risk_score_labels() {
-        assert_eq!(RiskScore::new(0.9).label(), "critical");
-        assert_eq!(RiskScore::new(0.7).label(), "high");
-        assert_eq!(RiskScore::new(0.5).label(), "medium");
-        assert_eq!(RiskScore::new(0.3).label(), "low");
-        assert_eq!(RiskScore::new(0.1).label(), "informational");
+        assert_eq!(
+            RiskScore::new(0.9).label(),
+            "critical",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            RiskScore::new(0.7).label(),
+            "high",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            RiskScore::new(0.5).label(),
+            "medium",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            RiskScore::new(0.3).label(),
+            "low",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            RiskScore::new(0.1).label(),
+            "informational",
+            "Expected values to be equal"
+        );
     }
 
     /// Objective: Verify evidence bonus is capped.

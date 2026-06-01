@@ -201,10 +201,18 @@ mod tests {
         .with_release_function("operator delete")
         .with_verdict(VerifierVerdict::ConfirmedIssue);
 
-        assert!(candidate.is_verified());
-        assert!(candidate.is_reportable());
-        assert_eq!(candidate.to_issue_kind(), IssueKind::CrossFamilyFree);
-        assert_eq!(candidate.severity(), Severity::Error);
+        assert!(candidate.is_verified(), "Expected condition to be true");
+        assert!(candidate.is_reportable(), "Expected condition to be true");
+        assert_eq!(
+            candidate.to_issue_kind(),
+            IssueKind::CrossFamilyFree,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            candidate.severity(),
+            Severity::Error,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -217,12 +225,16 @@ mod tests {
         )
         .with_verdict(VerifierVerdict::ExplainedSafe);
 
-        assert!(candidate.is_verified());
+        assert!(candidate.is_verified(), "Expected condition to be true");
         assert!(
             !candidate.is_reportable(),
             "ExplainedSafe should NOT be reportable"
         );
-        assert_eq!(candidate.severity(), Severity::Note);
+        assert_eq!(
+            candidate.severity(),
+            Severity::Note,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -235,7 +247,8 @@ mod tests {
                 "f"
             )
             .to_issue_kind(),
-            IssueKind::CrossFamilyFree
+            IssueKind::CrossFamilyFree,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(
@@ -245,12 +258,14 @@ mod tests {
                 "f"
             )
             .to_issue_kind(),
-            IssueKind::UseAfterFree
+            IssueKind::UseAfterFree,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(3, IssueCandidateKind::DoubleRelease, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
-            IssueKind::DoubleFree
+            IssueKind::DoubleFree,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(
@@ -260,27 +275,32 @@ mod tests {
                 "f"
             )
             .to_issue_kind(),
-            IssueKind::ConditionalLeak
+            IssueKind::ConditionalLeak,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(5, IssueCandidateKind::BorrowEscape, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
-            IssueKind::BorrowEscape
+            IssueKind::BorrowEscape,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(6, IssueCandidateKind::CallbackEscape, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
-            IssueKind::CallbackEscapeIssue
+            IssueKind::CallbackEscapeIssue,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(7, IssueCandidateKind::NeedsModel, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
-            IssueKind::NeedsModel
+            IssueKind::NeedsModel,
+            "Expected values to be equal"
         );
         assert_eq!(
             IssueCandidate::new(8, IssueCandidateKind::UseAfterFree, FamilyId::C_HEAP, "f")
                 .to_issue_kind(),
-            IssueKind::UseAfterFree
+            IssueKind::UseAfterFree,
+            "Expected values to be equal"
         );
     }
 }

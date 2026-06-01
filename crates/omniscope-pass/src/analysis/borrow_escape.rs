@@ -233,33 +233,70 @@ mod tests {
     #[test]
     fn test_borrow_escape_pass_creation() {
         let pass = BorrowEscapePass::new();
-        assert_eq!(pass.name(), "BorrowEscape");
-        assert_eq!(pass.kind(), PassKind::Analysis);
+        assert_eq!(pass.name(), "BorrowEscape", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_has_heap_provenance() {
         let pass = BorrowEscapePass::new();
-        assert!(pass.has_heap_provenance("_RNvNtCsgXhsEb1m4tm_4core9panicking5alloc"));
-        assert!(pass.has_heap_provenance("malloc_wrapper"));
-        assert!(pass.has_heap_provenance("Box_new"));
-        assert!(!pass.has_heap_provenance("local_var"));
+        assert!(
+            pass.has_heap_provenance("_RNvNtCsgXhsEb1m4tm_4core9panicking5alloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_heap_provenance("malloc_wrapper"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_heap_provenance("Box_new"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.has_heap_provenance("local_var"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_has_global_provenance() {
         let pass = BorrowEscapePass::new();
-        assert!(pass.has_global_provenance("static_var"));
-        assert!(pass.has_global_provenance("global_config"));
-        assert!(pass.has_global_provenance("@global"));
-        assert!(!pass.has_global_provenance("local_var"));
+        assert!(
+            pass.has_global_provenance("static_var"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_global_provenance("global_config"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_global_provenance("@global"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.has_global_provenance("local_var"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_function_parameter() {
         let pass = BorrowEscapePass::new();
-        assert!(pass.is_function_parameter("func->param"));
-        assert!(pass.is_function_parameter("func->arg"));
-        assert!(!pass.is_function_parameter("func->local"));
+        assert!(
+            pass.is_function_parameter("func->param"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_function_parameter("func->arg"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_function_parameter("func->local"),
+            "Expected condition to be true"
+        );
     }
 }

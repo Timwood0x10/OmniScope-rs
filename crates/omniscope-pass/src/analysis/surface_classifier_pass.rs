@@ -180,9 +180,21 @@ mod tests {
     #[test]
     fn test_surface_classifier_pass_trait() {
         let pass = SurfaceClassifierPass::new();
-        assert_eq!(pass.name(), "SurfaceClassifier");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["CallGraph"]);
+        assert_eq!(
+            pass.name(),
+            "SurfaceClassifier",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["CallGraph"],
+            "Expected values to be equal"
+        );
     }
 
     /// Objective: Verify FunctionSurface classification categories.

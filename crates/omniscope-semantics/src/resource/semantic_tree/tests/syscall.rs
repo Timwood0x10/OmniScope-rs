@@ -10,7 +10,8 @@ use super::super::*;
 fn test_syscall_classify_getenv() {
     assert_eq!(
         SyscallSemantic::classify("getenv"),
-        SyscallSemantic::EnvironmentConfig
+        SyscallSemantic::EnvironmentConfig,
+        "Expected values to be equal"
     );
 }
 
@@ -22,7 +23,8 @@ fn test_syscall_classify_getenv() {
 fn test_syscall_classify_strlen() {
     assert_eq!(
         SyscallSemantic::classify("strlen"),
-        SyscallSemantic::DataQuery
+        SyscallSemantic::DataQuery,
+        "Expected values to be equal"
     );
 }
 
@@ -34,7 +36,8 @@ fn test_syscall_classify_strlen() {
 fn test_syscall_classify_malloc() {
     assert_eq!(
         SyscallSemantic::classify("malloc"),
-        SyscallSemantic::MemoryManagement
+        SyscallSemantic::MemoryManagement,
+        "Expected values to be equal"
     );
 }
 
@@ -46,7 +49,8 @@ fn test_syscall_classify_malloc() {
 fn test_syscall_classify_free() {
     assert_eq!(
         SyscallSemantic::classify("free"),
-        SyscallSemantic::MemoryManagement
+        SyscallSemantic::MemoryManagement,
+        "Expected values to be equal"
     );
 }
 
@@ -58,7 +62,8 @@ fn test_syscall_classify_free() {
 fn test_syscall_classify_highway() {
     assert_eq!(
         SyscallSemantic::classify("highway_index_of_char"),
-        SyscallSemantic::ComputeAccelerated
+        SyscallSemantic::ComputeAccelerated,
+        "Expected values to be equal"
     );
 }
 
@@ -70,7 +75,8 @@ fn test_syscall_classify_highway() {
 fn test_syscall_classify_bun_dispatch() {
     assert_eq!(
         SyscallSemantic::classify("__bun_dispatch__OutputSink__Sys__quiet_writer_write_all"),
-        SyscallSemantic::InternalDispatch
+        SyscallSemantic::InternalDispatch,
+        "Expected values to be equal"
     );
 }
 
@@ -82,7 +88,8 @@ fn test_syscall_classify_bun_dispatch() {
 fn test_syscall_classify_bun_string() {
     assert_eq!(
         SyscallSemantic::classify("BunString__fromBytes"),
-        SyscallSemantic::InternalDispatch
+        SyscallSemantic::InternalDispatch,
+        "Expected values to be equal"
     );
 }
 
@@ -94,6 +101,7 @@ fn test_syscall_classify_bun_string() {
 fn test_syscall_classify_wtf_destroy() {
     assert_eq!(
         SyscallSemantic::classify("Bun__WTFStringImpl__destroy"),
-        SyscallSemantic::InternalDispatch
+        SyscallSemantic::InternalDispatch,
+        "Expected values to be equal"
     );
 }

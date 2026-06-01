@@ -715,16 +715,16 @@ mod tests {
     fn test_parse_declaration() {
         let line = "declare i32 @external_func(i32, i32)";
         let func = parse_declaration(line).unwrap();
-        assert_eq!(func.name, "external_func");
-        assert!(func.is_declaration);
+        assert_eq!(func.name, "external_func", "Expected values to be equal");
+        assert!(func.is_declaration, "Expected condition to be true");
     }
 
     #[test]
     fn test_parse_definition() {
         let line = "define i32 @my_func(i32 %x) {";
         let func = parse_definition(line).unwrap();
-        assert_eq!(func.name, "my_func");
-        assert!(!func.is_declaration);
+        assert_eq!(func.name, "my_func", "Expected values to be equal");
+        assert!(!func.is_declaration, "Expected condition to be true");
     }
 
     #[test]
@@ -739,9 +739,9 @@ mod tests {
         "#;
 
         let module = IRModule::parse_from_text(ir);
-        assert_eq!(module.declarations.len(), 1);
-        assert_eq!(module.functions.len(), 1);
-        assert_eq!(module.calls.len(), 1);
+        assert_eq!(module.declarations.len(), 1, "Expected values to be equal");
+        assert_eq!(module.functions.len(), 1, "Expected values to be equal");
+        assert_eq!(module.calls.len(), 1, "Expected values to be equal");
     }
 
     #[test]
@@ -758,12 +758,23 @@ mod tests {
         "#;
 
         let module = IRModule::parse_from_text(ir);
-        assert!(module.function_bodies.contains_key("my_strlen"));
+        assert!(
+            module.function_bodies.contains_key("my_strlen"),
+            "Expected condition to be true"
+        );
 
         let body = &module.function_bodies["my_strlen"];
-        assert_eq!(body.instructions.len(), 3); // call + zext + ret
-        assert_eq!(body.count_kind(IRInstructionKind::Call), 1);
-        assert_eq!(body.count_kind(IRInstructionKind::Ret), 1);
+        assert_eq!(body.instructions.len(), 3, "Expected values to be equal"); // call + zext + ret
+        assert_eq!(
+            body.count_kind(IRInstructionKind::Call),
+            1,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            body.count_kind(IRInstructionKind::Ret),
+            1,
+            "Expected values to be equal"
+        );
     }
 
     /// Objective: Verify that parsing an empty string produces a valid empty module.
@@ -924,18 +935,38 @@ mod tests {
         let body = &module.function_bodies["release_string"];
 
         // Verify the ConditionalRelease pattern is detectable
-        assert_eq!(body.count_kind(IRInstructionKind::AtomicRmw), 1);
-        assert_eq!(body.count_kind(IRInstructionKind::Icmp), 1);
-        assert_eq!(body.count_kind(IRInstructionKind::Branch), 1);
-        assert_eq!(body.count_kind(IRInstructionKind::Call), 1);
+        assert_eq!(
+            body.count_kind(IRInstructionKind::AtomicRmw),
+            1,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            body.count_kind(IRInstructionKind::Icmp),
+            1,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            body.count_kind(IRInstructionKind::Branch),
+            1,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            body.count_kind(IRInstructionKind::Call),
+            1,
+            "Expected values to be equal"
+        );
 
         // Verify atomicrmw sub
         let atomic_insts = body.atomic_rmw_with_op("sub");
-        assert_eq!(atomic_insts.len(), 1);
+        assert_eq!(atomic_insts.len(), 1, "Expected values to be equal");
 
         // Verify icmp eq
         let icmp_insts = body.instructions_of_kind(IRInstructionKind::Icmp);
-        assert_eq!(icmp_insts.len(), 1);
-        assert_eq!(icmp_insts[0].icmp_pred.as_deref(), Some("eq"));
+        assert_eq!(icmp_insts.len(), 1, "Expected values to be equal");
+        assert_eq!(
+            icmp_insts[0].icmp_pred.as_deref(),
+            Some("eq"),
+            "Expected values to be equal"
+        );
     }
 }

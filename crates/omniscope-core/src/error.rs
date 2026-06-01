@@ -202,14 +202,20 @@ mod tests {
             version: "15.0".to_string(),
             supported: "16.0-22.0".to_string(),
         };
-        assert!(err.to_string().contains("Unsupported LLVM version"));
+        assert!(
+            err.to_string().contains("Unsupported LLVM version"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_error_from_io() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let err: OmniScopeError = io_err.into();
-        assert!(err.to_string().contains("I/O error"));
+        assert!(
+            err.to_string().contains("I/O error"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -218,6 +224,9 @@ mod tests {
             pass_name: "FFIBoundary".to_string(),
             message: "null pointer".to_string(),
         };
-        assert!(err.to_string().contains("FFIBoundary"));
+        assert!(
+            err.to_string().contains("FFIBoundary"),
+            "Expected condition to be true"
+        );
     }
 }

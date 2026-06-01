@@ -14,7 +14,11 @@ fn test_by_source_openssl() {
     let contracts = db.by_source(ContractSource::OpenSSL);
     assert!(!contracts.is_empty(), "Must have OpenSSL contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::OpenSSL);
+        assert_eq!(
+            c.source,
+            ContractSource::OpenSSL,
+            "Expected values to be equal"
+        );
     }
 }
 
@@ -29,7 +33,11 @@ fn test_by_source_sqlite() {
     let contracts = db.by_source(ContractSource::SQLite);
     assert!(!contracts.is_empty(), "Must have SQLite contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::SQLite);
+        assert_eq!(
+            c.source,
+            ContractSource::SQLite,
+            "Expected values to be equal"
+        );
     }
 }
 
@@ -44,7 +52,11 @@ fn test_by_source_python() {
     let contracts = db.by_source(ContractSource::PythonCApi);
     assert!(!contracts.is_empty(), "Must have Python/C API contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::PythonCApi);
+        assert_eq!(
+            c.source,
+            ContractSource::PythonCApi,
+            "Expected values to be equal"
+        );
     }
 }
 
@@ -59,7 +71,7 @@ fn test_by_source_jni() {
     let contracts = db.by_source(ContractSource::JNI);
     assert!(!contracts.is_empty(), "Must have JNI contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::JNI);
+        assert_eq!(c.source, ContractSource::JNI, "Expected values to be equal");
     }
 }
 
@@ -74,7 +86,11 @@ fn test_by_source_posix() {
     let contracts = db.by_source(ContractSource::Posix);
     assert!(!contracts.is_empty(), "Must have POSIX contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::Posix);
+        assert_eq!(
+            c.source,
+            ContractSource::Posix,
+            "Expected values to be equal"
+        );
     }
 }
 
@@ -89,7 +105,11 @@ fn test_by_source_glib() {
     let contracts = db.by_source(ContractSource::Glib);
     assert!(!contracts.is_empty(), "Must have GLib contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::Glib);
+        assert_eq!(
+            c.source,
+            ContractSource::Glib,
+            "Expected values to be equal"
+        );
     }
 }
 
@@ -104,7 +124,11 @@ fn test_by_source_libuv() {
     let contracts = db.by_source(ContractSource::Libuv);
     assert!(!contracts.is_empty(), "Must have libuv contracts");
     for c in contracts {
-        assert_eq!(c.source, ContractSource::Libuv);
+        assert_eq!(
+            c.source,
+            ContractSource::Libuv,
+            "Expected values to be equal"
+        );
     }
 }
 

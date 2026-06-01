@@ -58,13 +58,16 @@ mod tests {
         let err = OmniScopeError::Config(ConfigError::MissingRequired {
             key: "test".to_string(),
         });
-        assert!(err.to_string().contains("Missing required configuration"));
+        assert!(
+            err.to_string().contains("Missing required configuration"),
+            "Expected condition to be true"
+        );
 
         // Test diagnostics
         let aggregator = DiagnosticAggregator::new();
         let diag = Diagnostic::new(0, Severity::Error, "E0001", "test error");
         aggregator.emit(diag);
-        assert!(aggregator.has_errors());
+        assert!(aggregator.has_errors(), "Expected condition to be true");
 
         // Test facts
         let fact_store = FactStore::new();
@@ -74,13 +77,13 @@ mod tests {
             fact::FactLocation::new(std::path::PathBuf::from("test.rs"), 10),
         );
         fact_store.add(fact);
-        assert_eq!(fact_store.count(), 1);
+        assert_eq!(fact_store.count(), 1, "Expected values to be equal");
 
         // Test profiler
         let profiler = Profiler::new();
         {
             let _timer = ScopedTimer::new(&profiler, "test");
         }
-        assert_eq!(profiler.all_spans().len(), 1);
+        assert_eq!(profiler.all_spans().len(), 1, "Expected values to be equal");
     }
 }

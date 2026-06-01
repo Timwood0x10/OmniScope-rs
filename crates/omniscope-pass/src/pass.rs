@@ -475,10 +475,10 @@ mod tests {
             .with_nodes(100)
             .with_duration(50);
 
-        assert_eq!(result.name, "test_pass");
-        assert_eq!(result.issues_found, 5);
-        assert_eq!(result.nodes_analyzed, 100);
-        assert_eq!(result.duration_ms, 50);
+        assert_eq!(result.name, "test_pass", "Expected values to be equal");
+        assert_eq!(result.issues_found, 5, "Expected values to be equal");
+        assert_eq!(result.nodes_analyzed, 100, "Expected values to be equal");
+        assert_eq!(result.duration_ms, 50, "Expected values to be equal");
     }
 
     #[test]
@@ -487,10 +487,10 @@ mod tests {
 
         ctx.store("test_value", 42u64);
         let value: Option<u64> = ctx.get("test_value");
-        assert_eq!(value, Some(42));
+        assert_eq!(value, Some(42), "Expected values to be equal");
 
-        assert_eq!(ctx.diagnostic_count(), 0);
-        assert_eq!(ctx.fact_count(), 0);
+        assert_eq!(ctx.diagnostic_count(), 0, "Expected values to be equal");
+        assert_eq!(ctx.fact_count(), 0, "Expected values to be equal");
     }
 
     /// Objective: Verify that next_issue_id() returns strictly increasing values starting from 1.

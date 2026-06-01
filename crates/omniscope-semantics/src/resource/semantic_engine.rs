@@ -874,8 +874,15 @@ mod tests {
         let module = IRModule::parse_from_text(ir);
         let assessment = assess_ffi_safety("strlen", "my_strlen", &module);
 
-        assert_eq!(assessment.verdict, FFIVerdict::SafeNoOwnership);
-        assert!(assessment.should_suppress_issue());
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeNoOwnership,
+            "Expected values to be equal"
+        );
+        assert!(
+            assessment.should_suppress_issue(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -900,8 +907,15 @@ mod tests {
         let assessment =
             assess_ffi_safety("Bun__WTFStringImpl__destroy", "release_string", &module);
 
-        assert_eq!(assessment.verdict, FFIVerdict::SafeConditionalRelease);
-        assert!(assessment.should_suppress_issue());
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafeConditionalRelease,
+            "Expected values to be equal"
+        );
+        assert!(
+            assessment.should_suppress_issue(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -919,8 +933,15 @@ mod tests {
         let module = IRModule::parse_from_text(ir);
         let assessment = assess_ffi_safety("malloc", "alloc_buffer", &module);
 
-        assert_eq!(assessment.verdict, FFIVerdict::ConcernOwnershipTransfer);
-        assert!(!assessment.should_suppress_issue());
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::ConcernOwnershipTransfer,
+            "Expected values to be equal"
+        );
+        assert!(
+            !assessment.should_suppress_issue(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -936,7 +957,11 @@ mod tests {
         let module = IRModule::parse_from_text(ir);
         let assessment = assess_ffi_safety("get_data_ptr", "get_data_ptr", &module);
 
-        assert_eq!(assessment.verdict, FFIVerdict::SafePointerProjection);
+        assert_eq!(
+            assessment.verdict,
+            FFIVerdict::SafePointerProjection,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

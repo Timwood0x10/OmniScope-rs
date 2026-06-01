@@ -16,9 +16,20 @@ fn test_g_malloc() {
     let c = db
         .lookup("g_malloc")
         .expect("ffi_contract::test::test_g_malloc: g_malloc not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert_eq!(c.source, ContractSource::Glib);
-    assert!(c.paired_release.contains(&"g_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::Glib,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"g_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that g_new is correctly registered as a GLib allocator.
@@ -33,8 +44,15 @@ fn test_g_new() {
     let c = db
         .lookup("g_new")
         .expect("ffi_contract::test::test_g_new: g_new not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"g_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"g_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that g_strdup is correctly registered as a GLib allocator.
@@ -49,8 +67,15 @@ fn test_g_strdup() {
     let c = db
         .lookup("g_strdup")
         .expect("ffi_contract::test::test_g_strdup: g_strdup not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"g_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"g_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that g_free is correctly registered as a GLib deallocator.
@@ -64,7 +89,11 @@ fn test_g_free() {
     let c = db
         .lookup("g_free")
         .expect("ffi_contract::test::test_g_free: g_free not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that g_object_ref is correctly registered as a GLib retainer.
@@ -79,8 +108,15 @@ fn test_g_object_ref() {
     let c = db
         .lookup("g_object_ref")
         .expect("ffi_contract::test::test_g_object_ref: g_object_ref not found");
-    assert_eq!(c.contract_type, ContractType::Retainer);
-    assert!(c.paired_release.contains(&"g_object_unref".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Retainer,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"g_object_unref".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that g_object_unref is correctly registered as a GLib releaser.
@@ -94,5 +130,9 @@ fn test_g_object_unref() {
     let c = db
         .lookup("g_object_unref")
         .expect("ffi_contract::test::test_g_object_unref: g_object_unref not found");
-    assert_eq!(c.contract_type, ContractType::Releaser);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Releaser,
+        "Expected values to be equal"
+    );
 }

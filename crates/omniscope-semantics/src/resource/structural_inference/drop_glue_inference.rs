@@ -203,7 +203,11 @@ mod tests {
             result.is_drop_glue,
             "drop_in_place must be inferred as drop glue"
         );
-        assert_eq!(result.kind, DropGlueKind::DropInPlace);
+        assert_eq!(
+            result.kind,
+            DropGlueKind::DropInPlace,
+            "Expected values to be equal"
+        );
         assert!(summary.is_drop(), "Summary must be classified as drop");
     }
 
@@ -214,14 +218,22 @@ mod tests {
             result.is_drop_glue,
             "__rust_dealloc must be inferred as drop glue"
         );
-        assert_eq!(result.kind, DropGlueKind::TailDealloc);
+        assert_eq!(
+            result.kind,
+            DropGlueKind::TailDealloc,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_cpp_destructor() {
         let (_, result) = infer_drop_glue_summary("_ZN3fooD1Ev", 3, 300, LanguageHint::Cpp);
         assert!(result.is_drop_glue, "C++ destructor must be inferred");
-        assert_eq!(result.kind, DropGlueKind::CppDestructor);
+        assert_eq!(
+            result.kind,
+            DropGlueKind::CppDestructor,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

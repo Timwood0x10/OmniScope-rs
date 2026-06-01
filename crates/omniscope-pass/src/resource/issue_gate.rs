@@ -220,7 +220,7 @@ mod tests {
     fn test_gate_allows_unknown_issue() {
         let issue = make_issue(IssueKind::NullDereference, "foo");
         let verdict = check_issue(&issue, |_, _| false);
-        assert_eq!(verdict, GateVerdict::Allow);
+        assert_eq!(verdict, GateVerdict::Allow, "Expected values to be equal");
     }
 
     #[test]
@@ -229,7 +229,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "box_ptr" && kind == SemanticKind::HeapProvenance
         });
-        assert_eq!(verdict, GateVerdict::SuppressHeapOrigin);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressHeapOrigin,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -238,7 +242,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "static_val" && kind == SemanticKind::GlobalProvenance
         });
-        assert_eq!(verdict, GateVerdict::SuppressGlobalOrigin);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressGlobalOrigin,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -247,7 +255,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "drop_in_place" && kind == SemanticKind::RaiiDropRelease
         });
-        assert_eq!(verdict, GateVerdict::SuppressRaii);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -256,7 +268,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "into_raw_ptr" && kind == SemanticKind::IntoRawTransfer
         });
-        assert_eq!(verdict, GateVerdict::SuppressOwnershipTransfer);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressOwnershipTransfer,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -265,7 +281,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "close" && kind == SemanticKind::FileOperation
         });
-        assert_eq!(verdict, GateVerdict::SuppressNonMemorySyscall);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressNonMemorySyscall,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -274,7 +294,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "mi_free" && kind == SemanticKind::LibraryRelease
         });
-        assert_eq!(verdict, GateVerdict::SuppressLibraryRelease);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressLibraryRelease,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -287,7 +311,11 @@ mod tests {
 
         let issue = make_issue(IssueKind::BorrowEscape, "box_ptr");
         let verdict = check_issue_with_kinds(&issue, &resolutions);
-        assert_eq!(verdict, GateVerdict::SuppressHeapOrigin);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressHeapOrigin,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -297,7 +325,7 @@ mod tests {
 
         let issue = make_issue(IssueKind::BorrowEscape, "some_func");
         let verdict = check_issue_with_kinds(&issue, &resolutions);
-        assert_eq!(verdict, GateVerdict::Allow);
+        assert_eq!(verdict, GateVerdict::Allow, "Expected values to be equal");
     }
 
     #[test]
@@ -306,7 +334,11 @@ mod tests {
         let verdict = check_issue(&issue, |key, kind| {
             key == "drop_in_place" && kind == SemanticKind::RaiiDropRelease
         });
-        assert_eq!(verdict, GateVerdict::SuppressRaii);
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

@@ -129,17 +129,41 @@ mod tests {
 
     #[test]
     fn test_risk_score_clamping() {
-        assert_eq!(RiskScore::new(-0.5).value(), 0.0);
-        assert_eq!(RiskScore::new(1.5).value(), 1.0);
-        assert_eq!(RiskScore::new(0.5).value(), 0.5);
+        assert_eq!(
+            RiskScore::new(-0.5).value(),
+            0.0,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            RiskScore::new(1.5).value(),
+            1.0,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            RiskScore::new(0.5).value(),
+            0.5,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_risk_score_levels() {
-        assert!(RiskScore::new(0.8).is_high());
-        assert!(RiskScore::new(0.5).is_medium());
-        assert!(RiskScore::new(0.2).is_low());
-        assert!(!RiskScore::new(0.2).is_high());
+        assert!(
+            RiskScore::new(0.8).is_high(),
+            "Expected condition to be true"
+        );
+        assert!(
+            RiskScore::new(0.5).is_medium(),
+            "Expected condition to be true"
+        );
+        assert!(
+            RiskScore::new(0.2).is_low(),
+            "Expected condition to be true"
+        );
+        assert!(
+            !RiskScore::new(0.2).is_high(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]

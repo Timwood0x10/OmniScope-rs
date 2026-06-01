@@ -810,7 +810,8 @@ mod tests {
 
         assert_eq!(
             behavior.return_source,
-            ReturnSource::CallResult("strlen".to_string())
+            ReturnSource::CallResult("strlen".to_string()),
+            "Expected values to be equal"
         );
     }
 
@@ -827,7 +828,11 @@ mod tests {
         let body = parse_body(ir);
         let behavior = extract_behavior(&body);
 
-        assert_eq!(behavior.return_source, ReturnSource::Void);
+        assert_eq!(
+            behavior.return_source,
+            ReturnSource::Void,
+            "Expected values to be equal"
+        );
     }
 
     // ── Golden Tests : Unknown function names with recognizable IR patterns ──

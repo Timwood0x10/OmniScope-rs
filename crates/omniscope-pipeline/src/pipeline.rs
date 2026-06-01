@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_pipeline_creation() {
         let pipeline = Pipeline::new();
-        assert_eq!(pipeline.pass_count(), 0);
+        assert_eq!(pipeline.pass_count(), 0, "Expected values to be equal");
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.register_default_passes();
 
-        assert_eq!(pipeline.pass_count(), 19);
+        assert_eq!(pipeline.pass_count(), 19, "Expected values to be equal");
     }
 
     #[test]

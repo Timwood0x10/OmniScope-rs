@@ -244,11 +244,11 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "Py_INCREF" | "Py_XINCREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountInc),
-            "Py_DECREF" | "Py_XDECREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountDec),
-            "PyList_GetItem" | "PyTuple_GetItem" | "PyDict_GetItem" => prop_assert_eq!(kind, SemanticKind::PythonBorrowedRef),
-            "PyBytes_FromString" | "PyLong_FromLong" | "PyFloat_FromDouble" | "PyObject_Call" | "PyUnicode_FromString" | "PyBool_FromLong" => prop_assert_eq!(kind, SemanticKind::PythonOwnedRef),
-            "PyGILState_Ensure" | "PyGILState_Release" => prop_assert_eq!(kind, SemanticKind::PythonGilProtected),
+            "Py_INCREF" | "Py_XINCREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountInc, "Expected values to be equal"),
+            "Py_DECREF" | "Py_XDECREF" => prop_assert_eq!(kind, SemanticKind::PythonRefcountDec, "Expected values to be equal"),
+            "PyList_GetItem" | "PyTuple_GetItem" | "PyDict_GetItem" => prop_assert_eq!(kind, SemanticKind::PythonBorrowedRef, "Expected values to be equal"),
+            "PyBytes_FromString" | "PyLong_FromLong" | "PyFloat_FromDouble" | "PyObject_Call" | "PyUnicode_FromString" | "PyBool_FromLong" => prop_assert_eq!(kind, SemanticKind::PythonOwnedRef, "Expected values to be equal"),
+            "PyGILState_Ensure" | "PyGILState_Release" => prop_assert_eq!(kind, SemanticKind::PythonGilProtected, "Expected values to be equal"),
             _ => {} // Other prefixes don't match Python patterns
         }
     }
@@ -270,10 +270,10 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "defer C.free" => prop_assert_eq!(kind, SemanticKind::GoDeferCleanup),
-            "runtime.SetFinalizer" => prop_assert_eq!(kind, SemanticKind::GoFinalizer),
-            "_Cgo_" | "_cgo_" => prop_assert_eq!(kind, SemanticKind::GoCgoWrapper),
-            "runtime.mallocgc" | "runtime.newobject" | "runtime.newarray" => prop_assert_eq!(kind, SemanticKind::GoRuntimeAlloc),
+            "defer C.free" => prop_assert_eq!(kind, SemanticKind::GoDeferCleanup, "Expected values to be equal"),
+            "runtime.SetFinalizer" => prop_assert_eq!(kind, SemanticKind::GoFinalizer, "Expected values to be equal"),
+            "_Cgo_" | "_cgo_" => prop_assert_eq!(kind, SemanticKind::GoCgoWrapper, "Expected values to be equal"),
+            "runtime.mallocgc" | "runtime.newobject" | "runtime.newarray" => prop_assert_eq!(kind, SemanticKind::GoRuntimeAlloc, "Expected values to be equal"),
             _ => {} // Other prefixes don't match Go patterns
         }
     }
@@ -295,10 +295,10 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "unique_ptr" | "make_unique" | "std::unique_ptr" => prop_assert_eq!(kind, SemanticKind::CppUniquePtr),
-            "shared_ptr" | "make_shared" | "std::shared_ptr" => prop_assert_eq!(kind, SemanticKind::CppSharedPtr),
-            "~" => prop_assert_eq!(kind, SemanticKind::CppDestructor),
-            "__cxa_throw" | "__cxa_begin_catch" | "__cxa_end_catch" | "__cxa_allocate_exception" => prop_assert_eq!(kind, SemanticKind::CppExceptionPath),
+            "unique_ptr" | "make_unique" | "std::unique_ptr" => prop_assert_eq!(kind, SemanticKind::CppUniquePtr, "Expected values to be equal"),
+            "shared_ptr" | "make_shared" | "std::shared_ptr" => prop_assert_eq!(kind, SemanticKind::CppSharedPtr, "Expected values to be equal"),
+            "~" => prop_assert_eq!(kind, SemanticKind::CppDestructor, "Expected values to be equal"),
+            "__cxa_throw" | "__cxa_begin_catch" | "__cxa_end_catch" | "__cxa_allocate_exception" => prop_assert_eq!(kind, SemanticKind::CppExceptionPath, "Expected values to be equal"),
             _ => {} // Other prefixes don't match C++ patterns
         }
     }
@@ -319,9 +319,9 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "SafeHandle" | "ReleaseHandle" | "CriticalHandle" => prop_assert_eq!(kind, SemanticKind::CsharpSafeHandle),
-            "Finalize" => prop_assert_eq!(kind, SemanticKind::CsharpFinalizer),
-            "DllImport" | "Marshal.AllocHGlobal" | "Marshal.FreeHGlobal" => prop_assert_eq!(kind, SemanticKind::CsharpPinvokeMarshal),
+            "SafeHandle" | "ReleaseHandle" | "CriticalHandle" => prop_assert_eq!(kind, SemanticKind::CsharpSafeHandle, "Expected values to be equal"),
+            "Finalize" => prop_assert_eq!(kind, SemanticKind::CsharpFinalizer, "Expected values to be equal"),
+            "DllImport" | "Marshal.AllocHGlobal" | "Marshal.FreeHGlobal" => prop_assert_eq!(kind, SemanticKind::CsharpPinvokeMarshal, "Expected values to be equal"),
             _ => {} // Other prefixes don't match C# patterns
         }
     }
@@ -342,9 +342,9 @@ proptest! {
         let kind = SemanticKind::from_function_name(&func_name);
 
         match prefix.as_str() {
-            "NewLocalRef" | "DeleteLocalRef" => prop_assert_eq!(kind, SemanticKind::JavaLocalRef),
-            "NewGlobalRef" | "DeleteGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaGlobalRef),
-            "NewWeakGlobalRef" | "DeleteWeakGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaWeakRef),
+            "NewLocalRef" | "DeleteLocalRef" => prop_assert_eq!(kind, SemanticKind::JavaLocalRef, "Expected values to be equal"),
+            "NewGlobalRef" | "DeleteGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaGlobalRef, "Expected values to be equal"),
+            "NewWeakGlobalRef" | "DeleteWeakGlobalRef" => prop_assert_eq!(kind, SemanticKind::JavaWeakRef, "Expected values to be equal"),
             _ => {} // Other prefixes don't match Java patterns
         }
     }

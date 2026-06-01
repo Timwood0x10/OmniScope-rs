@@ -16,9 +16,20 @@ fn test_sqlite3_open() {
     let c = db
         .lookup("sqlite3_open")
         .expect("ffi_contract::test::test_sqlite3_open: sqlite3_open not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert_eq!(c.source, ContractSource::SQLite);
-    assert!(c.paired_release.contains(&"sqlite3_close".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::SQLite,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"sqlite3_close".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that sqlite3_close is correctly registered as a SQLite deallocator.
@@ -33,8 +44,16 @@ fn test_sqlite3_close() {
     let c = db
         .lookup("sqlite3_close")
         .expect("ffi_contract::test::test_sqlite3_close: sqlite3_close not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
-    assert_eq!(c.source, ContractSource::SQLite);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::SQLite,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that sqlite3_exec is correctly registered as a SQLite borrower.
@@ -49,8 +68,16 @@ fn test_sqlite3_exec() {
     let c = db
         .lookup("sqlite3_exec")
         .expect("ffi_contract::test::test_sqlite3_exec: sqlite3_exec not found");
-    assert_eq!(c.contract_type, ContractType::Borrower);
-    assert_eq!(c.source, ContractSource::SQLite);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Borrower,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::SQLite,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that sqlite3_prepare_v2 is correctly registered as a SQLite allocator.
@@ -65,8 +92,15 @@ fn test_sqlite3_prepare() {
     let c = db
         .lookup("sqlite3_prepare_v2")
         .expect("ffi_contract::test::test_sqlite3_prepare: sqlite3_prepare_v2 not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"sqlite3_finalize".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"sqlite3_finalize".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that sqlite3_finalize is correctly registered as a SQLite deallocator.
@@ -80,7 +114,11 @@ fn test_sqlite3_finalize() {
     let c = db
         .lookup("sqlite3_finalize")
         .expect("ffi_contract::test::test_sqlite3_finalize: sqlite3_finalize not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that sqlite3_column_text is correctly registered as a SQLite borrower.
@@ -94,5 +132,9 @@ fn test_sqlite3_column_text() {
     let c = db
         .lookup("sqlite3_column_text")
         .expect("ffi_contract::test::test_sqlite3_column_text: sqlite3_column_text not found");
-    assert_eq!(c.contract_type, ContractType::Borrower);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Borrower,
+        "Expected values to be equal"
+    );
 }

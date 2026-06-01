@@ -70,7 +70,7 @@ mod tests {
         let value: ValueId = 3;
         let func: FunctionId = 4;
 
-        assert_ne!(node, edge);
-        assert_ne!(value, func);
+        assert_ne!(node, edge, "Expected values to be not equal");
+        assert_ne!(value, func, "Expected values to be not equal");
     }
 }

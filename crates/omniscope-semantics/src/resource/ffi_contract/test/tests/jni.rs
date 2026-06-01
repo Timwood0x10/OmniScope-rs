@@ -16,9 +16,16 @@ fn test_jni_find_class() {
     let c = db
         .lookup("FindClass")
         .expect("ffi_contract::test::test_jni_find_class: FindClass not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert_eq!(c.source, ContractSource::JNI);
-    assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(c.source, ContractSource::JNI, "Expected values to be equal");
+    assert!(
+        c.paired_release.contains(&"DeleteLocalRef".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that NewStringUTF is correctly registered as a JNI allocator.
@@ -33,8 +40,15 @@ fn test_jni_new_string() {
     let c = db
         .lookup("NewStringUTF")
         .expect("ffi_contract::test::test_jni_new_string: NewStringUTF not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"DeleteLocalRef".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that NewObject is correctly registered as a JNI allocator.
@@ -49,8 +63,15 @@ fn test_jni_new_object() {
     let c = db
         .lookup("NewObject")
         .expect("ffi_contract::test::test_jni_new_object: NewObject not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"DeleteLocalRef".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"DeleteLocalRef".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that DeleteLocalRef is correctly registered as a JNI deallocator.
@@ -64,7 +85,11 @@ fn test_jni_delete_local_ref() {
     let c = db
         .lookup("DeleteLocalRef")
         .expect("ffi_contract::test::test_jni_delete_local_ref: DeleteLocalRef not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that NewGlobalRef is correctly registered as a JNI allocator.
@@ -79,6 +104,13 @@ fn test_jni_new_global_ref() {
     let c = db
         .lookup("NewGlobalRef")
         .expect("ffi_contract::test::test_jni_new_global_ref: NewGlobalRef not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"DeleteGlobalRef".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"DeleteGlobalRef".to_string()),
+        "Expected condition to be true"
+    );
 }

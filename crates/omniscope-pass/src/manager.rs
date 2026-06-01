@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn test_pass_manager_creation() {
         let manager = PassManager::new();
-        assert_eq!(manager.pass_count(), 0);
+        assert_eq!(manager.pass_count(), 0, "Expected values to be equal");
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         manager.register(RawFactCollectorPass::new());
         manager.register(SummaryBuilderPass::new());
 
-        assert_eq!(manager.pass_count(), 2);
+        assert_eq!(manager.pass_count(), 2, "Expected values to be equal");
     }
 
     #[test]
@@ -297,7 +297,11 @@ mod tests {
 
         manager.compute_order().unwrap();
 
-        assert_eq!(manager.execution_order.len(), 3);
+        assert_eq!(
+            manager.execution_order.len(),
+            3,
+            "Expected values to be equal"
+        );
     }
 
     /// Mock pass with configurable name and dependencies for testing.

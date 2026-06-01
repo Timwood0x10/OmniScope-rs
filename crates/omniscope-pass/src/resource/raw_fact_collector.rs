@@ -279,9 +279,20 @@ mod tests {
     #[test]
     fn test_raw_fact_collector_creation() {
         let pass = RawFactCollectorPass::new();
-        assert_eq!(pass.name(), "RawFactCollector");
-        assert_eq!(pass.kind(), PassKind::Foundation);
-        assert!(pass.dependencies().is_empty());
+        assert_eq!(
+            pass.name(),
+            "RawFactCollector",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Foundation,
+            "Expected values to be equal"
+        );
+        assert!(
+            pass.dependencies().is_empty(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]

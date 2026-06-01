@@ -255,7 +255,11 @@ mod tests {
     fn test_rust_as_ptr_bridge() {
         let (summary, result) = infer_bridge_summary("as_ptr", 1, 100, LanguageHint::Rust);
         assert!(result.is_bridge, "as_ptr must be inferred as bridge");
-        assert_eq!(result.kind, BridgeKind::AsPtr);
+        assert_eq!(
+            result.kind,
+            BridgeKind::AsPtr,
+            "Expected values to be equal"
+        );
         assert!(summary.is_bridge(), "Summary must be classified as bridge");
         assert!(
             result.confidence > 0.9,
@@ -267,7 +271,7 @@ mod tests {
     fn test_rust_as_mut_ptr_bridge() {
         let (summary, result) = infer_bridge_summary("as_mut_ptr", 2, 200, LanguageHint::Rust);
         assert!(result.is_bridge, "as_mut_ptr must be inferred as bridge");
-        assert!(summary.is_bridge());
+        assert!(summary.is_bridge(), "Expected condition to be true");
     }
 
     #[test]
@@ -287,15 +291,23 @@ mod tests {
         let (summary, result) =
             infer_bridge_summary("std::string::data", 4, 400, LanguageHint::Cpp);
         assert!(result.is_bridge, "data() must be inferred as bridge");
-        assert_eq!(result.kind, BridgeKind::DataAccessor);
-        assert!(summary.is_bridge());
+        assert_eq!(
+            result.kind,
+            BridgeKind::DataAccessor,
+            "Expected values to be equal"
+        );
+        assert!(summary.is_bridge(), "Expected condition to be true");
     }
 
     #[test]
     fn test_cpp_c_str_accessor() {
         let (_, result) = infer_bridge_summary("c_str", 5, 500, LanguageHint::Cpp);
         assert!(result.is_bridge, "c_str must be inferred as bridge");
-        assert_eq!(result.kind, BridgeKind::DataAccessor);
+        assert_eq!(
+            result.kind,
+            BridgeKind::DataAccessor,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

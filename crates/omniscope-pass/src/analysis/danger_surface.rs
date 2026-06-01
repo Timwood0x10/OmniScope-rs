@@ -120,7 +120,11 @@ mod tests {
             "DangerSurface",
             "pass name must be DangerSurface"
         );
-        assert_eq!(pass.kind(), PassKind::Analysis);
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
         assert_eq!(
             pass.dependencies(),
             vec!["CallGraph", "FFIBoundary"],

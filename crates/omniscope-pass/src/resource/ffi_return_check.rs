@@ -383,54 +383,105 @@ mod tests {
     #[test]
     fn test_ffi_return_check_pass_creation() {
         let pass = FfiReturnCheckPass::new();
-        assert_eq!(pass.name(), "FfiReturnCheck");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert!(pass.dependencies().is_empty());
+        assert_eq!(pass.name(), "FfiReturnCheck", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert!(
+            pass.dependencies().is_empty(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_non_null_api() {
-        assert!(is_non_null_api("__rust_alloc"));
-        assert!(is_non_null_api("Box::into_raw"));
+        assert!(
+            is_non_null_api("__rust_alloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            is_non_null_api("Box::into_raw"),
+            "Expected condition to be true"
+        );
         // malloc is NOT non-null — it can return null!
-        assert!(!is_non_null_api("malloc"));
-        assert!(!is_non_null_api("calloc"));
-        assert!(!is_non_null_api("ffi_get_buffer"));
+        assert!(!is_non_null_api("malloc"), "Expected condition to be true");
+        assert!(!is_non_null_api("calloc"), "Expected condition to be true");
+        assert!(
+            !is_non_null_api("ffi_get_buffer"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_null_sink() {
-        assert!(is_null_sink("strlen"));
-        assert!(is_null_sink("free"));
-        assert!(is_null_sink("memcpy"));
-        assert!(!is_null_sink("some_other_func"));
+        assert!(is_null_sink("strlen"), "Expected condition to be true");
+        assert!(is_null_sink("free"), "Expected condition to be true");
+        assert!(is_null_sink("memcpy"), "Expected condition to be true");
+        assert!(
+            !is_null_sink("some_other_func"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_likely_ffi_by_name() {
-        assert!(is_likely_ffi_by_name("ffi_get_buffer"));
-        assert!(is_likely_ffi_by_name("curl_easy_init"));
-        assert!(!is_likely_ffi_by_name("_RNvCsome_rust_mangled"));
-        assert!(!is_likely_ffi_by_name("Some::rust_func"));
+        assert!(
+            is_likely_ffi_by_name("ffi_get_buffer"),
+            "Expected condition to be true"
+        );
+        assert!(
+            is_likely_ffi_by_name("curl_easy_init"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !is_likely_ffi_by_name("_RNvCsome_rust_mangled"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !is_likely_ffi_by_name("Some::rust_func"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_returns_pointer() {
-        assert!(returns_pointer("  %p = call ptr @ffi_get()"));
-        assert!(returns_pointer("  %p = tail call ptr @malloc(i64 %n)"));
-        assert!(returns_pointer(
-            "  %p = call noundef ptr @fopen(ptr %s, ptr %m)"
-        ));
-        assert!(!returns_pointer("  %r = call i32 @c_hash(ptr %p, i64 %n)"));
-        assert!(!returns_pointer("  %t = call i64 @time(ptr null)"));
-        assert!(!returns_pointer("  call void @free(ptr %p)"));
+        assert!(
+            returns_pointer("  %p = call ptr @ffi_get()"),
+            "Expected condition to be true"
+        );
+        assert!(
+            returns_pointer("  %p = tail call ptr @malloc(i64 %n)"),
+            "Expected condition to be true"
+        );
+        assert!(
+            returns_pointer("  %p = call noundef ptr @fopen(ptr %s, ptr %m)"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !returns_pointer("  %r = call i32 @c_hash(ptr %p, i64 %n)"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !returns_pointer("  %t = call i64 @time(ptr null)"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !returns_pointer("  call void @free(ptr %p)"),
+            "Expected condition to be true"
+        );
         // Variadic: return type is i32, not ptr
-        assert!(!returns_pointer(
-            "  %16 = tail call i32 (ptr, ptr, ...) @fprintf(ptr %f, ptr %s)"
-        ));
-        assert!(!returns_pointer(
-            "  %112 = tail call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 %n, ptr %f)"
-        ));
+        assert!(
+            !returns_pointer("  %16 = tail call i32 (ptr, ptr, ...) @fprintf(ptr %f, ptr %s)"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !returns_pointer(
+                "  %112 = tail call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 %n, ptr %f)"
+            ),
+            "Expected condition to be true"
+        );
     }
 
     /// TP: FFI call returning ptr, immediately load without null check

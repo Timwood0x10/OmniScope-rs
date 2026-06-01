@@ -264,10 +264,14 @@ mod tests {
             family: FamilyId::RUST_GLOBAL,
             result: 1,
         };
-        assert_eq!(effect.family(), Some(FamilyId::RUST_GLOBAL));
+        assert_eq!(
+            effect.family(),
+            Some(FamilyId::RUST_GLOBAL),
+            "Expected values to be equal"
+        );
 
         let borrowed = Effect::ReturnsBorrowed;
-        assert_eq!(borrowed.family(), None);
+        assert_eq!(borrowed.family(), None, "Expected values to be equal");
     }
 
     #[test]

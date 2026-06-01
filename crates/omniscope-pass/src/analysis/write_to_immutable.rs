@@ -218,8 +218,16 @@ mod tests {
     #[test]
     fn test_write_to_immutable_pass_creation() {
         let pass = WriteToImmutablePass::new();
-        assert_eq!(pass.name(), "WriteToImmutable");
-        assert_eq!(pass.kind(), PassKind::Analysis);
+        assert_eq!(
+            pass.name(),
+            "WriteToImmutable",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -269,8 +277,17 @@ mod tests {
     #[test]
     fn test_is_function_parameter() {
         let pass = WriteToImmutablePass::new();
-        assert!(pass.is_function_parameter("func->param"));
-        assert!(pass.is_function_parameter("func->arg"));
-        assert!(!pass.is_function_parameter("func->local"));
+        assert!(
+            pass.is_function_parameter("func->param"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_function_parameter("func->arg"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_function_parameter("func->local"),
+            "Expected condition to be true"
+        );
     }
 }

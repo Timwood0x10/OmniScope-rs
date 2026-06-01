@@ -542,7 +542,10 @@ mod tests {
             malloc.family_id, free.family_id,
             "malloc and free must be same family"
         );
-        assert!(registry.is_compatible_release(malloc.family_id, free.family_id));
+        assert!(
+            registry.is_compatible_release(malloc.family_id, free.family_id),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -558,7 +561,10 @@ mod tests {
             malloc.family_id, del.family_id,
             "malloc and delete must be different families"
         );
-        assert!(!registry.is_compatible_release(malloc.family_id, del.family_id));
+        assert!(
+            !registry.is_compatible_release(malloc.family_id, del.family_id),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -570,7 +576,10 @@ mod tests {
         let free = registry
             .lookup("free")
             .expect("family_registry::test_rust_alloc_c_free_mismatch: free must be registered");
-        assert!(!registry.is_compatible_release(rust_alloc.family_id, free.family_id));
+        assert!(
+            !registry.is_compatible_release(rust_alloc.family_id, free.family_id),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -582,7 +591,7 @@ mod tests {
         let free = registry.lookup("PyObject_Free").expect(
             "family_registry::test_pyobject_new_free_same_family: PyObject_Free must be registered",
         );
-        assert_eq!(new.family_id, free.family_id);
+        assert_eq!(new.family_id, free.family_id, "Expected values to be equal");
     }
 
     #[test]
@@ -606,7 +615,11 @@ mod tests {
         let decref = registry.lookup("Py_DECREF").expect(
             "family_registry::test_py_decref_is_conditional_release: Py_DECREF must be registered",
         );
-        assert_eq!(decref.effect, SymbolEffect::ConditionalRelease);
+        assert_eq!(
+            decref.effect,
+            SymbolEffect::ConditionalRelease,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -615,7 +628,11 @@ mod tests {
         let incref = registry
             .lookup("Py_INCREF")
             .expect("family_registry::test_py_incref_is_retain: Py_INCREF must be registered");
-        assert_eq!(incref.effect, SymbolEffect::Retain);
+        assert_eq!(
+            incref.effect,
+            SymbolEffect::Retain,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

@@ -265,53 +265,138 @@ mod tests {
 
     #[test]
     fn test_tier_classification() {
-        assert_eq!(ConfidenceTier::from_score(0.90), ConfidenceTier::Critical);
-        assert_eq!(ConfidenceTier::from_score(0.85), ConfidenceTier::Critical);
-        assert_eq!(ConfidenceTier::from_score(0.75), ConfidenceTier::High);
-        assert_eq!(ConfidenceTier::from_score(0.70), ConfidenceTier::High);
-        assert_eq!(ConfidenceTier::from_score(0.60), ConfidenceTier::Medium);
-        assert_eq!(ConfidenceTier::from_score(0.50), ConfidenceTier::Medium);
+        assert_eq!(
+            ConfidenceTier::from_score(0.90),
+            ConfidenceTier::Critical,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            ConfidenceTier::from_score(0.85),
+            ConfidenceTier::Critical,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            ConfidenceTier::from_score(0.75),
+            ConfidenceTier::High,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            ConfidenceTier::from_score(0.70),
+            ConfidenceTier::High,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            ConfidenceTier::from_score(0.60),
+            ConfidenceTier::Medium,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            ConfidenceTier::from_score(0.50),
+            ConfidenceTier::Medium,
+            "Expected values to be equal"
+        );
         assert_eq!(
             ConfidenceTier::from_score(0.30),
-            ConfidenceTier::Informational
+            ConfidenceTier::Informational,
+            "Expected values to be equal"
         );
     }
 
     #[test]
     fn test_base_severity() {
-        assert!(base_severity_for_kind("use_after_free") > 0.6);
-        assert!(base_severity_for_kind("borrow_escape") > 0.4);
-        assert!(base_severity_for_kind("unknown_kind") > 0.0);
+        assert!(
+            base_severity_for_kind("use_after_free") > 0.6,
+            "Expected condition to be true"
+        );
+        assert!(
+            base_severity_for_kind("borrow_escape") > 0.4,
+            "Expected condition to be true"
+        );
+        assert!(
+            base_severity_for_kind("unknown_kind") > 0.0,
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_provenance_clarity_bonus() {
-        assert_eq!(provenance_clarity_bonus(true, false), 0.20);
-        assert_eq!(provenance_clarity_bonus(false, true), 0.10);
-        assert_eq!(provenance_clarity_bonus(false, false), -0.10);
+        assert_eq!(
+            provenance_clarity_bonus(true, false),
+            0.20,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            provenance_clarity_bonus(false, true),
+            0.10,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            provenance_clarity_bonus(false, false),
+            -0.10,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_corpus_frequency_penalty() {
-        assert_eq!(corpus_frequency_penalty(0), 0.0);
-        assert!(corpus_frequency_penalty(1) < 0.0);
-        assert!(corpus_frequency_penalty(100) < corpus_frequency_penalty(1));
-        assert!(corpus_frequency_penalty(10000) >= -0.30); // capped
+        assert_eq!(
+            corpus_frequency_penalty(0),
+            0.0,
+            "Expected values to be equal"
+        );
+        assert!(
+            corpus_frequency_penalty(1) < 0.0,
+            "Expected condition to be true"
+        );
+        assert!(
+            corpus_frequency_penalty(100) < corpus_frequency_penalty(1),
+            "Expected condition to be true"
+        );
+        assert!(
+            corpus_frequency_penalty(10000) >= -0.30,
+            "Expected condition to be true"
+        ); // capped
     }
 
     #[test]
     fn test_dataflow_proximity() {
-        assert_eq!(dataflow_proximity_bonus(0), 0.0); // no taint path
-        assert!(dataflow_proximity_bonus(1) > 0.1);
-        assert!(dataflow_proximity_bonus(5) < dataflow_proximity_bonus(1));
-        assert_eq!(dataflow_proximity_bonus(100), 0.0015); // near zero
+        assert_eq!(
+            dataflow_proximity_bonus(0),
+            0.0,
+            "Expected values to be equal"
+        ); // no taint path
+        assert!(
+            dataflow_proximity_bonus(1) > 0.1,
+            "Expected condition to be true"
+        );
+        assert!(
+            dataflow_proximity_bonus(5) < dataflow_proximity_bonus(1),
+            "Expected condition to be true"
+        );
+        assert_eq!(
+            dataflow_proximity_bonus(100),
+            0.0015,
+            "Expected values to be equal"
+        ); // near zero
     }
 
     #[test]
     fn test_multi_detector_consensus() {
-        assert_eq!(multi_detector_consensus_bonus(1), 0.0);
-        assert_eq!(multi_detector_consensus_bonus(2), 0.15);
-        assert_eq!(multi_detector_consensus_bonus(5), 0.15);
+        assert_eq!(
+            multi_detector_consensus_bonus(1),
+            0.0,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            multi_detector_consensus_bonus(2),
+            0.15,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            multi_detector_consensus_bonus(5),
+            0.15,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -319,7 +404,10 @@ mod tests {
         let srt = empty_srt();
         let ctx = ScoringContext::new(&srt);
         let bd = score_issue("use_after_free", &ctx);
-        assert!(bd.total() >= 0.0 && bd.total() <= 1.0);
+        assert!(
+            bd.total() >= 0.0 && bd.total() <= 1.0,
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -338,7 +426,8 @@ mod tests {
         assert!(bd.total() < 0.5, "expected low score, got {}", bd.total());
         assert_eq!(
             ConfidenceTier::from_score(bd.total()),
-            ConfidenceTier::Informational
+            ConfidenceTier::Informational,
+            "Expected values to be equal"
         );
     }
 
@@ -362,7 +451,8 @@ mod tests {
         );
         assert_eq!(
             ConfidenceTier::from_score(bd.total()),
-            ConfidenceTier::Critical
+            ConfidenceTier::Critical,
+            "Expected values to be equal"
         );
     }
 
@@ -371,7 +461,11 @@ mod tests {
         let srt = empty_srt();
         let ctx = ScoringContext::new(&srt);
         let (tier, bd) = classify_issue("use_after_free", &ctx);
-        assert_eq!(tier, ConfidenceTier::from_score(bd.total()));
+        assert_eq!(
+            tier,
+            ConfidenceTier::from_score(bd.total()),
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -380,8 +474,14 @@ mod tests {
         let ctx = ScoringContext::new(&srt);
         let bd = score_issue("use_after_free", &ctx);
         let formatted = bd.format();
-        assert!(formatted.contains("base="));
-        assert!(formatted.contains("provenance="));
-        assert!(formatted.contains("corpus_freq="));
+        assert!(formatted.contains("base="), "Expected condition to be true");
+        assert!(
+            formatted.contains("provenance="),
+            "Expected condition to be true"
+        );
+        assert!(
+            formatted.contains("corpus_freq="),
+            "Expected condition to be true"
+        );
     }
 }

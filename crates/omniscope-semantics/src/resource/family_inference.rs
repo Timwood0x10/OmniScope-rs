@@ -165,7 +165,11 @@ mod tests {
     fn test_alloc_pattern_inference() {
         let registry = FamilyRegistry::new();
         let result = infer_family("foo_alloc", &registry);
-        assert_eq!(result.effect, Some(SymbolEffect::Acquire));
+        assert_eq!(
+            result.effect,
+            Some(SymbolEffect::Acquire),
+            "Expected values to be equal"
+        );
         assert!(
             result.confidence > 0.0,
             "Pattern match should have positive confidence"
@@ -176,22 +180,38 @@ mod tests {
     fn test_free_pattern_inference() {
         let registry = FamilyRegistry::new();
         let result = infer_family("bar_destroy", &registry);
-        assert_eq!(result.effect, Some(SymbolEffect::Release));
+        assert_eq!(
+            result.effect,
+            Some(SymbolEffect::Release),
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_unknown_symbol_no_inference() {
         let registry = FamilyRegistry::new();
         let result = infer_family("my_func", &registry);
-        assert_eq!(result.family_id, None);
-        assert_eq!(result.effect, None);
+        assert_eq!(result.family_id, None, "Expected values to be equal");
+        assert_eq!(result.effect, None, "Expected values to be equal");
     }
 
     #[test]
     fn test_language_hint_cpp_mangling() {
-        assert_eq!(infer_language_hint("_ZN3foo3barEv"), LanguageHint::Cpp);
-        assert_eq!(infer_language_hint("__rust_alloc"), LanguageHint::Rust);
-        assert_eq!(infer_language_hint("PyObject_New"), LanguageHint::Python);
+        assert_eq!(
+            infer_language_hint("_ZN3foo3barEv"),
+            LanguageHint::Cpp,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            infer_language_hint("__rust_alloc"),
+            LanguageHint::Rust,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            infer_language_hint("PyObject_New"),
+            LanguageHint::Python,
+            "Expected values to be equal"
+        );
     }
 
     /// Objective: Verify that into_raw pattern is inferred as Escape effect.

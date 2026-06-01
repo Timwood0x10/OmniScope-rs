@@ -451,9 +451,17 @@ mod tests {
     #[test]
     fn test_ffi_boundary_pass_creation() {
         let pass = FFIBoundaryPass::new();
-        assert_eq!(pass.name(), "FFIBoundary");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["RawFactCollector"]);
+        assert_eq!(pass.name(), "FFIBoundary", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["RawFactCollector"],
+            "Expected values to be equal"
+        );
     }
 
     #[test]

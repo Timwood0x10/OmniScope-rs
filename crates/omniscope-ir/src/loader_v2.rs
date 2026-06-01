@@ -444,16 +444,40 @@ mod tests {
 
     #[test]
     fn test_strategy_display() {
-        assert_eq!(LoadStrategy::Auto.to_string(), "auto");
-        assert_eq!(LoadStrategy::CppPass.to_string(), "cpp-pass");
-        assert_eq!(LoadStrategy::LlvmSys.to_string(), "llvm-sys");
-        assert_eq!(LoadStrategy::TextParser.to_string(), "text-parser");
+        assert_eq!(
+            LoadStrategy::Auto.to_string(),
+            "auto",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            LoadStrategy::CppPass.to_string(),
+            "cpp-pass",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            LoadStrategy::LlvmSys.to_string(),
+            "llvm-sys",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            LoadStrategy::TextParser.to_string(),
+            "text-parser",
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_strategy_equality() {
-        assert_eq!(LoadStrategy::Auto, LoadStrategy::Auto);
-        assert_ne!(LoadStrategy::Auto, LoadStrategy::TextParser);
+        assert_eq!(
+            LoadStrategy::Auto,
+            LoadStrategy::Auto,
+            "Expected values to be equal"
+        );
+        assert_ne!(
+            LoadStrategy::Auto,
+            LoadStrategy::TextParser,
+            "Expected values to be not equal"
+        );
     }
 
     #[test]

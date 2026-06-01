@@ -102,7 +102,11 @@ mod tests {
             EscapeContext::ReturnToCaller,
         );
         assert!(result.is_safe, "ReturnToCaller escape is safe");
-        assert_eq!(result.kind, EscapeKind::ReturnToCaller);
+        assert_eq!(
+            result.kind,
+            EscapeKind::ReturnToCaller,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -121,7 +125,11 @@ mod tests {
     fn test_static_init_is_safe() {
         let result = classify_escape(PointerContract::Owned, EscapeContext::StaticInit);
         assert!(result.is_safe, "StaticInit is not a leak");
-        assert_eq!(result.contract, PointerContract::StaticLifetime);
+        assert_eq!(
+            result.contract,
+            PointerContract::StaticLifetime,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

@@ -8,9 +8,21 @@ use omniscope_types::{Effect, FamilyId, PointerContract};
 #[test]
 fn test_contract_graph_builder_creation() {
     let pass = ContractGraphBuilderPass::new();
-    assert_eq!(pass.name(), "ContractGraphBuilder");
-    assert_eq!(pass.kind(), PassKind::Analysis);
-    assert_eq!(pass.dependencies(), vec!["StructuralInference"]);
+    assert_eq!(
+        pass.name(),
+        "ContractGraphBuilder",
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        pass.kind(),
+        PassKind::Analysis,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        pass.dependencies(),
+        vec!["StructuralInference"],
+        "Expected values to be equal"
+    );
 }
 
 #[test]

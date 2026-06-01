@@ -193,8 +193,16 @@ mod tests {
         .with_confidence(0.95)
         .with_family(FamilyId::C_HEAP);
 
-        assert_eq!(evidence.kind, EvidenceKind::SameFamilyRelease);
-        assert_eq!(evidence.family, Some(FamilyId::C_HEAP));
+        assert_eq!(
+            evidence.kind,
+            EvidenceKind::SameFamilyRelease,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            evidence.family,
+            Some(FamilyId::C_HEAP),
+            "Expected values to be equal"
+        );
         assert!(
             evidence.is_high_confidence(),
             "0.95 >= 0.8 should be high confidence"

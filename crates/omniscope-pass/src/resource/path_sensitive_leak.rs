@@ -374,16 +374,27 @@ mod tests {
     #[test]
     fn test_pass_creation() {
         let pass = LeakDetectionPass::new();
-        assert_eq!(pass.name(), "LeakDetection");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["OwnershipSolver"]);
-        assert_eq!(pass.path_budget, DEFAULT_PATH_BUDGET);
+        assert_eq!(pass.name(), "LeakDetection", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["OwnershipSolver"],
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.path_budget, DEFAULT_PATH_BUDGET,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_custom_path_budget() {
         let pass = LeakDetectionPass::new().with_path_budget(128);
-        assert_eq!(pass.path_budget, 128);
+        assert_eq!(pass.path_budget, 128, "Expected values to be equal");
     }
 
     #[test]
@@ -411,7 +422,10 @@ mod tests {
             result.is_definite_leak(),
             "All paths leaking is a definite leak"
         );
-        assert!(!result.is_conditional_leak());
+        assert!(
+            !result.is_conditional_leak(),
+            "Expected condition to be true"
+        );
         assert!(
             result.leak_confidence() > 0.8,
             "Definite leak should have high confidence"
@@ -421,7 +435,7 @@ mod tests {
     #[test]
     fn test_path_analysis_conditional_leak() {
         let result = PathAnalysisResult::new(4, 2, 2, false);
-        assert!(!result.is_definite_leak());
+        assert!(!result.is_definite_leak(), "Expected condition to be true");
         assert!(
             result.is_conditional_leak(),
             "Some paths leaking is a conditional leak"
@@ -435,8 +449,11 @@ mod tests {
     #[test]
     fn test_path_analysis_no_leak() {
         let result = PathAnalysisResult::new(3, 0, 3, false);
-        assert!(!result.is_definite_leak());
-        assert!(!result.is_conditional_leak());
+        assert!(!result.is_definite_leak(), "Expected condition to be true");
+        assert!(
+            !result.is_conditional_leak(),
+            "Expected condition to be true"
+        );
         assert_eq!(
             result.leak_confidence(),
             0.0,

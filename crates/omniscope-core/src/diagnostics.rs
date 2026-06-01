@@ -279,12 +279,16 @@ mod tests {
             .note("this is a note")
             .help("try this instead");
 
-        assert_eq!(diag.id, 1);
-        assert_eq!(diag.severity, Severity::Error);
-        assert_eq!(diag.code, "E0001");
-        assert_eq!(diag.message, "test error");
-        assert_eq!(diag.notes.len(), 1);
-        assert_eq!(diag.helps.len(), 1);
+        assert_eq!(diag.id, 1, "Expected values to be equal");
+        assert_eq!(
+            diag.severity,
+            Severity::Error,
+            "Expected values to be equal"
+        );
+        assert_eq!(diag.code, "E0001", "Expected values to be equal");
+        assert_eq!(diag.message, "test error", "Expected values to be equal");
+        assert_eq!(diag.notes.len(), 1, "Expected values to be equal");
+        assert_eq!(diag.helps.len(), 1, "Expected values to be equal");
     }
 
     #[test]
@@ -293,9 +297,13 @@ mod tests {
             .with_column(5)
             .with_function("main".to_string());
 
-        assert_eq!(loc.line, 10);
-        assert_eq!(loc.column, Some(5));
-        assert_eq!(loc.function, Some("main".to_string()));
+        assert_eq!(loc.line, 10, "Expected values to be equal");
+        assert_eq!(loc.column, Some(5), "Expected values to be equal");
+        assert_eq!(
+            loc.function,
+            Some("main".to_string()),
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -308,11 +316,11 @@ mod tests {
         let id1 = aggregator.emit(diag1);
         let id2 = aggregator.emit(diag2);
 
-        assert_ne!(id1, id2);
-        assert_eq!(aggregator.count(), 2);
-        assert_eq!(aggregator.error_count(), 1);
-        assert_eq!(aggregator.warning_count(), 1);
-        assert!(aggregator.has_errors());
+        assert_ne!(id1, id2, "Expected values to be not equal");
+        assert_eq!(aggregator.count(), 2, "Expected values to be equal");
+        assert_eq!(aggregator.error_count(), 1, "Expected values to be equal");
+        assert_eq!(aggregator.warning_count(), 1, "Expected values to be equal");
+        assert!(aggregator.has_errors(), "Expected condition to be true");
     }
 
     #[test]
@@ -326,14 +334,23 @@ mod tests {
         aggregator.emit(diag);
 
         let diags = aggregator.by_file(&file);
-        assert_eq!(diags.len(), 1);
+        assert_eq!(diags.len(), 1, "Expected values to be equal");
     }
 
     #[test]
     fn test_severity_checks() {
-        assert!(Severity::Error.is_error());
-        assert!(!Severity::Error.is_warning());
-        assert!(!Severity::Warning.is_error());
-        assert!(Severity::Warning.is_warning());
+        assert!(Severity::Error.is_error(), "Expected condition to be true");
+        assert!(
+            !Severity::Error.is_warning(),
+            "Expected condition to be true"
+        );
+        assert!(
+            !Severity::Warning.is_error(),
+            "Expected condition to be true"
+        );
+        assert!(
+            Severity::Warning.is_warning(),
+            "Expected condition to be true"
+        );
     }
 }

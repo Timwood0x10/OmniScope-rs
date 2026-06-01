@@ -230,7 +230,11 @@ mod tests {
             Some(FamilyId::RUST_GLOBAL),
         );
         assert!(result.is_destructor, "drop must be inferred as destructor");
-        assert_eq!(result.kind, DestructorKind::RustDrop);
+        assert_eq!(
+            result.kind,
+            DestructorKind::RustDrop,
+            "Expected values to be equal"
+        );
         assert!(
             summary.releases_resource(),
             "Destructor summary must release resource"
@@ -251,8 +255,12 @@ mod tests {
             Some(FamilyId::CPP_NEW_SCALAR),
         );
         assert!(result.is_destructor, "C++ destructor must be inferred");
-        assert_eq!(result.kind, DestructorKind::CppDestructor);
-        assert!(summary.releases_resource());
+        assert_eq!(
+            result.kind,
+            DestructorKind::CppDestructor,
+            "Expected values to be equal"
+        );
+        assert!(summary.releases_resource(), "Expected condition to be true");
     }
 
     #[test]
@@ -268,8 +276,12 @@ mod tests {
             result.is_destructor,
             "Dispose must be inferred as destructor"
         );
-        assert_eq!(result.kind, DestructorKind::CSharpDispose);
-        assert!(summary.releases_resource());
+        assert_eq!(
+            result.kind,
+            DestructorKind::CSharpDispose,
+            "Expected values to be equal"
+        );
+        assert!(summary.releases_resource(), "Expected condition to be true");
     }
 
     #[test]
@@ -285,7 +297,11 @@ mod tests {
             result.is_destructor,
             "__del__ must be inferred as destructor"
         );
-        assert_eq!(result.kind, DestructorKind::PythonFinalizer);
+        assert_eq!(
+            result.kind,
+            DestructorKind::PythonFinalizer,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -295,7 +311,11 @@ mod tests {
             result.is_destructor,
             "buffer_destroy must be inferred as destructor"
         );
-        assert_eq!(result.kind, DestructorKind::CDestroy);
+        assert_eq!(
+            result.kind,
+            DestructorKind::CDestroy,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -306,7 +326,11 @@ mod tests {
             result.is_destructor,
             "connection_close must be inferred as destructor"
         );
-        assert_eq!(result.kind, DestructorKind::GenericCleanup);
+        assert_eq!(
+            result.kind,
+            DestructorKind::GenericCleanup,
+            "Expected values to be equal"
+        );
         assert!(
             result.confidence < 0.7,
             "Generic cleanup should have moderate confidence"

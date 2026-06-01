@@ -158,7 +158,10 @@ mod tests {
     #[test]
     fn test_language_detector_creation() {
         let detector = LanguageDetector::new();
-        assert!(!detector.patterns.is_empty());
+        assert!(
+            !detector.patterns.is_empty(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -166,10 +169,10 @@ mod tests {
         let detector = LanguageDetector::new();
 
         let lang = detector.detect_from_function("_ZN4core3str4len");
-        assert_eq!(lang, Language::Rust);
+        assert_eq!(lang, Language::Rust, "Expected values to be equal");
 
         let lang = detector.detect_from_module("lib.rs");
-        assert_eq!(lang, Language::Rust);
+        assert_eq!(lang, Language::Rust, "Expected values to be equal");
     }
 
     #[test]
@@ -177,10 +180,10 @@ mod tests {
         let detector = LanguageDetector::new();
 
         let lang = detector.detect_from_function("_Z3fooi");
-        assert_eq!(lang, Language::Cpp);
+        assert_eq!(lang, Language::Cpp, "Expected values to be equal");
 
         let lang = detector.detect_from_module("main.cpp");
-        assert_eq!(lang, Language::Cpp);
+        assert_eq!(lang, Language::Cpp, "Expected values to be equal");
     }
 
     #[test]
@@ -188,7 +191,7 @@ mod tests {
         let detector = LanguageDetector::new();
 
         let lang = detector.detect_from_module("main.c");
-        assert_eq!(lang, Language::C);
+        assert_eq!(lang, Language::C, "Expected values to be equal");
     }
 
     #[test]
@@ -198,6 +201,6 @@ mod tests {
         let functions = vec!["_ZN4core3str4len", "_ZN5alloc5alloc", "unknown_func"];
 
         let lang = detector.detect_from_functions(&functions);
-        assert_eq!(lang, Language::Rust);
+        assert_eq!(lang, Language::Rust, "Expected values to be equal");
     }
 }

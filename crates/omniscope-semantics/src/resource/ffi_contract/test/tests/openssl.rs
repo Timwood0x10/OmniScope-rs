@@ -17,10 +17,25 @@ fn test_openssl_malloc() {
     let c = db
         .lookup("OPENSSL_malloc")
         .expect("ffi_contract::test::test_openssl_malloc: OPENSSL_malloc not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert_eq!(c.source, ContractSource::OpenSSL);
-    assert!(c.paired_release.contains(&"OPENSSL_free".to_string()));
-    assert_eq!(c.ownership, OwnershipSemantics::CallerOwns);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::OpenSSL,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"OPENSSL_free".to_string()),
+        "Expected condition to be true"
+    );
+    assert_eq!(
+        c.ownership,
+        OwnershipSemantics::CallerOwns,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that OPENSSL_free is correctly registered as an OpenSSL deallocator.
@@ -35,8 +50,16 @@ fn test_openssl_free() {
     let c = db
         .lookup("OPENSSL_free")
         .expect("ffi_contract::test::test_openssl_free: OPENSSL_free not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
-    assert_eq!(c.source, ContractSource::OpenSSL);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::OpenSSL,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that OPENSSL_strdup is correctly registered as an OpenSSL allocator.
@@ -51,8 +74,15 @@ fn test_openssl_strdup() {
     let c = db
         .lookup("OPENSSL_strdup")
         .expect("ffi_contract::test::test_openssl_strdup: OPENSSL_strdup not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"OPENSSL_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"OPENSSL_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that OPENSSL_clear_free is correctly registered as an OpenSSL deallocator.
@@ -66,7 +96,11 @@ fn test_openssl_clear_free() {
     let c = db
         .lookup("OPENSSL_clear_free")
         .expect("ffi_contract::test::test_openssl_clear_free: OPENSSL_clear_free not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that CRYPTO_secure_malloc is correctly registered as an OpenSSL allocator.
@@ -81,8 +115,15 @@ fn test_openssl_secure_malloc() {
     let c = db
         .lookup("CRYPTO_secure_malloc")
         .expect("ffi_contract::test::test_openssl_secure_malloc: CRYPTO_secure_malloc not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"CRYPTO_secure_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"CRYPTO_secure_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that EVP_MD_CTX_new is correctly registered as an OpenSSL allocator.
@@ -97,8 +138,15 @@ fn test_evp_md_ctx() {
     let c = db
         .lookup("EVP_MD_CTX_new")
         .expect("ffi_contract::test::test_evp_md_ctx: EVP_MD_CTX_new not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"EVP_MD_CTX_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"EVP_MD_CTX_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that EVP_CIPHER_CTX_new is correctly registered as an OpenSSL allocator.
@@ -113,10 +161,16 @@ fn test_evp_cipher_ctx() {
     let c = db
         .lookup("EVP_CIPHER_CTX_new")
         .expect("ffi_contract::test::test_evp_cipher_ctx: EVP_CIPHER_CTX_new not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c
-        .paired_release
-        .contains(&"EVP_CIPHER_CTX_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release
+            .contains(&"EVP_CIPHER_CTX_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that BIO_new is correctly registered as an OpenSSL allocator.
@@ -131,9 +185,19 @@ fn test_bio_new() {
     let c = db
         .lookup("BIO_new")
         .expect("ffi_contract::test::test_bio_new: BIO_new not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"BIO_free".to_string()));
-    assert!(c.paired_release.contains(&"BIO_free_all".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"BIO_free".to_string()),
+        "Expected condition to be true"
+    );
+    assert!(
+        c.paired_release.contains(&"BIO_free_all".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that SSL_CTX_new is correctly registered as an OpenSSL allocator.
@@ -148,8 +212,15 @@ fn test_ssl_ctx() {
     let c = db
         .lookup("SSL_CTX_new")
         .expect("ffi_contract::test::test_ssl_ctx: SSL_CTX_new not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"SSL_CTX_free".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"SSL_CTX_free".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that X509_free is correctly registered as an OpenSSL deallocator.
@@ -163,5 +234,9 @@ fn test_x509_free() {
     let c = db
         .lookup("X509_free")
         .expect("ffi_contract::test::test_x509_free: X509_free not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }

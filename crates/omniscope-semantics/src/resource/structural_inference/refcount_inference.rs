@@ -217,8 +217,16 @@ mod tests {
             result.is_refcount_release,
             "Py_DECREF must be inferred as refcount release"
         );
-        assert_eq!(result.kind, RefcountKind::PythonRefcount);
-        assert_eq!(result.family, FamilyId::PYTHON_OBJECT);
+        assert_eq!(
+            result.kind,
+            RefcountKind::PythonRefcount,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            result.family,
+            FamilyId::PYTHON_OBJECT,
+            "Expected values to be equal"
+        );
         assert!(
             summary.releases_resource(),
             "Py_DECREF summary must release resource"
@@ -233,9 +241,13 @@ mod tests {
     fn test_py_xdecref_conditional_release() {
         let (summary, result) =
             infer_refcount_release_summary("Py_XDECREF", 2, 200, LanguageHint::Python);
-        assert!(result.is_refcount_release);
-        assert_eq!(result.kind, RefcountKind::PythonRefcount);
-        assert!(summary.releases_resource());
+        assert!(result.is_refcount_release, "Expected condition to be true");
+        assert_eq!(
+            result.kind,
+            RefcountKind::PythonRefcount,
+            "Expected values to be equal"
+        );
+        assert!(summary.releases_resource(), "Expected condition to be true");
     }
 
     #[test]
@@ -255,8 +267,12 @@ mod tests {
             result.is_refcount_release,
             "Arc::drop must be inferred as refcount release"
         );
-        assert_eq!(result.kind, RefcountKind::RustArc);
-        assert!(summary.releases_resource());
+        assert_eq!(
+            result.kind,
+            RefcountKind::RustArc,
+            "Expected values to be equal"
+        );
+        assert!(summary.releases_resource(), "Expected condition to be true");
     }
 
     #[test]
@@ -266,7 +282,11 @@ mod tests {
             result.is_refcount_release,
             "CFRelease must be inferred as refcount release"
         );
-        assert_eq!(result.kind, RefcountKind::CoreFoundation);
+        assert_eq!(
+            result.kind,
+            RefcountKind::CoreFoundation,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -276,7 +296,11 @@ mod tests {
             result.is_refcount_release,
             "COM Release must be inferred as refcount release"
         );
-        assert_eq!(result.kind, RefcountKind::ComRefCount);
+        assert_eq!(
+            result.kind,
+            RefcountKind::ComRefCount,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -287,7 +311,11 @@ mod tests {
             result.is_refcount_release,
             "objc_release must be inferred as refcount release"
         );
-        assert_eq!(result.kind, RefcountKind::ObjcArc);
+        assert_eq!(
+            result.kind,
+            RefcountKind::ObjcArc,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -298,7 +326,11 @@ mod tests {
             result.is_refcount_release,
             "ref_decref must be inferred as refcount release"
         );
-        assert_eq!(result.kind, RefcountKind::Generic);
+        assert_eq!(
+            result.kind,
+            RefcountKind::Generic,
+            "Expected values to be equal"
+        );
         assert!(
             result.confidence < 0.7,
             "Generic pattern should have moderate confidence"

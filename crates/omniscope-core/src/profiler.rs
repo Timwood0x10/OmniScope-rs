@@ -286,8 +286,11 @@ mod tests {
         profiler.end_span(id);
 
         let spans = profiler.spans_by_name("test");
-        assert_eq!(spans.len(), 1);
-        assert!(spans[0].duration >= Duration::from_millis(10));
+        assert_eq!(spans.len(), 1, "Expected values to be equal");
+        assert!(
+            spans[0].duration >= Duration::from_millis(10),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -300,7 +303,7 @@ mod tests {
         }
 
         let spans = profiler.spans_by_name("scoped");
-        assert_eq!(spans.len(), 1);
+        assert_eq!(spans.len(), 1, "Expected values to be equal");
     }
 
     #[test]
@@ -314,8 +317,11 @@ mod tests {
         }
 
         let stats = profiler.stats("test").unwrap();
-        assert_eq!(stats.count, 3);
-        assert!(stats.avg >= Duration::from_millis(5));
+        assert_eq!(stats.count, 3, "Expected values to be equal");
+        assert!(
+            stats.avg >= Duration::from_millis(5),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -350,6 +356,6 @@ mod tests {
         profiler.record_memory(2048, 1024);
 
         let history = profiler.memory_history();
-        assert_eq!(history.len(), 2);
+        assert_eq!(history.len(), 2, "Expected values to be equal");
     }
 }

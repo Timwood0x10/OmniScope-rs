@@ -116,9 +116,17 @@ mod tests {
     #[test]
     fn test_summary_builder_creation() {
         let pass = SummaryBuilderPass::new();
-        assert_eq!(pass.name(), "SummaryBuilder");
-        assert_eq!(pass.kind(), PassKind::Foundation);
-        assert_eq!(pass.dependencies(), vec!["RawFactCollector"]);
+        assert_eq!(pass.name(), "SummaryBuilder", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Foundation,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["RawFactCollector"],
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -128,7 +136,10 @@ mod tests {
         // Known symbol — high confidence
         let malloc_summary = infer_summary_for_symbol("malloc", 1, 100, &registry);
         assert!(malloc_summary.acquires_resource(), "malloc must acquire");
-        assert!(malloc_summary.confidence > 0.9);
+        assert!(
+            malloc_summary.confidence > 0.9,
+            "Expected condition to be true"
+        );
 
         // Unknown symbol — pattern inference
         let custom_alloc = infer_summary_for_symbol("buffer_alloc", 2, 200, &registry);

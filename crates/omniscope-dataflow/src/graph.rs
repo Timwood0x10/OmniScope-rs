@@ -328,8 +328,8 @@ mod tests {
     #[test]
     fn test_graph_creation() {
         let graph = DataFlowGraph::new();
-        assert_eq!(graph.node_count(), 0);
-        assert_eq!(graph.edge_count(), 0);
+        assert_eq!(graph.node_count(), 0, "Expected values to be equal");
+        assert_eq!(graph.edge_count(), 0, "Expected values to be equal");
     }
 
     #[test]
@@ -342,8 +342,8 @@ mod tests {
         let id1 = graph.add_node(node1);
         let id2 = graph.add_node(node2);
 
-        assert_ne!(id1, id2);
-        assert_eq!(graph.node_count(), 2);
+        assert_ne!(id1, id2, "Expected values to be not equal");
+        assert_eq!(graph.node_count(), 2, "Expected values to be equal");
     }
 
     #[test]
@@ -359,20 +359,20 @@ mod tests {
         let edge = DataEdge::new(id1, id2, EdgeType::Assignment);
         let _edge_id = graph.add_edge(edge);
 
-        assert_eq!(graph.edge_count(), 1);
+        assert_eq!(graph.edge_count(), 1, "Expected values to be equal");
 
         let successors = graph.successors(id1);
-        assert_eq!(successors.len(), 1);
-        assert_eq!(successors[0], id2);
+        assert_eq!(successors.len(), 1, "Expected values to be equal");
+        assert_eq!(successors[0], id2, "Expected values to be equal");
     }
 
     #[test]
     fn test_memory_location() {
         let loc = MemoryLocation::new("arr").with_offset(8).with_size(4);
 
-        assert_eq!(loc.base, "arr");
-        assert_eq!(loc.offset, Some(8));
-        assert_eq!(loc.size, Some(4));
+        assert_eq!(loc.base, "arr", "Expected values to be equal");
+        assert_eq!(loc.offset, Some(8), "Expected values to be equal");
+        assert_eq!(loc.size, Some(4), "Expected values to be equal");
     }
 
     /// Objective: Verify that a self-loop edge makes a node both its own successor and predecessor.

@@ -48,9 +48,21 @@ fn make_graph_with_pair(
 #[test]
 fn test_candidate_builder_creation() {
     let pass = IssueCandidateBuilderPass::new();
-    assert_eq!(pass.name(), "IssueCandidateBuilder");
-    assert_eq!(pass.kind(), PassKind::Analysis);
-    assert_eq!(pass.dependencies(), vec!["OwnershipSolver"]);
+    assert_eq!(
+        pass.name(),
+        "IssueCandidateBuilder",
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        pass.kind(),
+        PassKind::Analysis,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        pass.dependencies(),
+        vec!["OwnershipSolver"],
+        "Expected values to be equal"
+    );
 }
 
 #[test]
@@ -62,9 +74,21 @@ fn test_cross_family_candidate_helper() {
         "malloc",
         "operator delete",
     );
-    assert_eq!(candidate.kind, IssueCandidateKind::CrossFamilyFree);
-    assert_eq!(candidate.alloc_family, FamilyId::C_HEAP);
-    assert_eq!(candidate.release_family, Some(FamilyId::CPP_NEW_SCALAR));
+    assert_eq!(
+        candidate.kind,
+        IssueCandidateKind::CrossFamilyFree,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        candidate.alloc_family,
+        FamilyId::C_HEAP,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        candidate.release_family,
+        Some(FamilyId::CPP_NEW_SCALAR),
+        "Expected values to be equal"
+    );
     assert!(
         !candidate.is_verified(),
         "Candidate should not be verified yet"

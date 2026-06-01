@@ -366,7 +366,7 @@ mod tests {
         let result = instance.transition(OwnershipEvent::Escape {
             kind: EscapeKind::ReturnToCaller,
         });
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Expected condition to be true");
         assert!(
             !instance.is_leak_candidate(),
             "Escaped resource is NOT a leak candidate"
@@ -796,7 +796,11 @@ mod tests {
         instance
             .transition(OwnershipEvent::Retain)
             .expect("ownership_state::test_retained_escape_release_chain: Retain from Acquired must succeed");
-        assert_eq!(instance.state, OwnershipState::Retained);
+        assert_eq!(
+            instance.state,
+            OwnershipState::Retained,
+            "Expected values to be equal"
+        );
 
         // Retained → Escaped
         instance
@@ -841,7 +845,11 @@ mod tests {
         instance
             .transition(OwnershipEvent::Retain)
             .expect("ownership_state::test_conditional_release_from_retained_to_acquired: Retain from Acquired must succeed");
-        assert_eq!(instance.state, OwnershipState::Retained);
+        assert_eq!(
+            instance.state,
+            OwnershipState::Retained,
+            "Expected values to be equal"
+        );
 
         // Retained → Acquired (refcount still > 0)
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 10 });
@@ -867,7 +875,11 @@ mod tests {
     fn test_conditional_release_from_acquired_to_released() {
         let mut instance =
             ResourceInstance::new(1, FamilyId::PYTHON_OBJECT, PointerContract::Owned);
-        assert_eq!(instance.state, OwnershipState::Acquired);
+        assert_eq!(
+            instance.state,
+            OwnershipState::Acquired,
+            "Expected values to be equal"
+        );
 
         let result = instance.transition(OwnershipEvent::ConditionalRelease { function: 20 });
         assert!(
@@ -899,7 +911,11 @@ mod tests {
         instance.transition(OwnershipEvent::Retain).expect(
             "ownership_state::test_incr_decr_cycle_preserves_acquired: Retain must succeed",
         );
-        assert_eq!(instance.state, OwnershipState::Retained);
+        assert_eq!(
+            instance.state,
+            OwnershipState::Retained,
+            "Expected values to be equal"
+        );
 
         // Py_DECREF (refcount > 0 after decrement)
         instance
@@ -967,7 +983,11 @@ mod tests {
             result.is_ok(),
             "ConditionalRelease from Escaped must succeed"
         );
-        assert_eq!(instance.state, OwnershipState::Released);
+        assert_eq!(
+            instance.state,
+            OwnershipState::Released,
+            "Expected values to be equal"
+        );
     }
 
     // ── new_borrowed() factory method tests ──
@@ -978,10 +998,22 @@ mod tests {
     #[test]
     fn test_new_borrowed_factory() {
         let instance = ResourceInstance::new_borrowed(42, FamilyId::C_HEAP);
-        assert_eq!(instance.id, 42);
-        assert_eq!(instance.family, FamilyId::C_HEAP);
-        assert_eq!(instance.state, OwnershipState::Borrowed);
-        assert_eq!(instance.contract, PointerContract::Borrowed);
+        assert_eq!(instance.id, 42, "Expected values to be equal");
+        assert_eq!(
+            instance.family,
+            FamilyId::C_HEAP,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            instance.state,
+            OwnershipState::Borrowed,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            instance.contract,
+            PointerContract::Borrowed,
+            "Expected values to be equal"
+        );
         assert!(
             !instance.is_leak_candidate(),
             "Borrowed resource is NOT a leak candidate"

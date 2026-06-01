@@ -228,10 +228,10 @@ mod tests {
 
         let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(50));
 
-        assert_eq!(result.pass_count(), 2);
-        assert_eq!(result.issue_count(), 2);
-        assert_eq!(result.total_nodes, 250);
-        assert!(result.has_issues());
+        assert_eq!(result.pass_count(), 2, "Expected values to be equal");
+        assert_eq!(result.issue_count(), 2, "Expected values to be equal");
+        assert_eq!(result.total_nodes, 250, "Expected values to be equal");
+        assert!(result.has_issues(), "Expected condition to be true");
     }
 
     #[test]
@@ -241,8 +241,14 @@ mod tests {
         let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
 
         let summary = result.summary();
-        assert!(summary.contains("1 passes"));
-        assert!(summary.contains("0 issues"));
+        assert!(
+            summary.contains("1 passes"),
+            "Expected condition to be true"
+        );
+        assert!(
+            summary.contains("0 issues"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -255,11 +261,11 @@ mod tests {
 
         let stats = PipelineStats::from_pass_results(&pass_results);
 
-        assert_eq!(stats.foundation_passes, 2);
-        assert_eq!(stats.analysis_passes, 1);
-        assert_eq!(stats.total_duration_ms, 45);
-        assert_eq!(stats.max_duration_ms, 20);
-        assert_eq!(stats.min_duration_ms, 10);
+        assert_eq!(stats.foundation_passes, 2, "Expected values to be equal");
+        assert_eq!(stats.analysis_passes, 1, "Expected values to be equal");
+        assert_eq!(stats.total_duration_ms, 45, "Expected values to be equal");
+        assert_eq!(stats.max_duration_ms, 20, "Expected values to be equal");
+        assert_eq!(stats.min_duration_ms, 10, "Expected values to be equal");
     }
 
     /// Objective: Verify Issue collection from PassResult into PipelineResult.
@@ -297,8 +303,16 @@ mod tests {
             "Must aggregate issues from all passes"
         );
         assert_eq!(result.issues.len(), 3, "issues vec must contain 3 entries");
-        assert_eq!(result.issues[0].kind, IssueKind::CrossLanguageFree);
-        assert_eq!(result.issues[2].kind, IssueKind::NullDereference);
+        assert_eq!(
+            result.issues[0].kind,
+            IssueKind::CrossLanguageFree,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            result.issues[2].kind,
+            IssueKind::NullDereference,
+            "Expected values to be equal"
+        );
     }
 
     /// Objective: Verify high/low/actionable issue filtering.
@@ -362,7 +376,7 @@ mod tests {
             "total_issues must be len of issues vec"
         );
         assert_eq!(result.issues.len(), 2, "issues must be preserved");
-        assert!(result.has_issues());
+        assert!(result.has_issues(), "Expected condition to be true");
     }
 
     /// Objective: Verify that from_pass_results with an empty vec produces a zero-count result.

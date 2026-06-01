@@ -339,9 +339,13 @@ mod tests {
             "C calling C++ mangled function must be detected as FFI"
         );
         let info = result.unwrap();
-        assert_eq!(info.caller_lang, Language::C);
-        assert_eq!(info.callee_lang, Language::Cpp);
-        assert!(info.is_ffi_boundary);
+        assert_eq!(info.caller_lang, Language::C, "Expected values to be equal");
+        assert_eq!(
+            info.callee_lang,
+            Language::Cpp,
+            "Expected values to be equal"
+        );
+        assert!(info.is_ffi_boundary, "Expected condition to be true");
     }
 
     /// Objective: Verify aggressive detection catches external calls from non-C to unknown.
@@ -368,7 +372,7 @@ mod tests {
             Language::C,
             "Callee must be resolved to C"
         );
-        assert!(info.is_ffi_boundary);
+        assert!(info.is_ffi_boundary, "Expected condition to be true");
     }
 
     /// Objective: Verify aggressive detection skips LLVM intrinsics.

@@ -155,20 +155,49 @@ mod tests {
     #[test]
     fn test_interior_mutability_pass_creation() {
         let pass = InteriorMutabilityPass::new();
-        assert_eq!(pass.name(), "InteriorMutability");
-        assert_eq!(pass.kind(), PassKind::Analysis);
+        assert_eq!(
+            pass.name(),
+            "InteriorMutability",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_has_interior_mutability() {
         let pass = InteriorMutabilityPass::new();
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell10UnsafeCell"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync5Mutex"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std6Atomic"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell4Cell"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell7RefCell"));
-        assert!(pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync7OnceLock"));
-        assert!(!pass.has_interior_mutability("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic"));
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell10UnsafeCell"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync5Mutex"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std6Atomic"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell4Cell"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4cell7RefCell"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.has_interior_mutability("_RNvMNtNtNtNtNtCsg1bLsEOY8ZL_3std4sync7OnceLock"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.has_interior_mutability("_RNvNtCsgXhsEb1m4tm_4core9panicking5panic"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -184,7 +213,11 @@ mod tests {
         );
 
         let resolutions = semantic_tree.all_resolutions("test_symbol");
-        assert!(!resolutions.is_empty());
-        assert_eq!(resolutions[0].kind, SemanticKind::InteriorMutability);
+        assert!(!resolutions.is_empty(), "Expected condition to be true");
+        assert_eq!(
+            resolutions[0].kind,
+            SemanticKind::InteriorMutability,
+            "Expected values to be equal"
+        );
     }
 }

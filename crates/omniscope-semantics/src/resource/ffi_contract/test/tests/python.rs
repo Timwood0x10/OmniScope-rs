@@ -17,10 +17,25 @@ fn test_pyobject_new() {
     let c = db
         .lookup("PyObject_New")
         .expect("ffi_contract::test::test_pyobject_new: PyObject_New not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert_eq!(c.source, ContractSource::PythonCApi);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
-    assert_eq!(c.ownership, OwnershipSemantics::ReferenceCounted);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::PythonCApi,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
+    assert_eq!(
+        c.ownership,
+        OwnershipSemantics::ReferenceCounted,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that Py_BuildValue is correctly registered as a Python/C API allocator.
@@ -35,8 +50,15 @@ fn test_py_buildvalue() {
     let c = db
         .lookup("Py_BuildValue")
         .expect("ffi_contract::test::test_py_buildvalue: Py_BuildValue not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that PyUnicode_FromString is correctly registered as a Python/C API allocator.
@@ -51,8 +73,15 @@ fn test_py_unicode() {
     let c = db
         .lookup("PyUnicode_FromString")
         .expect("ffi_contract::test::test_py_unicode: PyUnicode_FromString not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that PyBytes_FromString is correctly registered as a Python/C API allocator.
@@ -67,8 +96,15 @@ fn test_py_bytes() {
     let c = db
         .lookup("PyBytes_FromString")
         .expect("ffi_contract::test::test_py_bytes: PyBytes_FromString not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that PyList_New is correctly registered as a Python/C API allocator.
@@ -83,8 +119,15 @@ fn test_py_list() {
     let c = db
         .lookup("PyList_New")
         .expect("ffi_contract::test::test_py_list: PyList_New not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that PyDict_New is correctly registered as a Python/C API allocator.
@@ -99,8 +142,15 @@ fn test_py_dict() {
     let c = db
         .lookup("PyDict_New")
         .expect("ffi_contract::test::test_py_dict: PyDict_New not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that Py_INCREF is correctly registered as a Python/C API retainer.
@@ -115,8 +165,15 @@ fn test_py_incref() {
     let c = db
         .lookup("Py_INCREF")
         .expect("ffi_contract::test::test_py_incref: Py_INCREF not found");
-    assert_eq!(c.contract_type, ContractType::Retainer);
-    assert!(c.paired_release.contains(&"Py_DECREF".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Retainer,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"Py_DECREF".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that Py_DECREF is correctly registered as a Python/C API releaser.
@@ -130,7 +187,11 @@ fn test_py_decref() {
     let c = db
         .lookup("Py_DECREF")
         .expect("ffi_contract::test::test_py_decref: Py_DECREF not found");
-    assert_eq!(c.contract_type, ContractType::Releaser);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Releaser,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that PyGILState_Ensure is correctly registered as a Python/C API allocator.
@@ -145,6 +206,13 @@ fn test_pygil_lock() {
     let c = db
         .lookup("PyGILState_Ensure")
         .expect("ffi_contract::test::test_pygil_lock: PyGILState_Ensure not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"PyGILState_Release".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"PyGILState_Release".to_string()),
+        "Expected condition to be true"
+    );
 }

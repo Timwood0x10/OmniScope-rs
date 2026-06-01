@@ -13,19 +13,23 @@ fn test_semantic_kind_from_function_name_python_refcount() {
     // Test Python reference counting patterns
     assert_eq!(
         SemanticKind::from_function_name("Py_INCREF"),
-        SemanticKind::PythonRefcountInc
+        SemanticKind::PythonRefcountInc,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("Py_XINCREF"),
-        SemanticKind::PythonRefcountInc
+        SemanticKind::PythonRefcountInc,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("Py_DECREF"),
-        SemanticKind::PythonRefcountDec
+        SemanticKind::PythonRefcountDec,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("Py_XDECREF"),
-        SemanticKind::PythonRefcountDec
+        SemanticKind::PythonRefcountDec,
+        "Expected values to be equal"
     );
 }
 
@@ -39,27 +43,33 @@ fn test_semantic_kind_from_function_name_python_references() {
     // Test Python borrowed and owned references
     assert_eq!(
         SemanticKind::from_function_name("PyList_GetItem"),
-        SemanticKind::PythonBorrowedRef
+        SemanticKind::PythonBorrowedRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("PyTuple_GetItem"),
-        SemanticKind::PythonBorrowedRef
+        SemanticKind::PythonBorrowedRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("PyDict_GetItem"),
-        SemanticKind::PythonBorrowedRef
+        SemanticKind::PythonBorrowedRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("PyBytes_FromString"),
-        SemanticKind::PythonOwnedRef
+        SemanticKind::PythonOwnedRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("PyLong_FromLong"),
-        SemanticKind::PythonOwnedRef
+        SemanticKind::PythonOwnedRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("PyObject_Call"),
-        SemanticKind::PythonOwnedRef
+        SemanticKind::PythonOwnedRef,
+        "Expected values to be equal"
     );
 }
 
@@ -72,11 +82,13 @@ fn test_semantic_kind_from_function_name_python_gil() {
     // Test Python GIL protection patterns
     assert_eq!(
         SemanticKind::from_function_name("PyGILState_Ensure"),
-        SemanticKind::PythonGilProtected
+        SemanticKind::PythonGilProtected,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("PyGILState_Release"),
-        SemanticKind::PythonGilProtected
+        SemanticKind::PythonGilProtected,
+        "Expected values to be equal"
     );
 }
 
@@ -93,27 +105,33 @@ fn test_semantic_kind_from_function_name_go_patterns() {
     // Test Go defer and CGO patterns
     assert_eq!(
         SemanticKind::from_function_name("defer C.free(ptr)"),
-        SemanticKind::GoDeferCleanup
+        SemanticKind::GoDeferCleanup,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("runtime.SetFinalizer"),
-        SemanticKind::GoFinalizer
+        SemanticKind::GoFinalizer,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("_Cgo_malloc"),
-        SemanticKind::GoCgoWrapper
+        SemanticKind::GoCgoWrapper,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("_cgo_free"),
-        SemanticKind::GoCgoWrapper
+        SemanticKind::GoCgoWrapper,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("runtime.mallocgc"),
-        SemanticKind::GoRuntimeAlloc
+        SemanticKind::GoRuntimeAlloc,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("runtime.newobject"),
-        SemanticKind::GoRuntimeAlloc
+        SemanticKind::GoRuntimeAlloc,
+        "Expected values to be equal"
     );
 }
 
@@ -128,19 +146,23 @@ fn test_semantic_kind_from_function_name_cpp_smart_pointers() {
     // Test C++ smart pointer patterns
     assert_eq!(
         SemanticKind::from_function_name("std::unique_ptr<int>"),
-        SemanticKind::CppUniquePtr
+        SemanticKind::CppUniquePtr,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("make_unique<int>"),
-        SemanticKind::CppUniquePtr
+        SemanticKind::CppUniquePtr,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("std::shared_ptr<int>"),
-        SemanticKind::CppSharedPtr
+        SemanticKind::CppSharedPtr,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("make_shared<int>"),
-        SemanticKind::CppSharedPtr
+        SemanticKind::CppSharedPtr,
+        "Expected values to be equal"
     );
 }
 
@@ -153,11 +175,13 @@ fn test_semantic_kind_from_function_name_cpp_destructor() {
     // Test C++ destructor patterns
     assert_eq!(
         SemanticKind::from_function_name("~MyClass"),
-        SemanticKind::CppDestructor
+        SemanticKind::CppDestructor,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("MyClass::~MyClass"),
-        SemanticKind::CppDestructor
+        SemanticKind::CppDestructor,
+        "Expected values to be equal"
     );
 }
 
@@ -170,19 +194,23 @@ fn test_semantic_kind_from_function_name_cpp_exception() {
     // Test C++ exception handling patterns
     assert_eq!(
         SemanticKind::from_function_name("__cxa_throw"),
-        SemanticKind::CppExceptionPath
+        SemanticKind::CppExceptionPath,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("__cxa_begin_catch"),
-        SemanticKind::CppExceptionPath
+        SemanticKind::CppExceptionPath,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("__cxa_end_catch"),
-        SemanticKind::CppExceptionPath
+        SemanticKind::CppExceptionPath,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("__cxa_allocate_exception"),
-        SemanticKind::CppExceptionPath
+        SemanticKind::CppExceptionPath,
+        "Expected values to be equal"
     );
 }
 
@@ -198,31 +226,38 @@ fn test_semantic_kind_from_function_name_csharp_patterns() {
     // Test C# SafeHandle and P/Invoke patterns
     assert_eq!(
         SemanticKind::from_function_name("SafeHandle"),
-        SemanticKind::CsharpSafeHandle
+        SemanticKind::CsharpSafeHandle,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("ReleaseHandle"),
-        SemanticKind::CsharpSafeHandle
+        SemanticKind::CsharpSafeHandle,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("CriticalHandle"),
-        SemanticKind::CsharpSafeHandle
+        SemanticKind::CsharpSafeHandle,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("Finalize"),
-        SemanticKind::CsharpFinalizer
+        SemanticKind::CsharpFinalizer,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("DllImport"),
-        SemanticKind::CsharpPinvokeMarshal
+        SemanticKind::CsharpPinvokeMarshal,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("Marshal.AllocHGlobal"),
-        SemanticKind::CsharpPinvokeMarshal
+        SemanticKind::CsharpPinvokeMarshal,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("Marshal.FreeHGlobal"),
-        SemanticKind::CsharpPinvokeMarshal
+        SemanticKind::CsharpPinvokeMarshal,
+        "Expected values to be equal"
     );
 }
 
@@ -238,27 +273,33 @@ fn test_semantic_kind_from_function_name_java_jni() {
     // Test Java JNI reference patterns
     assert_eq!(
         SemanticKind::from_function_name("NewLocalRef"),
-        SemanticKind::JavaLocalRef
+        SemanticKind::JavaLocalRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("DeleteLocalRef"),
-        SemanticKind::JavaLocalRef
+        SemanticKind::JavaLocalRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("NewGlobalRef"),
-        SemanticKind::JavaGlobalRef
+        SemanticKind::JavaGlobalRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("DeleteGlobalRef"),
-        SemanticKind::JavaGlobalRef
+        SemanticKind::JavaGlobalRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("NewWeakGlobalRef"),
-        SemanticKind::JavaWeakRef
+        SemanticKind::JavaWeakRef,
+        "Expected values to be equal"
     );
     assert_eq!(
         SemanticKind::from_function_name("DeleteWeakGlobalRef"),
-        SemanticKind::JavaWeakRef
+        SemanticKind::JavaWeakRef,
+        "Expected values to be equal"
     );
 }
 
@@ -570,7 +611,12 @@ fn test_semantic_kind_from_function_name_unknown() {
     // Test that unknown functions return Unknown
     assert_eq!(
         SemanticKind::from_function_name("some_random_function"),
-        SemanticKind::Unknown
+        SemanticKind::Unknown,
+        "Expected values to be equal"
     );
-    assert_eq!(SemanticKind::from_function_name(""), SemanticKind::Unknown);
+    assert_eq!(
+        SemanticKind::from_function_name(""),
+        SemanticKind::Unknown,
+        "Expected values to be equal"
+    );
 }

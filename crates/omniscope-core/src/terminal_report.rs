@@ -370,15 +370,51 @@ mod tests {
 
     #[test]
     fn test_language_labels() {
-        assert_eq!(language_label(LanguageHint::C), "C");
-        assert_eq!(language_label(LanguageHint::Cpp), "C++");
-        assert_eq!(language_label(LanguageHint::Rust), "Rust");
-        assert_eq!(language_label(LanguageHint::Python), "Python");
-        assert_eq!(language_label(LanguageHint::Java), "Java");
-        assert_eq!(language_label(LanguageHint::CSharp), "C#");
-        assert_eq!(language_label(LanguageHint::Go), "Go");
-        assert_eq!(language_label(LanguageHint::Zig), "Zig");
-        assert_eq!(language_label(LanguageHint::Unknown), "?");
+        assert_eq!(
+            language_label(LanguageHint::C),
+            "C",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Cpp),
+            "C++",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Rust),
+            "Rust",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Python),
+            "Python",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Java),
+            "Java",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::CSharp),
+            "C#",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Go),
+            "Go",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Zig),
+            "Zig",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            language_label(LanguageHint::Unknown),
+            "?",
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -430,18 +466,25 @@ mod tests {
 
     #[test]
     fn test_infer_lang_from_family() {
-        assert_eq!(infer_lang_from_family(FamilyId::C_HEAP), LanguageHint::C);
+        assert_eq!(
+            infer_lang_from_family(FamilyId::C_HEAP),
+            LanguageHint::C,
+            "Expected values to be equal"
+        );
         assert_eq!(
             infer_lang_from_family(FamilyId::CPP_NEW_SCALAR),
-            LanguageHint::Cpp
+            LanguageHint::Cpp,
+            "Expected values to be equal"
         );
         assert_eq!(
             infer_lang_from_family(FamilyId::RUST_GLOBAL),
-            LanguageHint::Rust
+            LanguageHint::Rust,
+            "Expected values to be equal"
         );
         assert_eq!(
             infer_lang_from_family(FamilyId::PYTHON_OBJECT),
-            LanguageHint::Python
+            LanguageHint::Python,
+            "Expected values to be equal"
         );
     }
 

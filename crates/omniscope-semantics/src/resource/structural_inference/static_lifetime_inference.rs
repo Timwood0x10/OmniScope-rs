@@ -231,9 +231,13 @@ mod tests {
             result.is_static_lifetime,
             "__cxx_global_var_init must be inferred as static-lifetime"
         );
-        assert_eq!(result.kind, StaticLifetimeKind::GlobalVariable);
+        assert_eq!(
+            result.kind,
+            StaticLifetimeKind::GlobalVariable,
+            "Expected values to be equal"
+        );
         assert!(result.is_single_init, "Global var init is single execution");
-        assert!(result.confidence > 0.9);
+        assert!(result.confidence > 0.9, "Expected condition to be true");
     }
 
     #[test]
@@ -249,7 +253,11 @@ mod tests {
             result.is_static_lifetime,
             "lazy_static must be inferred as static-lifetime"
         );
-        assert_eq!(result.kind, StaticLifetimeKind::RustLazyStatic);
+        assert_eq!(
+            result.kind,
+            StaticLifetimeKind::RustLazyStatic,
+            "Expected values to be equal"
+        );
         assert!(
             !summary.evidence.is_empty(),
             "Static-lifetime summary must have evidence"
@@ -269,7 +277,11 @@ mod tests {
             result.is_static_lifetime,
             "C++ guard must be inferred as static-lifetime"
         );
-        assert_eq!(result.kind, StaticLifetimeKind::StaticLocal);
+        assert_eq!(
+            result.kind,
+            StaticLifetimeKind::StaticLocal,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -280,7 +292,11 @@ mod tests {
             result.is_static_lifetime,
             "Java <clinit> must be inferred as static-lifetime"
         );
-        assert_eq!(result.kind, StaticLifetimeKind::JavaClassInit);
+        assert_eq!(
+            result.kind,
+            StaticLifetimeKind::JavaClassInit,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -296,7 +312,11 @@ mod tests {
             result.is_static_lifetime,
             "PyInit_* must be inferred as static-lifetime"
         );
-        assert_eq!(result.kind, StaticLifetimeKind::PythonModuleInit);
+        assert_eq!(
+            result.kind,
+            StaticLifetimeKind::PythonModuleInit,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -312,8 +332,12 @@ mod tests {
             result.is_static_lifetime,
             "once_init must be inferred as static-lifetime"
         );
-        assert_eq!(result.kind, StaticLifetimeKind::GenericOnceInit);
-        assert!(result.is_single_init);
+        assert_eq!(
+            result.kind,
+            StaticLifetimeKind::GenericOnceInit,
+            "Expected values to be equal"
+        );
+        assert!(result.is_single_init, "Expected condition to be true");
     }
 
     #[test]
@@ -379,11 +403,13 @@ mod tests {
     fn test_lifetime_domain_process_static() {
         assert_eq!(
             lifetime_domain_for(StaticLifetimeKind::GlobalVariable),
-            LifetimeDomain::ProcessStatic
+            LifetimeDomain::ProcessStatic,
+            "Expected values to be equal"
         );
         assert_eq!(
             lifetime_domain_for(StaticLifetimeKind::RustLazyStatic),
-            LifetimeDomain::ProcessStatic
+            LifetimeDomain::ProcessStatic,
+            "Expected values to be equal"
         );
     }
 
@@ -391,7 +417,8 @@ mod tests {
     fn test_pointer_contract_static_lifetime() {
         assert_eq!(
             pointer_contract_for(StaticLifetimeKind::GlobalVariable),
-            PointerContract::StaticLifetime
+            PointerContract::StaticLifetime,
+            "Expected values to be equal"
         );
     }
 }

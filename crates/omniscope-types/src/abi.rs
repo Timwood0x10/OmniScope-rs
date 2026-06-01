@@ -149,16 +149,28 @@ mod tests {
             bits: 32,
             signed: true,
         };
-        assert_eq!(i32_type.size_bytes(), Some(4));
+        assert_eq!(
+            i32_type.size_bytes(),
+            Some(4),
+            "Expected values to be equal"
+        );
 
         let f64_type = AbiType::Float { bits: 64 };
-        assert_eq!(f64_type.size_bytes(), Some(8));
+        assert_eq!(
+            f64_type.size_bytes(),
+            Some(8),
+            "Expected values to be equal"
+        );
 
         let ptr_type = AbiType::Pointer {
             inner: None,
             mutable: true,
         };
-        assert_eq!(ptr_type.size_bytes(), Some(8));
+        assert_eq!(
+            ptr_type.size_bytes(),
+            Some(8),
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -167,14 +179,14 @@ mod tests {
             bits: 32,
             signed: true,
         };
-        assert!(int_type.is_integer());
-        assert!(!int_type.is_pointer());
+        assert!(int_type.is_integer(), "Expected condition to be true");
+        assert!(!int_type.is_pointer(), "Expected condition to be true");
 
         let ptr_type = AbiType::Pointer {
             inner: None,
             mutable: false,
         };
-        assert!(ptr_type.is_pointer());
-        assert!(!ptr_type.is_integer());
+        assert!(ptr_type.is_pointer(), "Expected condition to be true");
+        assert!(!ptr_type.is_integer(), "Expected condition to be true");
     }
 }

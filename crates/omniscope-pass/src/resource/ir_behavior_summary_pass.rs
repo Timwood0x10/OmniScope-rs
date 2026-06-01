@@ -149,9 +149,21 @@ mod tests {
     #[test]
     fn test_ir_behavior_summary_pass_creation() {
         let pass = IRBehaviorSummaryPass::new();
-        assert_eq!(pass.name(), "IRBehaviorSummary");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["RawFactCollector"]);
+        assert_eq!(
+            pass.name(),
+            "IRBehaviorSummary",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["RawFactCollector"],
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -159,7 +171,11 @@ mod tests {
         let mut ctx = PassContext::new();
         let pass = IRBehaviorSummaryPass::new();
         let result = pass.run(&mut ctx).unwrap();
-        assert_eq!(result.stats.get("behaviors_extracted"), Some(&0));
+        assert_eq!(
+            result.stats.get("behaviors_extracted"),
+            Some(&0),
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -184,11 +200,19 @@ mod tests {
         let pass = IRBehaviorSummaryPass::new();
         let result = pass.run(&mut ctx).unwrap();
 
-        assert_eq!(result.stats.get("conditional_release"), Some(&1));
-        assert_eq!(result.stats.get("summaries_from_behavior"), Some(&1));
+        assert_eq!(
+            result.stats.get("conditional_release"),
+            Some(&1),
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            result.stats.get("summaries_from_behavior"),
+            Some(&1),
+            "Expected values to be equal"
+        );
 
         // Verify that behaviors were stored in context
         let behaviors: Vec<FunctionBehavior> = ctx.get("function_behaviors").unwrap();
-        assert_eq!(behaviors.len(), 1);
+        assert_eq!(behaviors.len(), 1, "Expected values to be equal");
     }
 }

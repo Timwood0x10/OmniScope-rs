@@ -174,7 +174,11 @@ mod tests {
             LanguageHint::Rust,
         );
         assert!(result.is_into_raw, "Box::into_raw must be inferred");
-        assert_eq!(result.kind, IntoRawKind::BoxIntoRaw);
+        assert_eq!(
+            result.kind,
+            IntoRawKind::BoxIntoRaw,
+            "Expected values to be equal"
+        );
         assert!(
             summary.is_ownership_transfer(),
             "Summary must be classified as ownership transfer"
@@ -190,7 +194,11 @@ mod tests {
             LanguageHint::Rust,
         );
         assert!(result.is_into_raw, "CString::into_raw must be inferred");
-        assert_eq!(result.kind, IntoRawKind::CStringIntoRaw);
+        assert_eq!(
+            result.kind,
+            IntoRawKind::CStringIntoRaw,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -198,7 +206,11 @@ mod tests {
         let (_, result) =
             infer_into_raw_summary("_RNvXs_5alloc3vec3Vec8into_raw", 3, 300, LanguageHint::Rust);
         assert!(result.is_into_raw, "Vec::into_raw must be inferred");
-        assert_eq!(result.kind, IntoRawKind::VecIntoRaw);
+        assert_eq!(
+            result.kind,
+            IntoRawKind::VecIntoRaw,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

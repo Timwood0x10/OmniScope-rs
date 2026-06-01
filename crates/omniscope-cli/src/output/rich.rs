@@ -459,22 +459,59 @@ mod tests {
 
     #[test]
     fn test_language_labels() {
-        assert_eq!(lang_label(omniscope_types::Language::C), "C");
-        assert_eq!(lang_label(omniscope_types::Language::Cpp), "C++");
-        assert_eq!(lang_label(omniscope_types::Language::Rust), "Rust");
-        assert_eq!(lang_label(omniscope_types::Language::Python), "Python");
-        assert_eq!(lang_label(omniscope_types::Language::Unknown), "?");
+        assert_eq!(
+            lang_label(omniscope_types::Language::C),
+            "C",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            lang_label(omniscope_types::Language::Cpp),
+            "C++",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            lang_label(omniscope_types::Language::Rust),
+            "Rust",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            lang_label(omniscope_types::Language::Python),
+            "Python",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            lang_label(omniscope_types::Language::Unknown),
+            "?",
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_sanitize_ir_vars() {
-        assert_eq!(sanitize_ir_vars("'%call'"), "'return value'");
-        assert_eq!(sanitize_ir_vars("'%call2'"), "'return value'");
-        assert_eq!(sanitize_ir_vars("'%0'"), "'<ir-reg>'");
-        assert_eq!(sanitize_ir_vars("no IR vars"), "no IR vars");
+        assert_eq!(
+            sanitize_ir_vars("'%call'"),
+            "'return value'",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            sanitize_ir_vars("'%call2'"),
+            "'return value'",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            sanitize_ir_vars("'%0'"),
+            "'<ir-reg>'",
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            sanitize_ir_vars("no IR vars"),
+            "no IR vars",
+            "Expected values to be equal"
+        );
         assert_eq!(
             sanitize_ir_vars("'%call' and '%1'"),
-            "'return value' and '<ir-reg>'"
+            "'return value' and '<ir-reg>'",
+            "Expected values to be equal"
         );
     }
 }

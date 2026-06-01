@@ -198,55 +198,122 @@ mod tests {
     #[test]
     fn test_raii_drop_pass_creation() {
         let pass = RaiiDropPass::new();
-        assert_eq!(pass.name(), "RaiiDrop");
-        assert_eq!(pass.kind(), PassKind::Analysis);
+        assert_eq!(pass.name(), "RaiiDrop", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_is_drop_in_place() {
         let pass = RaiiDropPass::new();
         // Exact "drop" match
-        assert!(pass.is_drop_in_place("drop"));
+        assert!(
+            pass.is_drop_in_place("drop"),
+            "Expected condition to be true"
+        );
         // drop_in_place (compiler-inserted)
-        assert!(pass.is_drop_in_place("_RNvNtCsgXhsEb1m4tm_4core3ptr13drop_in_place"));
+        assert!(
+            pass.is_drop_in_place("_RNvNtCsgXhsEb1m4tm_4core3ptr13drop_in_place"),
+            "Expected condition to be true"
+        );
         // Rust mangled Drop trait
-        assert!(pass.is_drop_in_place("_RNvMNtCsgXhsEb1m4tm_4alloc3box3Box3Drop"));
+        assert!(
+            pass.is_drop_in_place("_RNvMNtCsgXhsEb1m4tm_4alloc3box3Box3Drop"),
+            "Expected condition to be true"
+        );
         // C++ destructor
-        assert!(pass.is_drop_in_place("_ZN3FooD1Ev"));
+        assert!(
+            pass.is_drop_in_place("_ZN3FooD1Ev"),
+            "Expected condition to be true"
+        );
         // ::drop suffix
-        assert!(pass.is_drop_in_place("std::mem::drop"));
+        assert!(
+            pass.is_drop_in_place("std::mem::drop"),
+            "Expected condition to be true"
+        );
         // Negative: bare "drop" substring in unrelated names
-        assert!(!pass.is_drop_in_place("dropdown"));
-        assert!(!pass.is_drop_in_place("dropshadow"));
-        assert!(!pass.is_drop_in_place("floodrop"));
-        assert!(!pass.is_drop_in_place("malloc"));
+        assert!(
+            !pass.is_drop_in_place("dropdown"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_drop_in_place("dropshadow"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_drop_in_place("floodrop"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_drop_in_place("malloc"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_tail_dealloc() {
         let pass = RaiiDropPass::new();
-        assert!(pass.is_tail_dealloc("__rust_dealloc"));
-        assert!(pass.is_tail_dealloc("__rust_free"));
+        assert!(
+            pass.is_tail_dealloc("__rust_dealloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_tail_dealloc("__rust_free"),
+            "Expected condition to be true"
+        );
         // custom_dealloc should NOT match — it's not a compiler RAII dealloc
-        assert!(!pass.is_tail_dealloc("custom_dealloc"));
-        assert!(!pass.is_tail_dealloc("malloc"));
+        assert!(
+            !pass.is_tail_dealloc("custom_dealloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_tail_dealloc("malloc"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_refcount_decrement() {
         let pass = RaiiDropPass::new();
         // atomicrmw instruction prefix
-        assert!(pass.is_refcount_decrement("atomicrmw"));
-        assert!(pass.is_refcount_decrement("atomicrmw.sub.i64"));
+        assert!(
+            pass.is_refcount_decrement("atomicrmw"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_refcount_decrement("atomicrmw.sub.i64"),
+            "Expected condition to be true"
+        );
         // Demangled Arc/Rc drop
-        assert!(pass.is_refcount_decrement("Arc<i32>::drop"));
-        assert!(pass.is_refcount_decrement("Rc<i32>::drop"));
+        assert!(
+            pass.is_refcount_decrement("Arc<i32>::drop"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_refcount_decrement("Rc<i32>::drop"),
+            "Expected condition to be true"
+        );
         // Mangled Arc/Rc drop
-        assert!(pass.is_refcount_decrement("_RNvXsNtC4alloc3arc3Arc3drop"));
+        assert!(
+            pass.is_refcount_decrement("_RNvXsNtC4alloc3arc3Arc3drop"),
+            "Expected condition to be true"
+        );
         // Negative: "atomic" alone is not a refcount op
-        assert!(!pass.is_refcount_decrement("atomic_flag_clear"));
+        assert!(
+            !pass.is_refcount_decrement("atomic_flag_clear"),
+            "Expected condition to be true"
+        );
         // Negative: "Arc_drop" without mangled prefix or ::drop suffix
-        assert!(!pass.is_refcount_decrement("Arc_drop"));
-        assert!(!pass.is_refcount_decrement("malloc"));
+        assert!(
+            !pass.is_refcount_decrement("Arc_drop"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_refcount_decrement("malloc"),
+            "Expected condition to be true"
+        );
     }
 }

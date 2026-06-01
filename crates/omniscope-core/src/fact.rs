@@ -263,10 +263,18 @@ mod tests {
         .with_metadata("size", "1024")
         .with_confidence(0.95);
 
-        assert_eq!(fact.id, 1);
-        assert_eq!(fact.kind, FactKind::AllocSite);
-        assert_eq!(fact.confidence, 0.95);
-        assert_eq!(fact.get_metadata("size"), Some(&"1024".to_string()));
+        assert_eq!(fact.id, 1, "Expected values to be equal");
+        assert_eq!(
+            fact.kind,
+            FactKind::AllocSite,
+            "Expected values to be equal"
+        );
+        assert_eq!(fact.confidence, 0.95, "Expected values to be equal");
+        assert_eq!(
+            fact.get_metadata("size"),
+            Some(&"1024".to_string()),
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -287,18 +295,38 @@ mod tests {
         let id1 = store.add(fact1);
         let id2 = store.add(fact2);
 
-        assert_ne!(id1, id2);
-        assert_eq!(store.count(), 2);
-        assert_eq!(store.count_by_kind(FactKind::AllocSite), 1);
-        assert_eq!(store.count_by_kind(FactKind::DeallocSite), 1);
+        assert_ne!(id1, id2, "Expected values to be not equal");
+        assert_eq!(store.count(), 2, "Expected values to be equal");
+        assert_eq!(
+            store.count_by_kind(FactKind::AllocSite),
+            1,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            store.count_by_kind(FactKind::DeallocSite),
+            1,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_fact_kind_checks() {
-        assert!(FactKind::AllocSite.is_memory());
-        assert!(!FactKind::AllocSite.is_taint());
-        assert!(FactKind::TaintSource.is_taint());
-        assert!(FactKind::LockAcquire.is_concurrency());
+        assert!(
+            FactKind::AllocSite.is_memory(),
+            "Expected condition to be true"
+        );
+        assert!(
+            !FactKind::AllocSite.is_taint(),
+            "Expected condition to be true"
+        );
+        assert!(
+            FactKind::TaintSource.is_taint(),
+            "Expected condition to be true"
+        );
+        assert!(
+            FactKind::LockAcquire.is_concurrency(),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
@@ -312,10 +340,10 @@ mod tests {
         );
 
         let id = store.add(fact);
-        assert_eq!(store.count(), 1);
+        assert_eq!(store.count(), 1, "Expected values to be equal");
 
         let removed = store.remove(id);
-        assert!(removed.is_some());
-        assert_eq!(store.count(), 0);
+        assert!(removed.is_some(), "Expected condition to be true");
+        assert_eq!(store.count(), 0, "Expected values to be equal");
     }
 }

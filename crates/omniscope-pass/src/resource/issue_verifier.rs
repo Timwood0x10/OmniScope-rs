@@ -400,9 +400,17 @@ mod tests {
     #[test]
     fn test_verifier_creation() {
         let pass = IssueVerifierPass::new();
-        assert_eq!(pass.name(), "IssueVerifier");
-        assert_eq!(pass.kind(), PassKind::Analysis);
-        assert_eq!(pass.dependencies(), vec!["IssueCandidateBuilder"]);
+        assert_eq!(pass.name(), "IssueVerifier", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
+        assert_eq!(
+            pass.dependencies(),
+            vec!["IssueCandidateBuilder"],
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -418,7 +426,11 @@ mod tests {
         .with_release_function("operator delete");
 
         let verdict = verify_candidate(&candidate, &registry);
-        assert_eq!(verdict, VerifierVerdict::ConfirmedIssue);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
@@ -470,7 +482,11 @@ mod tests {
         );
 
         let verdict = verify_candidate(&candidate, &registry);
-        assert_eq!(verdict, VerifierVerdict::ConfirmedIssue);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "Expected values to be equal"
+        );
     }
 
     #[test]

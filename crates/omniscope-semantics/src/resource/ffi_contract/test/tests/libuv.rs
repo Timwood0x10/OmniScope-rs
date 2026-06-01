@@ -16,9 +16,20 @@ fn test_uv_loop_init() {
     let c = db
         .lookup("uv_loop_init")
         .expect("ffi_contract::test::test_uv_loop_init: uv_loop_init not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert_eq!(c.source, ContractSource::Libuv);
-    assert!(c.paired_release.contains(&"uv_loop_close".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert_eq!(
+        c.source,
+        ContractSource::Libuv,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"uv_loop_close".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that uv_loop_close is correctly registered as a libuv deallocator.
@@ -32,7 +43,11 @@ fn test_uv_loop_close() {
     let c = db
         .lookup("uv_loop_close")
         .expect("ffi_contract::test::test_uv_loop_close: uv_loop_close not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }
 
 /// Objective: Verify that uv_tcp_init is correctly registered as a libuv allocator.
@@ -47,8 +62,15 @@ fn test_uv_tcp_init() {
     let c = db
         .lookup("uv_tcp_init")
         .expect("ffi_contract::test::test_uv_tcp_init: uv_tcp_init not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"uv_close".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"uv_close".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that uv_timer_init is correctly registered as a libuv allocator.
@@ -63,8 +85,15 @@ fn test_uv_timer_init() {
     let c = db
         .lookup("uv_timer_init")
         .expect("ffi_contract::test::test_uv_timer_init: uv_timer_init not found");
-    assert_eq!(c.contract_type, ContractType::Allocator);
-    assert!(c.paired_release.contains(&"uv_close".to_string()));
+    assert_eq!(
+        c.contract_type,
+        ContractType::Allocator,
+        "Expected values to be equal"
+    );
+    assert!(
+        c.paired_release.contains(&"uv_close".to_string()),
+        "Expected condition to be true"
+    );
 }
 
 /// Objective: Verify that uv_close is correctly registered as a libuv deallocator.
@@ -78,5 +107,9 @@ fn test_uv_close() {
     let c = db
         .lookup("uv_close")
         .expect("ffi_contract::test::test_uv_close: uv_close not found");
-    assert_eq!(c.contract_type, ContractType::Deallocator);
+    assert_eq!(
+        c.contract_type,
+        ContractType::Deallocator,
+        "Expected values to be equal"
+    );
 }

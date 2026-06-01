@@ -164,35 +164,78 @@ mod tests {
     #[test]
     fn test_heap_provenance_pass_creation() {
         let pass = HeapProvenancePass::new();
-        assert_eq!(pass.name(), "HeapProvenance");
-        assert_eq!(pass.kind(), PassKind::Analysis);
+        assert_eq!(pass.name(), "HeapProvenance", "Expected values to be equal");
+        assert_eq!(
+            pass.kind(),
+            PassKind::Analysis,
+            "Expected values to be equal"
+        );
     }
 
     #[test]
     fn test_is_heap_allocation_call() {
         let pass = HeapProvenancePass::new();
-        assert!(pass.is_heap_allocation_call("__rust_alloc"));
-        assert!(pass.is_heap_allocation_call("malloc"));
-        assert!(pass.is_heap_allocation_call("_Znwm")); // C++ new
-        assert!(pass.is_heap_allocation_call("runtime.alloc"));
-        assert!(!pass.is_heap_allocation_call("strlen"));
+        assert!(
+            pass.is_heap_allocation_call("__rust_alloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_heap_allocation_call("malloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_heap_allocation_call("_Znwm"),
+            "Expected condition to be true"
+        ); // C++ new
+        assert!(
+            pass.is_heap_allocation_call("runtime.alloc"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_heap_allocation_call("strlen"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_global_storage() {
         let pass = HeapProvenancePass::new();
-        assert!(pass.is_global_storage("@global_var"));
-        assert!(pass.is_global_storage("static_config"));
-        assert!(pass.is_global_storage("global_buffer"));
-        assert!(!pass.is_global_storage("local_var"));
+        assert!(
+            pass.is_global_storage("@global_var"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_global_storage("static_config"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_global_storage("global_buffer"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_global_storage("local_var"),
+            "Expected condition to be true"
+        );
     }
 
     #[test]
     fn test_is_stack_allocation() {
         let pass = HeapProvenancePass::new();
-        assert!(pass.is_stack_allocation("alloca"));
-        assert!(pass.is_stack_allocation("local_var"));
-        assert!(pass.is_stack_allocation("stack_buffer"));
-        assert!(!pass.is_stack_allocation("malloc"));
+        assert!(
+            pass.is_stack_allocation("alloca"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_stack_allocation("local_var"),
+            "Expected condition to be true"
+        );
+        assert!(
+            pass.is_stack_allocation("stack_buffer"),
+            "Expected condition to be true"
+        );
+        assert!(
+            !pass.is_stack_allocation("malloc"),
+            "Expected condition to be true"
+        );
     }
 }
