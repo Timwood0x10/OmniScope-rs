@@ -73,6 +73,13 @@ impl FamilyId {
     /// Compatible with RUST_GLOBAL because both use Rust's global allocator underneath.
     pub const RUST_RAW_OWNERSHIP: FamilyId = FamilyId(20);
 
+    /// File descriptor family: open/creat/socket/accept/dup/pipe + close.
+    /// File descriptors are integer handles to OS resources (files, sockets, pipes).
+    /// Unlike pointer-based resources, fd values are small integers that cannot
+    /// be dereferenced directly. Leak detection applies the same acquire/release
+    /// pairing model but uses integer resource IDs instead of pointers.
+    pub const FILE_DESCRIPTOR: FamilyId = FamilyId(21);
+
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 
@@ -99,6 +106,7 @@ impl FamilyId {
             FamilyId::MIMALLOC => "MIMALLOC",
             FamilyId::CSHARP_COM => "CSHARP_COM",
             FamilyId::RUST_RAW_OWNERSHIP => "RUST_RAW_OWNERSHIP",
+            FamilyId::FILE_DESCRIPTOR => "FILE_DESCRIPTOR",
             _ => "unknown",
         }
     }
@@ -382,6 +390,21 @@ pub static FAMILY_RUST_RAW_OWNERSHIP: ResourceFamily = ResourceFamily {
     compatible_releases: &[FamilyId::RUST_GLOBAL],
 };
 
+/// File descriptor family: open/creat/socket/accept/dup/pipe + close.
+/// File descriptors are integer handles to OS resources (files, sockets, pipes).
+/// Unlike pointer-based resources, fd values are small integers that cannot
+/// be dereferenced directly. This family uses ManualHeap kind because
+/// file descriptors require explicit close() to release OS resources.
+/// No compatible releases — fd values from different families cannot be
+/// used interchangeably (e.g., socket fd cannot be closed with fclose).
+pub static FAMILY_FILE_DESCRIPTOR: ResourceFamily = ResourceFamily {
+    id: FamilyId::FILE_DESCRIPTOR,
+    name: "file_descriptor",
+    kind: FamilyKind::ManualHeap,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[],
+};
+
 /// Serializable form of `ResourceFamily` for serde round-tripping.
 /// `ResourceFamily` uses `&'static str` and `&'static [FamilyId]` which
 /// cannot derive `Deserialize`, so we convert to this owned form.
@@ -429,6 +452,8 @@ pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_MIMALLOC,
     &FAMILY_CSHARP_COM,
     &FAMILY_RUST_RAW_OWNERSHIP,
+    // File descriptor family (OS resource handles)
+    &FAMILY_FILE_DESCRIPTOR,
 ];
 
 #[cfg(test)]
@@ -439,8 +464,8 @@ mod tests {
     fn test_builtin_families_count() {
         assert_eq!(
             BUILTIN_FAMILIES.len(),
-            20,
-            "Must have exactly 20 built-in families"
+            21,
+            "Must have exactly 21 built-in families (including FILE_DESCRIPTOR)"
         );
     }
 

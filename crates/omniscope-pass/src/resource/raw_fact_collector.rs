@@ -429,4 +429,163 @@ mod tests {
         assert!(free_fact.is_some(), "Must find free fact");
         assert!(!free_fact.unwrap().is_acquire, "free must be release");
     }
+
+    /// Test that fd acquire/release functions are collected as raw facts.
+    /// This verifies that the FILE_DESCRIPTOR family integration works
+    /// end-to-end through the raw fact collector.
+    #[test]
+    fn test_collect_from_ir_with_open_close() {
+        let mut module = IRModule::new();
+        // Simulate a function that opens a file and closes it
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "open".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "close".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        // Also test socket/accept/dup/pipe
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "socket".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "accept".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "dup".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "pipe".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut pool = MemoryPool::new();
+        let facts = RawFactCollectorPass::collect_from_ir(&module, &mut pool);
+        assert!(
+            facts.len() >= 6,
+            "Must find all fd acquire/release facts, found {}",
+            facts.len()
+        );
+
+        // Verify open is acquire with FILE_DESCRIPTOR family
+        let open_fact = facts.iter().find(|f| f.function_name == "open");
+        assert!(open_fact.is_some(), "Must find open fact");
+        let open = open_fact.unwrap();
+        assert!(open.is_acquire, "open must be acquire");
+        assert_eq!(
+            open.family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "open must be FILE_DESCRIPTOR family"
+        );
+
+        // Verify close is release with FILE_DESCRIPTOR family
+        let close_fact = facts.iter().find(|f| f.function_name == "close");
+        assert!(close_fact.is_some(), "Must find close fact");
+        let close = close_fact.unwrap();
+        assert!(!close.is_acquire, "close must be release");
+        assert_eq!(
+            close.family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "close must be FILE_DESCRIPTOR family"
+        );
+
+        // Verify socket is acquire
+        let socket_fact = facts.iter().find(|f| f.function_name == "socket");
+        assert!(socket_fact.is_some(), "Must find socket fact");
+        assert!(socket_fact.unwrap().is_acquire, "socket must be acquire");
+        assert_eq!(
+            socket_fact.unwrap().family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "socket must be FILE_DESCRIPTOR family"
+        );
+
+        // Verify accept is acquire
+        let accept_fact = facts.iter().find(|f| f.function_name == "accept");
+        assert!(accept_fact.is_some(), "Must find accept fact");
+        assert!(accept_fact.unwrap().is_acquire, "accept must be acquire");
+        assert_eq!(
+            accept_fact.unwrap().family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "accept must be FILE_DESCRIPTOR family"
+        );
+
+        // Verify dup is acquire
+        let dup_fact = facts.iter().find(|f| f.function_name == "dup");
+        assert!(dup_fact.is_some(), "Must find dup fact");
+        assert!(dup_fact.unwrap().is_acquire, "dup must be acquire");
+        assert_eq!(
+            dup_fact.unwrap().family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "dup must be FILE_DESCRIPTOR family"
+        );
+
+        // Verify pipe is acquire
+        let pipe_fact = facts.iter().find(|f| f.function_name == "pipe");
+        assert!(pipe_fact.is_some(), "Must find pipe fact");
+        assert!(pipe_fact.unwrap().is_acquire, "pipe must be acquire");
+        assert_eq!(
+            pipe_fact.unwrap().family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "pipe must be FILE_DESCRIPTOR family"
+        );
+    }
+
+    /// Test that fd functions are not confused with memory allocation functions.
+    /// This ensures that FILE_DESCRIPTOR and C_HEAP families are properly separated.
+    #[test]
+    fn test_fd_functions_not_confused_with_malloc() {
+        let mut module = IRModule::new();
+        // Add both fd and memory allocation functions
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "open".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+        module.calls.push(omniscope_ir::CallInstruction {
+            callee: "malloc".to_string(),
+            caller: "test_func".to_string(),
+            is_external: true,
+            location: None,
+        });
+
+        let mut pool = MemoryPool::new();
+        let facts = RawFactCollectorPass::collect_from_ir(&module, &mut pool);
+        assert!(facts.len() >= 2, "Must find both open and malloc facts");
+
+        let open_fact = facts.iter().find(|f| f.function_name == "open").unwrap();
+        let malloc_fact = facts.iter().find(|f| f.function_name == "malloc").unwrap();
+
+        // Verify they are in different families
+        assert_ne!(
+            open_fact.family, malloc_fact.family,
+            "open and malloc must be in different families"
+        );
+        assert_eq!(
+            open_fact.family,
+            Some(FamilyId::FILE_DESCRIPTOR),
+            "open must be FILE_DESCRIPTOR family"
+        );
+        assert_eq!(
+            malloc_fact.family,
+            Some(FamilyId::C_HEAP),
+            "malloc must be C_HEAP family"
+        );
+    }
 }

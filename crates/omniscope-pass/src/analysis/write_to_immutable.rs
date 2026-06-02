@@ -55,26 +55,33 @@ impl Pass for WriteToImmutablePass {
         // Build semantic tree for R-0~R-8 pattern suppression
         let mut semantic_tree = SemanticTree::new();
 
-        // Try to use ModuleIndex for function pre-filtering
-        let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
-
-        // Collect store instructions to analyze (avoid borrow conflicts)
+        // Collect store instructions with runtime internal flag (avoid borrow conflicts)
+        // Use ModuleIndex for function pre-filtering (reference, no clone)
         let mut store_instructions = Vec::new();
-        for (func_name, body) in &module.function_bodies {
-            // Use ModuleIndex to skip functions without store instructions
-            if let Some(ref index) = module_index {
-                let trimmed_name = func_name.trim_start_matches('@');
-                if let Some(meta) = index.function_meta(trimmed_name) {
-                    if !meta.has_stores {
-                        continue;
+        let mut runtime_internal_funcs = std::collections::HashSet::new();
+        {
+            let module_index: Option<&crate::module_index::ModuleIndex> = ctx.get_ref("module_index");
+
+            for (func_name, body) in &module.function_bodies {
+                // Use ModuleIndex to skip functions without store instructions
+                // Also collect runtime internal function names
+                if let Some(index) = module_index {
+                    let trimmed_name = func_name.trim_start_matches('@');
+                    if let Some(meta) = index.function_meta(trimmed_name) {
+                        if meta.is_runtime_internal {
+                            runtime_internal_funcs.insert(trimmed_name.to_string());
+                        }
+                        if !meta.has_stores {
+                            continue;
+                        }
                     }
                 }
-            }
 
-            for inst in body.instructions_of_kind(omniscope_ir::IRInstructionKind::Store) {
-                store_instructions.push((func_name.clone(), inst.clone()));
+                for inst in body.instructions_of_kind(omniscope_ir::IRInstructionKind::Store) {
+                    store_instructions.push((func_name.clone(), inst.clone()));
+                }
             }
-        }
+        } // Release immutable borrow on ctx here
 
         // Now process store instructions without borrow conflicts
         for (func_name, inst) in store_instructions {
@@ -99,7 +106,7 @@ impl Pass for WriteToImmutablePass {
                 &target_symbol,
                 &func_name,
                 &inst.raw_text,
-                &module_index,
+                &runtime_internal_funcs,
                 &mut issues,
             );
         }
@@ -130,7 +137,7 @@ impl WriteToImmutablePass {
         symbol: &str,
         caller: &str,
         callee: &str,
-        module_index: &Option<crate::module_index::ModuleIndex>,
+        runtime_internal_funcs: &std::collections::HashSet<String>,
         issues: &mut Vec<Issue>,
     ) {
         // Add semantic resolutions based on IR patterns
@@ -138,18 +145,17 @@ impl WriteToImmutablePass {
         // R-12: Check for Zig runtime internal functions (suppresses false positives)
         // Zig runtime internal functions (std.*, builtin, compiler_rt, allocator glue)
         // should not be reported as WriteToImmutable violations.
-        if let Some(ref index) = module_index {
-            if index.is_runtime_internal(caller) {
-                let resolution = SemanticResolution {
-                    kind: SemanticKind::RuntimeInternal,
-                    confidence: 0.95,
-                    evidence: "Function is Zig runtime internal (stdlib/compiler_rt/allocator)"
-                        .to_string(),
-                    pattern_id: "R-12",
-                };
-                semantic_tree.add_resolution(symbol, resolution);
-                return; // Not a violation - runtime internal function
-            }
+        let trimmed_caller = caller.trim_start_matches('@');
+        if runtime_internal_funcs.contains(trimmed_caller) {
+            let resolution = SemanticResolution {
+                kind: SemanticKind::RuntimeInternal,
+                confidence: 0.95,
+                evidence: "Function is Zig runtime internal (stdlib/compiler_rt/allocator)"
+                    .to_string(),
+                pattern_id: "R-12",
+            };
+            semantic_tree.add_resolution(symbol, resolution);
+            return; // Not a violation - runtime internal function
         }
 
         // R-0: Check for mutable parameters (suppresses false positives)

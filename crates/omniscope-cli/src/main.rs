@@ -19,6 +19,21 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
+/// Timing breakdown for CLI phases.
+#[derive(Debug)]
+struct CliTiming {
+    /// Time spent loading IR in milliseconds.
+    load_ms: u64,
+    /// Time spent running the analysis pipeline in milliseconds.
+    pipeline_ms: u64,
+    /// Time spent formatting output in milliseconds.
+    format_ms: u64,
+    /// Total time from start to finish in milliseconds.
+    total_ms: u64,
+    /// The load strategy that was actually used.
+    load_strategy: &'static str,
+}
+
 #[derive(Parser)]
 #[command(name = "omniscope")]
 #[command(version, about = "LLVM IR-based static analyzer for FFI safety", long_about = None)]
@@ -69,7 +84,7 @@ struct AnalyzeCommand {
     #[arg(long, default_value = "false")]
     parallel: bool,
 
-    /// IR loading strategy (auto, llvm-sys, cpp-pass, text-parser)
+    /// IR loading strategy (auto, direct-cpp-ffi, direct-cpp, llvm-sys, cpp-pass, text-parser)
     #[arg(long, default_value = "auto")]
     strategy: String,
 
@@ -92,7 +107,7 @@ struct AuditCommand {
     #[arg(short = 't', long, default_value = "ffi")]
     audit_type: String,
 
-    /// IR loading strategy (auto, llvm-sys, cpp-pass, text-parser)
+    /// IR loading strategy (auto, direct-cpp-ffi, direct-cpp, llvm-sys, cpp-pass, text-parser)
     #[arg(long, default_value = "auto")]
     strategy: String,
 }
@@ -321,6 +336,10 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
 /// Parses a strategy string into a [`LoadStrategy`].
 fn parse_strategy(s: &str) -> LoadStrategy {
     match s.to_lowercase().as_str() {
+        "direct-cpp-ffi" | "direct_cpp_ffi" | "directcppffi" | "ffi" => {
+            LoadStrategy::DirectCppFfi
+        }
+        "direct-cpp" | "direct_cpp" | "directcpp" => LoadStrategy::DirectCpp,
         "llvm-sys" | "llvm_sys" | "llvmsys" => LoadStrategy::LlvmSys,
         "cpp-pass" | "cpp_pass" | "cpppass" => LoadStrategy::CppPass,
         "text-parser" | "text_parser" | "textparser" | "text" => LoadStrategy::TextParser,

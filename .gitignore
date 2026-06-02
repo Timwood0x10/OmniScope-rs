@@ -63,8 +63,15 @@ perf.data.old
 *.a
 *.lib
 *.obj
+*.so
+*.dylib
+*.dll
 pass/build/
 pass/compile_commands.json
+tools/*/build/
+tools/*/CMakeCache.txt
+tools/*/cmake_install.cmake
+tools/*/compile_commands.json
 tests/integration/
 
 # Compressed archives

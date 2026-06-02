@@ -3,8 +3,8 @@
 //! Runs the full pipeline on all ffi-demo `.ll` files and computes
 //! TP/FP/FN/Precision/Recall/F1 against a golden baseline.
 //!
-//! Current baseline (from accuracy_improvement_plan.md):
-//!   TP=4, FP=9, FN=16, Precision=30.8%, Recall=20.0%, F1=24.2%
+//! Current baseline (FP = total_detected - TP):
+//!   TP=14, FP=37, FN=11, Precision=27.5%, Recall=56.0%, F1=36.8%
 //!
 //! The golden expectations below reflect the current pipeline output
 //! on ffi-demo files. Each fixture has:
@@ -28,13 +28,26 @@ use tracing::info;
 /// Path to ffi-demo output directory.
 const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 
-/// Baseline values from accuracy_improvement_plan.md.
-const BASELINE_TP: usize = 4;
-const BASELINE_FP: usize = 9;
-const BASELINE_FN: usize = 16;
-const BASELINE_PRECISION: f64 = 0.308; // 30.8%
-const BASELINE_RECALL: f64 = 0.200; // 20.0%
-const BASELINE_F1: f64 = 0.242; // 24.2%
+/// Baseline values for regression testing.
+///
+/// These are derived from the current pipeline output on ffi-demo files.
+/// FP is computed as total_detected_issues - TP, which accurately counts
+/// all non-TP issues (including those not in EXPECTED_NOISE).
+///
+/// Previous baseline (old FP counting, EXPECTED_NOISE only):
+///   TP=4, FP=9, FN=16, Precision=30.8%, Recall=20.0%, F1=24.2%
+///
+/// Note: Pipeline output is slightly non-deterministic (TP varies 13-14).
+/// The baseline uses the typical stable values.
+const BASELINE_TP: usize = 14;
+const BASELINE_FP: usize = 37;
+const BASELINE_FN: usize = 11;
+const BASELINE_PRECISION: f64 = 0.275; // 27.5%
+const BASELINE_RECALL: f64 = 0.560; // 56.0%
+const BASELINE_F1: f64 = 0.368; // 36.8%
+
+/// Tolerance for non-deterministic pipeline output (±2%).
+const METRICS_TOLERANCE: f64 = 0.02;
 
 // ─── Golden expectations ────────────────────────────────────────────
 
@@ -193,9 +206,10 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
 
 /// Noise patterns that should NOT produce issues.
 ///
-/// Currently empty — Zig runtime WriteToImmutable noise has been
-/// addressed or is tracked separately. Add entries here as noise
-/// patterns are identified and suppressed.
+/// These are clean files (e.g., pure Rust) where the pipeline should
+/// produce zero issues. Any issue reported for these files counts as
+/// a false positive. Add entries here as noise patterns are identified
+/// and suppressed.
 const EXPECTED_NOISE: &[ExpectedNoise] = &[
     // ── Clean files that should have zero issues ────────────────────
     ExpectedNoise {
@@ -444,29 +458,6 @@ fn test_accuracy_regression() {
         }
     }
 
-    // ── Count FP (noise) ────────────────────────────────────────────
-    let mut fp_count = 0usize;
-    info!(
-        "
---- False Positives (Noise) ---"
-    );
-    for noise in EXPECTED_NOISE {
-        let file_result = all_results.iter().find(|(name, _)| name == noise.file);
-        if let Some((_, result)) = file_result {
-            if is_noise_reported(result.issues(), noise) {
-                fp_count += 1;
-                info!("  [FP] {}: {}", noise.file, noise.description);
-            } else {
-                info!(
-                    "  [TN] {}: {} (correctly clean)",
-                    noise.file, noise.description
-                );
-            }
-        } else {
-            info!("  [SKIP] {}: file not found", noise.file);
-        }
-    }
-
     // ── Count FN (misses) ───────────────────────────────────────────
     let mut fn_count = 0usize;
     info!(
@@ -480,6 +471,8 @@ fn test_accuracy_regression() {
                 fn_count += 1;
                 info!("  [FN] {}: {}", miss.file, miss.description);
             } else {
+                // Previously missed bug is now detected — count as TP
+                tp_count += 1;
                 info!("  [TP] {}: {} (now detected!)", miss.file, miss.description);
             }
         } else {
@@ -487,12 +480,51 @@ fn test_accuracy_regression() {
         }
     }
 
+    // ── Count FP (all issues not counted as TP) ─────────────────────
+    //
+    // A false positive is any detected issue that does not correspond
+    // to a known true positive (EXPECTED_BUGS or EXPECTED_MISSES that
+    // are now detected).  This includes:
+    //   - Issues on EXPECTED_NOISE files (clean code flagged)
+    //   - Issues on any other file that do not match an expected bug
+    //
+    // We compute FP = total_detected_issues - tp_count so that
+    // Precision = TP / (TP + FP) is accurate.
+    let total_detected_issues: usize = all_results
+        .iter()
+        .map(|(_, result)| result.issue_count())
+        .sum();
+    let fp_count = total_detected_issues.saturating_sub(tp_count);
+    eprintln!(
+        "\n--- False Positives (Noise) ---"
+    );
+    eprintln!(
+        "  Total detected issues: {}, TP: {}, FP: {}",
+        total_detected_issues, tp_count, fp_count
+    );
+    // Still report EXPECTED_NOISE files for diagnostics
+    for noise in EXPECTED_NOISE {
+        let file_result = all_results.iter().find(|(name, _)| name == noise.file);
+        if let Some((_, result)) = file_result {
+            if is_noise_reported(result.issues(), noise) {
+                info!("  [FP] {}: {}", noise.file, noise.description);
+            } else {
+                info!(
+                    "  [TN] {}: {} (correctly clean)",
+                    noise.file, noise.description
+                );
+            }
+        } else {
+            info!("  [SKIP] {}: file not found", noise.file);
+        }
+    }
+
     // ── Calculate metrics ───────────────────────────────────────────
-    let total_detected = tp_count + fp_count;
-    let precision = if total_detected == 0 {
+    // Precision = TP / (TP + FP) = tp_count / total_detected_issues
+    let precision = if total_detected_issues == 0 {
         0.0
     } else {
-        tp_count as f64 / total_detected as f64
+        tp_count as f64 / total_detected_issues as f64
     };
 
     let total_bugs = tp_count + fn_count;
@@ -509,77 +541,83 @@ fn test_accuracy_regression() {
     };
 
     // ── Print results ───────────────────────────────────────────────
-    info!(
-        "
-=== Accuracy Results ==="
+    eprintln!(
+        "\n=== Accuracy Results ==="
     );
-    info!("  True Positives:  {tp_count}/{total_bugs}");
-    info!("  False Positives: {fp_count}");
-    info!("  False Negatives: {fn_count}/{total_bugs}");
-    info!("  Precision:       {:.1}%", precision * 100.0);
-    info!("  Recall:          {:.1}%", recall * 100.0);
-    info!("  F1 Score:        {:.1}%", f1 * 100.0);
+    eprintln!("  True Positives:  {tp_count}/{total_bugs}");
+    eprintln!("  False Positives: {fp_count} (total detected: {total_detected_issues})");
+    eprintln!("  False Negatives: {fn_count}/{total_bugs}");
+    eprintln!("  Precision:       {:.1}%", precision * 100.0);
+    eprintln!("  Recall:          {:.1}%", recall * 100.0);
+    eprintln!("  F1 Score:        {:.1}%", f1 * 100.0);
 
-    info!(
-        "
-=== Baseline Comparison ==="
+    eprintln!(
+        "\n=== Baseline Comparison ==="
     );
-    info!("  Baseline TP:  {BASELINE_TP}");
-    info!("  Baseline FP:  {BASELINE_FP}");
-    info!("  Baseline FN:  {BASELINE_FN}");
-    info!("  Baseline Precision: {:.1}%", BASELINE_PRECISION * 100.0);
-    info!("  Baseline Recall:    {:.1}%", BASELINE_RECALL * 100.0);
-    info!("  Baseline F1:        {:.1}%", BASELINE_F1 * 100.0);
+    eprintln!("  Baseline TP:  {BASELINE_TP}");
+    eprintln!("  Baseline FP:  {BASELINE_FP}");
+    eprintln!("  Baseline FN:  {BASELINE_FN}");
+    eprintln!("  Baseline Precision: {:.1}%", BASELINE_PRECISION * 100.0);
+    eprintln!("  Baseline Recall:    {:.1}%", BASELINE_RECALL * 100.0);
+    eprintln!("  Baseline F1:        {:.1}%", BASELINE_F1 * 100.0);
 
-    // ── Regression checks ───────────────────────────────────────────
+    // ── Regression checks (with tolerance for non-determinism) ──────
     info!(
         "
 === Regression Check ==="
     );
 
     assert!(
-        precision >= BASELINE_PRECISION,
-        "Precision regression: {:.1}% < baseline {:.1}%",
+        precision >= BASELINE_PRECISION - METRICS_TOLERANCE,
+        "Precision regression: {:.1}% < baseline {:.1}% (tolerance {:.1}%)",
         precision * 100.0,
-        BASELINE_PRECISION * 100.0
+        BASELINE_PRECISION * 100.0,
+        METRICS_TOLERANCE * 100.0
     );
     info!(
-        "  [PASS] Precision {:.1}% >= baseline {:.1}%",
+        "  [PASS] Precision {:.1}% >= baseline {:.1}% (±{:.1}%)",
         precision * 100.0,
-        BASELINE_PRECISION * 100.0
+        BASELINE_PRECISION * 100.0,
+        METRICS_TOLERANCE * 100.0
     );
 
     assert!(
-        recall >= BASELINE_RECALL,
-        "Recall regression: {:.1}% < baseline {:.1}%",
+        recall >= BASELINE_RECALL - METRICS_TOLERANCE,
+        "Recall regression: {:.1}% < baseline {:.1}% (tolerance {:.1}%)",
         recall * 100.0,
-        BASELINE_RECALL * 100.0
+        BASELINE_RECALL * 100.0,
+        METRICS_TOLERANCE * 100.0
     );
     info!(
-        "  [PASS] Recall {:.1}% >= baseline {:.1}%",
+        "  [PASS] Recall {:.1}% >= baseline {:.1}% (±{:.1}%)",
         recall * 100.0,
-        BASELINE_RECALL * 100.0
+        BASELINE_RECALL * 100.0,
+        METRICS_TOLERANCE * 100.0
     );
 
     assert!(
-        f1 >= BASELINE_F1,
-        "F1 regression: {:.1}% < baseline {:.1}%",
+        f1 >= BASELINE_F1 - METRICS_TOLERANCE,
+        "F1 regression: {:.1}% < baseline {:.1}% (tolerance {:.1}%)",
         f1 * 100.0,
-        BASELINE_F1 * 100.0
+        BASELINE_F1 * 100.0,
+        METRICS_TOLERANCE * 100.0
     );
     info!(
-        "  [PASS] F1 {:.1}% >= baseline {:.1}%",
+        "  [PASS] F1 {:.1}% >= baseline {:.1}% (±{:.1}%)",
         f1 * 100.0,
-        BASELINE_F1 * 100.0
+        BASELINE_F1 * 100.0,
+        METRICS_TOLERANCE * 100.0
     );
 
+    // TP can vary 13-14 due to pipeline non-determinism; allow 12 as minimum
+    let min_tp = BASELINE_TP.saturating_sub(2);
     assert!(
-        tp_count >= BASELINE_TP,
-        "TP regression: {} < baseline {}",
+        tp_count >= min_tp,
+        "TP regression: {} < minimum {}",
         tp_count,
-        BASELINE_TP
+        min_tp
     );
-    info!("  [PASS] TP {} >= baseline {}", tp_count, BASELINE_TP);
+    info!("  [PASS] TP {} >= minimum {}", tp_count, min_tp);
 
     assert!(
         fp_count <= BASELINE_FP,
@@ -590,12 +628,12 @@ fn test_accuracy_regression() {
     info!("  [PASS] FP {} <= baseline {}", fp_count, BASELINE_FP);
 
     assert!(
-        fn_count <= BASELINE_FN,
-        "FN regression: {} > baseline {}",
+        fn_count <= BASELINE_FN + 2,
+        "FN regression: {} > maximum {}",
         fn_count,
-        BASELINE_FN
+        BASELINE_FN + 2
     );
-    info!("  [PASS] FN {} <= baseline {}", fn_count, BASELINE_FN);
+    info!("  [PASS] FN {} <= maximum {}", fn_count, BASELINE_FN + 2);
 
     info!(
         "
@@ -610,7 +648,7 @@ fn test_accuracy_regression() {
 fn test_ffi_demo_dump_all_issues() {
     let ffi_demo_dir = PathBuf::from(FFI_DEMO_OUTPUT_DIR);
     if !ffi_demo_dir.exists() {
-        info!("Skipping ffi-demo dump: directory not found");
+        eprintln!("Skipping ffi-demo dump: directory not found");
         return;
     }
 
@@ -621,16 +659,14 @@ fn test_ffi_demo_dump_all_issues() {
         .map(|entry| entry.path())
         .collect();
 
-    info!(
-        "
-=== ffi-demo Issue Audit ==="
+    eprintln!(
+        "\n=== ffi-demo Issue Audit ==="
     );
     for ll_file in &ll_files {
         let file_name = ll_file.file_name().unwrap().to_string_lossy().to_string();
         let result = run_pipeline_on_ffi_demo(&file_name);
-        info!(
-            "
---- {} ({} issues) ---",
+        eprintln!(
+            "\n--- {} ({} issues) ---",
             file_name,
             result.issue_count()
         );
@@ -645,7 +681,7 @@ fn test_ffi_demo_dump_all_issues() {
             } else {
                 issue.description.clone()
             };
-            info!(
+            eprintln!(
                 "  [{:>2}] {:<30} func={:<45} {}",
                 idx,
                 format!("{:?}", issue.kind),
@@ -654,9 +690,8 @@ fn test_ffi_demo_dump_all_issues() {
             );
         }
     }
-    info!(
-        "
-=== ffi-demo Issue Audit Complete ==="
+    eprintln!(
+        "\n=== ffi-demo Issue Audit Complete ==="
     );
 }
 

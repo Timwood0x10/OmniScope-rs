@@ -182,6 +182,8 @@ impl FamilyRegistry {
         self.add_mimalloc_symbols();
         // C# COM interop
         self.add_csharp_com_symbols();
+        // File descriptor family (OS resource handles)
+        self.add_file_descriptor_symbols();
     }
 
     fn add_c_heap_symbols(&mut self) {
@@ -503,6 +505,60 @@ impl FamilyRegistry {
         // No COM-specific symbols currently — CoTaskMem* are in CSHARP_COTASK.
         // Future COM-specific allocators (e.g., CoCreateInstance) go here.
     }
+
+    /// Register file descriptor family symbols.
+    /// 
+    /// File descriptors are integer handles to OS resources. Unlike pointer-based
+    /// resources, fd values are small integers that cannot be dereferenced directly.
+    /// The acquire/release pairing model applies: open() returns an fd, close()
+    /// releases it. Leak detection works by checking if every acquired fd is
+    /// eventually closed.
+    ///
+    /// POSIX functions:
+    /// - acquire: open, openat, creat, socket, accept, accept4, dup, dup2, dup3, pipe, pipe2
+    /// - release: close
+    ///
+    /// Note: Some functions like socketpair create two fds at once. We treat the
+    /// return value as a single resource for now (simplification). The fd leak
+    /// detector will need to handle this case specially in the future.
+    fn add_file_descriptor_symbols(&mut self) {
+        let f = FamilyId::FILE_DESCRIPTOR;
+        let lang = LanguageHint::C;
+
+        // ── File open/creation ──
+        // open() opens a file and returns a file descriptor.
+        self.add_symbol("open", f, SymbolEffect::Acquire, lang);
+        // openat() is like open() but relative to a directory fd.
+        self.add_symbol("openat", f, SymbolEffect::Acquire, lang);
+        // creat() is equivalent to open(path, O_CREAT|O_WRONLY|O_TRUNC).
+        self.add_symbol("creat", f, SymbolEffect::Acquire, lang);
+
+        // ── Socket operations ──
+        // socket() creates a socket endpoint and returns an fd.
+        self.add_symbol("socket", f, SymbolEffect::Acquire, lang);
+        // accept() accepts a connection on a socket and returns a new fd.
+        self.add_symbol("accept", f, SymbolEffect::Acquire, lang);
+        // accept4() is like accept() with additional flags (Linux-specific).
+        self.add_symbol("accept4", f, SymbolEffect::Acquire, lang);
+
+        // ── Duplication ──
+        // dup() duplicates an existing fd.
+        self.add_symbol("dup", f, SymbolEffect::Acquire, lang);
+        // dup2() duplicates fd to a specific new fd number.
+        self.add_symbol("dup2", f, SymbolEffect::Acquire, lang);
+        // dup3() is like dup2() with additional flags (Linux-specific).
+        self.add_symbol("dup3", f, SymbolEffect::Acquire, lang);
+
+        // ── Pipe operations ──
+        // pipe() creates a pair of connected fds (read/write end).
+        self.add_symbol("pipe", f, SymbolEffect::Acquire, lang);
+        // pipe2() is like pipe() with additional flags (Linux-specific).
+        self.add_symbol("pipe2", f, SymbolEffect::Acquire, lang);
+
+        // ── Release ──
+        // close() closes a file descriptor, releasing the OS resource.
+        self.add_symbol("close", f, SymbolEffect::Release, lang);
+    }
 }
 
 impl Default for FamilyRegistry {
@@ -524,8 +580,8 @@ mod tests {
         );
         assert_eq!(
             registry.family_count(),
-            20,
-            "Must have 20 built-in families"
+            21,
+            "Must have 21 built-in families (including FILE_DESCRIPTOR)"
         );
     }
 
@@ -680,6 +736,113 @@ mod tests {
         assert_eq!(
             new_arr.family_id, del_arr.family_id,
             "new[] and delete[] must be same family"
+        );
+    }
+
+    // ── File descriptor family tests ──
+
+    /// Test that fd acquire functions (open, socket, etc.) are registered
+    /// with FILE_DESCRIPTOR family and Acquire effect.
+    #[test]
+    fn test_file_descriptor_acquire_symbols() {
+        let registry = FamilyRegistry::new();
+        let acquire_symbols = [
+            "open", "openat", "creat", "socket", "accept", "accept4",
+            "dup", "dup2", "dup3", "pipe", "pipe2",
+        ];
+        for sym in &acquire_symbols {
+            let entry = registry.lookup(sym).unwrap_or_else(|| {
+                panic!("family_registry::test_file_descriptor_acquire_symbols: {} must be registered", sym)
+            });
+            assert_eq!(
+                entry.family_id,
+                FamilyId::FILE_DESCRIPTOR,
+                "{} must be FILE_DESCRIPTOR family",
+                sym
+            );
+            assert_eq!(
+                entry.effect,
+                SymbolEffect::Acquire,
+                "{} must have Acquire effect",
+                sym
+            );
+        }
+    }
+
+    /// Test that fd release function (close) is registered
+    /// with FILE_DESCRIPTOR family and Release effect.
+    #[test]
+    fn test_file_descriptor_release_symbol() {
+        let registry = FamilyRegistry::new();
+        let close_entry = registry.lookup("close").unwrap_or_else(|| {
+            panic!("family_registry::test_file_descriptor_release_symbol: close must be registered")
+        });
+        assert_eq!(
+            close_entry.family_id,
+            FamilyId::FILE_DESCRIPTOR,
+            "close must be FILE_DESCRIPTOR family"
+        );
+        assert_eq!(
+            close_entry.effect,
+            SymbolEffect::Release,
+            "close must have Release effect"
+        );
+    }
+
+    /// Test that open and close are in the same family (acquire/release pairing).
+    #[test]
+    fn test_open_close_same_family() {
+        let registry = FamilyRegistry::new();
+        let open = registry.lookup("open").unwrap_or_else(|| {
+            panic!("family_registry::test_open_close_same_family: open must be registered")
+        });
+        let close = registry.lookup("close").unwrap_or_else(|| {
+            panic!("family_registry::test_open_close_same_family: close must be registered")
+        });
+        assert_eq!(
+            open.family_id, close.family_id,
+            "open and close must be same family (FILE_DESCRIPTOR)"
+        );
+        assert!(
+            registry.is_compatible_release(open.family_id, close.family_id),
+            "open and close should be compatible release"
+        );
+    }
+
+    /// Test that FILE_DESCRIPTOR family is not compatible with C_HEAP.
+    /// This ensures that fd leaks are not confused with memory leaks.
+    #[test]
+    fn test_file_descriptor_not_compatible_with_c_heap() {
+        let registry = FamilyRegistry::new();
+        let open = registry.lookup("open").unwrap_or_else(|| {
+            panic!("family_registry::test_file_descriptor_not_compatible_with_c_heap: open must be registered")
+        });
+        let free = registry.lookup("free").unwrap_or_else(|| {
+            panic!("family_registry::test_file_descriptor_not_compatible_with_c_heap: free must be registered")
+        });
+        assert_ne!(
+            open.family_id, free.family_id,
+            "FILE_DESCRIPTOR and C_HEAP must be different families"
+        );
+        assert!(
+            !registry.is_compatible_release(open.family_id, free.family_id),
+            "FILE_DESCRIPTOR and C_HEAP should NOT be compatible release"
+        );
+    }
+
+    /// Test that FILE_DESCRIPTOR family is not compatible with itself for
+    /// different resource types (e.g., socket fd cannot be closed with fclose).
+    /// This is already handled by the family design — FILE_DESCRIPTOR has
+    /// no compatible_releases, so only close() can release fd resources.
+    #[test]
+    fn test_file_descriptor_only_close_releases() {
+        let registry = FamilyRegistry::new();
+        let fd_family = registry.family(FamilyId::FILE_DESCRIPTOR).unwrap_or_else(|| {
+            panic!("family_registry::test_file_descriptor_only_close_releases: FILE_DESCRIPTOR family must exist")
+        });
+        assert!(
+            fd_family.compatible_releases.is_empty(),
+            "FILE_DESCRIPTOR family should have no compatible releases (only close() works)"
         );
     }
 }

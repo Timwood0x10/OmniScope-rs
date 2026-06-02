@@ -1,5 +1,5 @@
 #!/bin/bash
-# build.sh — Build the SafetyExportPass LLVM plugin.
+# build.sh — Build the ir_extractor standalone tool.
 #
 # Prerequisites:
 #   - LLVM 18+ installed with development headers
@@ -51,8 +51,7 @@ cmake -B "$SCRIPT_DIR/build" -S "$SCRIPT_DIR" \
 cmake --build "$SCRIPT_DIR/build" --config Release -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 
 echo ""
-echo "Build complete. Plugin: $SCRIPT_DIR/build/libSafetyExportPass.dylib"
+echo "Build complete. Tool: $SCRIPT_DIR/build/ir_extractor"
 echo ""
 echo "Usage:"
-echo "  opt -load-pass-plugin ./build/libSafetyExportPass.dylib \\"
-echo "      -passes='safety-export' input.ll 2>/dev/null"
+echo "  ir_extractor input.ll [output.json]"

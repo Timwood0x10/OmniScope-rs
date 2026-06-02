@@ -207,6 +207,26 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
         use crate::resource::family_registry::SymbolEffect;
         match entry.effect {
             SymbolEffect::Acquire => {
+                // R-8: File descriptor operations are safe POSIX operations.
+                // They acquire integer handles to OS resources, not memory pointers.
+                // The resource leak detector will track fd lifecycle separately.
+                if entry.family_id == omniscope_types::FamilyId::FILE_DESCRIPTOR {
+                    evidence.push(IREvidence {
+                        instruction_kind: IRInstructionKind::Call,
+                        reasoning: format!(
+                            "R-8: Callee '{}' is a file descriptor acquire for family {:?} — safe POSIX operation",
+                            callee, entry.family_id
+                        ),
+                    });
+                    return FFISafetyAssessment {
+                        callee: callee.to_string(),
+                        caller: caller.to_string(),
+                        caller_behavior,
+                        callee_behavior,
+                        verdict: FFIVerdict::SafeNoOwnership,
+                        evidence,
+                    };
+                }
                 evidence.push(IREvidence {
                     instruction_kind: IRInstructionKind::Call,
                     reasoning: format!(
@@ -224,6 +244,26 @@ pub fn assess_ffi_safety(callee: &str, caller: &str, module: &IRModule) -> FFISa
                 };
             }
             SymbolEffect::Release | SymbolEffect::ConditionalRelease => {
+                // R-8: File descriptor operations are safe POSIX operations.
+                // They release integer handles to OS resources, not memory pointers.
+                // The resource leak detector will track fd lifecycle separately.
+                if entry.family_id == omniscope_types::FamilyId::FILE_DESCRIPTOR {
+                    evidence.push(IREvidence {
+                        instruction_kind: IRInstructionKind::Call,
+                        reasoning: format!(
+                            "R-8: Callee '{}' is a file descriptor release for family {:?} — safe POSIX operation",
+                            callee, entry.family_id
+                        ),
+                    });
+                    return FFISafetyAssessment {
+                        callee: callee.to_string(),
+                        caller: caller.to_string(),
+                        caller_behavior,
+                        callee_behavior,
+                        verdict: FFIVerdict::SafeNoOwnership,
+                        evidence,
+                    };
+                }
                 // R-7: Library-managed families (zlib/openssl/sqlite/mimalloc)
                 // have paired init+end release functions. These are legitimate
                 // intra-library releases, NOT cross-language free bugs.

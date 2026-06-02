@@ -189,13 +189,13 @@ fn is_zig_runtime_internal(name: &str, language: Language) -> bool {
         return true;
     }
 
-    // Zig builtin functions
-    if name.contains("builtin") {
+    // Zig builtin functions (use precise prefix to avoid matching user code)
+    if name.starts_with("builtin.") {
         return true;
     }
 
-    // Zig compiler runtime
-    if name.contains("compiler_rt") {
+    // Zig compiler runtime (use precise prefix to avoid matching user code)
+    if name.starts_with("compiler_rt.") || name == "compiler_rt" {
         return true;
     }
 
