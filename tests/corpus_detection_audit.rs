@@ -11,6 +11,7 @@ use omniscope_core::IssueKind;
 use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
 use std::io::Write;
+use tracing::info;
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -480,6 +481,6 @@ fn corpus_detection_audit() {
     // Also print to stdout so it appears in test output
     let report = String::from_utf8_lossy(&buf);
     for line in report.lines() {
-        println!("{line}");
+        info!("{line}");
     }
 }

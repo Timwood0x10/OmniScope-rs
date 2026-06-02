@@ -14,30 +14,34 @@ fn test_detect_rust_ffi_boundaries() {
         return;
     }
 
-    println!("\n=== Analyzing rust_hash.ll for FFI boundaries ===\n");
+    info!(
+        "
+=== Analyzing rust_hash.ll for FFI boundaries ===
+"
+    );
 
     // Parse the IR file
     let module = IRModule::load_from_file(&test_file).expect("Failed to load IR file");
 
-    println!("Functions defined: {}", module.functions.len());
+    info!("Functions defined: {}", module.functions.len());
     for name in module.functions.keys() {
-        println!("  - {} (defined)", name);
+        info!("  - {} (defined)", name);
     }
 
-    println!("\nExternal declarations: {}", module.declarations.len());
+    info!("\nExternal declarations: {}", module.declarations.len());
     for name in module.declarations.keys() {
-        println!("  - {} (extern)", name);
+        info!("  - {} (extern)", name);
     }
 
-    println!("\nCall instructions: {}", module.calls.len());
+    info!("\nCall instructions: {}", module.calls.len());
     for call in &module.calls {
         let status = if call.is_external { "FFI" } else { "internal" };
-        println!("  - call to {} ({})", call.callee, status);
+        info!("  - call to {} ({})", call.callee, status);
     }
 
     // Find FFI boundaries
     let ffi_calls = module.ffi_boundaries();
-    println!("\n✓ FFI boundaries detected: {}", ffi_calls.len());
+    info!("\n✓ FFI boundaries detected: {}", ffi_calls.len());
 
     // Expected FFI calls
     let expected_ffi = vec!["c_fft_forward", "c_hash"];
@@ -46,15 +50,15 @@ fn test_detect_rust_ffi_boundaries() {
     for expected in &expected_ffi {
         let found = ffi_calls.iter().any(|call| call.callee == *expected);
         if found {
-            println!("  ✓ Found FFI call to: {}", expected);
+            info!("  ✓ Found FFI call to: {}", expected);
             found_count += 1;
         } else {
-            println!("  ✗ Missing expected FFI call to: {}", expected);
+            info!("  ✗ Missing expected FFI call to: {}", expected);
         }
     }
 
     assert!(found_count > 0, "Should detect at least one FFI call");
-    println!("\n✓ Successfully detected {} FFI boundaries", found_count);
+    info!("\n✓ Successfully detected {} FFI boundaries", found_count);
 }
 
 /// Analyze all IR files and report FFI issues
@@ -67,7 +71,11 @@ fn test_analyze_all_ffi_issues() {
         ("tests/integration/cpp_hash.ll", "C++"),
     ];
 
-    println!("\n=== FFI Analysis Report ===\n");
+    info!(
+        "
+=== FFI Analysis Report ===
+"
+    );
 
     let mut total_ffi_calls = 0;
     let mut total_issues = 0;
@@ -76,48 +84,55 @@ fn test_analyze_all_ffi_issues() {
         let test_file = PathBuf::from(path);
 
         if !test_file.exists() {
-            println!("⚠ {} file not found: {}", lang, path);
+            info!("⚠ {} file not found: {}", lang, path);
             continue;
         }
 
-        println!("📄 {} ({})", lang, path);
+        info!("📄 {} ({})", lang, path);
 
         match IRModule::load_from_file(&test_file) {
             Ok(module) => {
                 let ffi_calls = module.ffi_boundaries();
 
-                println!("  Functions: {}", module.functions.len());
-                println!("  Declarations: {}", module.declarations.len());
-                println!("  FFI calls: {}", ffi_calls.len());
+                info!("  Functions: {}", module.functions.len());
+                info!("  Declarations: {}", module.declarations.len());
+                info!("  FFI calls: {}", ffi_calls.len());
 
                 // Report FFI calls
                 for call in &ffi_calls {
-                    println!("    → FFI: {}", call.callee);
+                    info!("    → FFI: {}", call.callee);
                     total_ffi_calls += 1;
 
                     // Check for dangerous FFI patterns
                     if is_dangerous_ffi(&call.callee) {
-                        println!("      ⚠ POTENTIAL ISSUE: Dangerous FFI function");
+                        info!("      ⚠ POTENTIAL ISSUE: Dangerous FFI function");
                         total_issues += 1;
                     }
                 }
 
-                println!();
+                info!("");
             }
             Err(e) => {
-                println!("  ✗ Failed to parse: {:?}\n", e);
+                info!("  ✗ Failed to parse: {:?}\n", e);
             }
         }
     }
 
-    println!("=== Summary ===");
-    println!("Total FFI calls: {}", total_ffi_calls);
-    println!("Potential issues: {}", total_issues);
+    info!("=== Summary ===");
+    info!("Total FFI calls: {}", total_ffi_calls);
+    info!("Potential issues: {}", total_issues);
 
     if total_issues > 0 {
-        println!("\n⚠ Found {} potential FFI safety issues!", total_issues);
+        info!(
+            "
+⚠ Found {} potential FFI safety issues!",
+            total_issues
+        );
     } else {
-        println!("\n✓ No obvious FFI safety issues detected");
+        info!(
+            "
+✓ No obvious FFI safety issues detected"
+        );
     }
 }
 
@@ -137,11 +152,11 @@ fn test_detect_memory_issues() {
     let test_file = PathBuf::from("tests/integration/c_hash_c_bridge.ll");
 
     if !test_file.exists() {
-        eprintln!("Test file not found");
+        info!("Test file not found");
         return;
     }
 
-    println!("\n=== Memory Safety Analysis ===\n");
+    info!("\n=== Memory Safety Analysis ===\n");
 
     let module = IRModule::load_from_file(&test_file).expect("Failed to load");
 
@@ -151,18 +166,18 @@ fn test_detect_memory_issues() {
     for call in &module.calls {
         for mem_func in &memory_funcs {
             if call.callee.contains(mem_func) {
-                println!("⚠ Memory operation: {}", call.callee);
+                info!("⚠ Memory operation: {}", call.callee);
 
                 // Check for common issues
                 if *mem_func == "free" {
-                    println!("  → Potential: use-after-free, double-free");
+                    info!("  → Potential: use-after-free, double-free");
                 }
                 if *mem_func == "malloc" {
-                    println!("  → Potential: memory leak, null dereference");
+                    info!("  → Potential: memory leak, null dereference");
                 }
             }
         }
     }
 
-    println!("\n✓ Memory analysis complete");
+    info!("\n✓ Memory analysis complete");
 }

@@ -295,7 +295,8 @@ impl Pass for IssueCandidateBuilderPass {
 
                 // ── UseAfterFree: released resource then used ──
                 if !release_indices.is_empty() {
-                    let last_release_idx = *release_indices.last()
+                    let last_release_idx = *release_indices
+                        .last()
                         .expect("issue_candidate_builder: release_indices should not be empty");
 
                     // Check for use edges after the last release.
@@ -391,8 +392,9 @@ impl Pass for IssueCandidateBuilderPass {
 
                 // ── OwnershipEscapeLeak: into_raw without matching from_raw ──
                 if !ownership_escape_indices.is_empty() && ownership_reclaim_indices.is_empty() {
-                    let &escape_idx = ownership_escape_indices.first()
-                        .expect("issue_candidate_builder: ownership_escape_indices should not be empty");
+                    let &escape_idx = ownership_escape_indices.first().expect(
+                        "issue_candidate_builder: ownership_escape_indices should not be empty",
+                    );
                     let family = graph.edges[escape_idx]
                         .family
                         .unwrap_or(FamilyId::RUST_RAW_OWNERSHIP);

@@ -14,6 +14,7 @@
 use omniscope_core::IssueKind;
 use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
+use tracing::debug;
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -787,7 +788,7 @@ fn test_go_mallocgc_no_false_positive() {
     // runtime.mallocgc is Acquire with no matching Release — may produce
     // ConditionalLeak. This test documents current behavior so we can
     // track whether we add GC-aware noise suppression later.
-    eprintln!(
+    debug!(
         "Go mallocgc — issues: {:?}",
         result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
     );

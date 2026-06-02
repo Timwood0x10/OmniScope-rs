@@ -345,7 +345,8 @@ impl Pass for ContractGraphBuilderPass {
                     let source_id = if let Some(pos) =
                         func_acquires.iter().position(|(_, f, _)| *f == *family)
                     {
-                        let (id, _, _) = func_acquires.remove(pos)
+                        let (id, _, _) = func_acquires
+                            .remove(pos)
                             .expect("contract_graph_builder: position should be valid after find");
                         id
                     } else if let Some((id, _, _)) = func_acquires.pop_front() {
@@ -386,7 +387,8 @@ impl Pass for ContractGraphBuilderPass {
                     let source_id = if let Some(pos) =
                         func_acquires.iter().position(|(_, f, _)| *f == *family)
                     {
-                        let (id, _, _) = func_acquires.remove(pos)
+                        let (id, _, _) = func_acquires
+                            .remove(pos)
                             .expect("contract_graph_builder: position should be valid after find");
                         id
                     } else {

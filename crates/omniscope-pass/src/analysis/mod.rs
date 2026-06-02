@@ -315,11 +315,6 @@ impl Pass for FFIBoundaryPass {
             issues_found, boundary_count
         );
 
-        // Keep the IRModule in context for downstream passes
-        if let Some(module) = ir_module {
-            ctx.store("ir_module", module);
-        }
-
         let mut result = PassResult::new(self.name())
             .with_nodes(boundary_count)
             .with_duration(start.elapsed().as_millis() as u64);

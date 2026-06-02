@@ -83,9 +83,9 @@ impl RawFactCollectorPass {
                 continue;
             }
 
-            let effect = call_meta.symbol_effect.expect(
-                "raw_fact_collector: symbol_effect should be Some after is_none check"
-            );
+            let effect = call_meta
+                .symbol_effect
+                .expect("raw_fact_collector: symbol_effect should be Some after is_none check");
             let is_acquire = matches!(
                 effect,
                 omniscope_semantics::SymbolEffect::Acquire

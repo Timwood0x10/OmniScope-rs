@@ -15,6 +15,7 @@
 use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
 use std::path::PathBuf;
+use tracing::info;
 
 /// Statistics for a single corpus file.
 #[derive(Debug, Clone)]
@@ -60,7 +61,7 @@ fn test_corpus_regression() {
     // Collect all .ll files in the corpus directory
     let ll_files: Vec<PathBuf> = std::fs::read_dir(&corpus_dir)
         .unwrap_or_else(|e| {
-            eprintln!("Cannot read corpus dir {:?}: {}", corpus_dir, e);
+            info!("Cannot read corpus dir {:?}: {}", corpus_dir, e);
             panic!("Corpus directory must exist for regression tests");
         })
         .filter_map(|entry| entry.ok())
@@ -68,7 +69,7 @@ fn test_corpus_regression() {
         .map(|entry| entry.path())
         .collect();
 
-    println!("Corpus regression: {} .ll files", ll_files.len());
+    info!("Corpus regression: {} .ll files", ll_files.len());
 
     for ll_file in &ll_files {
         let file_name = ll_file.file_name().unwrap().to_string_lossy().to_string();
@@ -77,7 +78,7 @@ fn test_corpus_regression() {
         let module = match IRModule::load_from_file(ll_file) {
             Ok(m) => m,
             Err(_) => {
-                println!("  [SKIP] {} — could not load IR", file_name);
+                info!("  [SKIP] {} — could not load IR", file_name);
                 results.push(CorpusStats {
                     file: file_name,
                     candidate_count: 0,
@@ -96,7 +97,7 @@ fn test_corpus_regression() {
         pipeline.set_ir_module(module);
 
         let pipeline_result = pipeline.run().unwrap_or_else(|e| {
-            eprintln!("  [ERROR] {} — pipeline failed: {}", file_name, e);
+            info!("  [ERROR] {} — pipeline failed: {}", file_name, e);
             panic!("Pipeline must not fail on corpus files");
         });
 
@@ -121,7 +122,7 @@ fn test_corpus_regression() {
             .copied()
             .unwrap_or(0);
 
-        println!(
+        info!(
             "  {} candidates={}, reportable={}, suppressed={}, nodes={}",
             file_name, candidate_count, reportable_count, suppressed_count, total_nodes
         );
@@ -143,9 +144,9 @@ fn test_corpus_regression() {
 
     // Format as JSON for CI capture
     let file_jsons: Vec<String> = results.iter().map(|r| r.to_json()).collect();
-    println!("\n=== Corpus Regression JSON ===");
-    println!(
-        r#"{{"total_candidates":{},"total_reportable":{},"total_suppressed":{},"files":[{}]}}"#,
+    info!("\n=== Corpus Regression JSON ===");
+    info!(
+        r#"{{\"total_candidates\":{},\"total_reportable\":{},\"total_suppressed\":{},\"files":[{}]}}"#,
         total_candidates,
         total_reportable,
         total_suppressed,
