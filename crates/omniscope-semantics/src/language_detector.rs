@@ -99,6 +99,7 @@ impl LanguageDetector {
             LanguagePattern::new(Language::Go, "runtime.").prefix(),
             // Zig patterns
             LanguagePattern::new(Language::Zig, "zig.").prefix(),
+            LanguagePattern::new(Language::Zig, "zig_allocator_").prefix(),
             // Python patterns
             LanguagePattern::new(Language::Python, "Py").prefix(),
             LanguagePattern::new(Language::Python, "PyObject").contains(),

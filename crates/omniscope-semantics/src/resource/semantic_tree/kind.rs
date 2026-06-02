@@ -137,6 +137,12 @@ pub enum SemanticKind {
     /// Java JNI weak global reference (NewWeakGlobalRef).
     /// May be garbage collected; must check with IsSameObject before use.
     JavaWeakRef,
+
+    // ── Zig: Runtime internal functions ──
+    /// Zig runtime internal function (std.*, builtin, compiler_rt, allocator glue).
+    /// These functions are part of the Zig runtime and should be suppressed
+    /// in WriteToImmutable analysis to reduce false positives.
+    RuntimeInternal,
 }
 
 impl SemanticKind {
@@ -150,6 +156,7 @@ impl SemanticKind {
                 | SemanticKind::CppUniquePtr
                 | SemanticKind::CppSharedPtr
                 | SemanticKind::CsharpSafeHandle
+                | SemanticKind::RuntimeInternal
         )
     }
 
@@ -386,6 +393,9 @@ impl SemanticKind {
             SemanticKind::NetworkOperation => 0.9,
             SemanticKind::ProcessOperation => 0.8,
             SemanticKind::LibraryRelease => 0.8,
+
+            // ── Runtime internal patterns (0.9) ──
+            SemanticKind::RuntimeInternal => 0.9, // Compiler/runtime managed
 
             // ── Default ──
             SemanticKind::Unknown => 0.5,

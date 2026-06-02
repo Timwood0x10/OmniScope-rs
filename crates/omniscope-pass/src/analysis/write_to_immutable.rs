@@ -42,8 +42,7 @@ impl Pass for WriteToImmutablePass {
         let start = std::time::Instant::now();
 
         // Get IR module for analysis
-        let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
-        let Some(module) = ir_module else {
+        let Some(module) = ctx.get_ir_module() else {
             return Ok(PassResult::new(self.name())
                 .with_issues(0)
                 .with_nodes(0)
@@ -59,8 +58,8 @@ impl Pass for WriteToImmutablePass {
         // Try to use ModuleIndex for function pre-filtering
         let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
 
-        // Scan for store instructions that might be writing to immutable memory.
-        // Store instructions live in function_bodies, not in module.calls.
+        // Collect store instructions to analyze (avoid borrow conflicts)
+        let mut store_instructions = Vec::new();
         for (func_name, body) in &module.function_bodies {
             // Use ModuleIndex to skip functions without store instructions
             if let Some(ref index) = module_index {
@@ -73,30 +72,36 @@ impl Pass for WriteToImmutablePass {
             }
 
             for inst in body.instructions_of_kind(omniscope_ir::IRInstructionKind::Store) {
-                nodes_analyzed += 1;
-
-                // Build a target symbol from the function name and store operands.
-                // Store instructions don't have a callee; use the raw text for context.
-                // Find a byte boundary for ~80 chars to bound allocation without
-                // collecting an intermediate String.
-                let byte_end = inst
-                    .raw_text
-                    .char_indices()
-                    .nth(80)
-                    .map_or(inst.raw_text.len(), |(i, _)| i);
-                let raw_prefix = &inst.raw_text[..byte_end];
-                let target_symbol = format!("{}->store:{}", func_name, raw_prefix);
-
-                // Analyze the store target for semantic context
-                self.analyze_store_target(
-                    ctx,
-                    &mut semantic_tree,
-                    &target_symbol,
-                    func_name,
-                    &inst.raw_text,
-                    &mut issues,
-                );
+                store_instructions.push((func_name.clone(), inst.clone()));
             }
+        }
+
+        // Now process store instructions without borrow conflicts
+        for (func_name, inst) in store_instructions {
+            nodes_analyzed += 1;
+
+            // Build a target symbol from the function name and store operands.
+            // Store instructions don't have a callee; use the raw text for context.
+            // Find a byte boundary for ~80 chars to bound allocation without
+            // collecting an intermediate String.
+            let byte_end = inst
+                .raw_text
+                .char_indices()
+                .nth(80)
+                .map_or(inst.raw_text.len(), |(i, _)| i);
+            let raw_prefix = &inst.raw_text[..byte_end];
+            let target_symbol = format!("{}->store:{}", func_name, raw_prefix);
+
+            // Analyze the store target for semantic context
+            self.analyze_store_target(
+                ctx,
+                &mut semantic_tree,
+                &target_symbol,
+                &func_name,
+                &inst.raw_text,
+                &module_index,
+                &mut issues,
+            );
         }
 
         // Store semantic tree for downstream passes
@@ -125,9 +130,27 @@ impl WriteToImmutablePass {
         symbol: &str,
         caller: &str,
         callee: &str,
+        module_index: &Option<crate::module_index::ModuleIndex>,
         issues: &mut Vec<Issue>,
     ) {
         // Add semantic resolutions based on IR patterns
+
+        // R-12: Check for Zig runtime internal functions (suppresses false positives)
+        // Zig runtime internal functions (std.*, builtin, compiler_rt, allocator glue)
+        // should not be reported as WriteToImmutable violations.
+        if let Some(ref index) = module_index {
+            if index.is_runtime_internal(caller) {
+                let resolution = SemanticResolution {
+                    kind: SemanticKind::RuntimeInternal,
+                    confidence: 0.95,
+                    evidence: "Function is Zig runtime internal (stdlib/compiler_rt/allocator)"
+                        .to_string(),
+                    pattern_id: "R-12",
+                };
+                semantic_tree.add_resolution(symbol, resolution);
+                return; // Not a violation - runtime internal function
+            }
+        }
 
         // R-0: Check for mutable parameters (suppresses false positives)
         if self.is_mutable_parameter(caller) {

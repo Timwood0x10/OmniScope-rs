@@ -19,6 +19,7 @@ use omniscope_ir::ir_model::{
     IRBasicBlock, IRDeclaration, IRFunction, IRGlobalVariable, IRInstructionModel, IRModuleModel,
 };
 use omniscope_ir::parser::IRModule;
+use tracing::debug;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -1056,7 +1057,7 @@ mod plan_c_with_feature {
             }
             Err(e) => {
                 // LLVM not available at runtime — skip gracefully.
-                eprintln!("Skipping llvm-sys parse test (LLVM not available): {}", e);
+                debug!("Skipping llvm-sys parse test (LLVM not available): {}", e);
             }
         }
     }
@@ -1093,7 +1094,7 @@ mod plan_c_with_feature {
                 }
             }
             Err(e) => {
-                eprintln!("Skipping type fields test (LLVM not available): {}", e);
+                debug!("Skipping type fields test (LLVM not available): {}", e);
             }
         }
     }
@@ -1133,7 +1134,7 @@ mod plan_c_with_feature {
                 );
             }
             Err(e) => {
-                eprintln!("Skipping CFG edges test (LLVM not available): {}", e);
+                debug!("Skipping CFG edges test (LLVM not available): {}", e);
             }
         }
     }
@@ -1155,7 +1156,7 @@ mod plan_c_with_feature {
             }
             Err(e) => {
                 // LLVM not available — this is expected in some environments.
-                eprintln!("Skipping LlvmSys loader test (LLVM not available): {}", e);
+                debug!("Skipping LlvmSys loader test (LLVM not available): {}", e);
             }
         }
     }
@@ -1601,7 +1602,7 @@ fn test_plan_c_vs_baseline_consistency() {
         Err(e) => {
             // LLVM not available — skip the comparison but verify baseline
             // is deterministic (sanity check).
-            eprintln!(
+            debug!(
                 "Skipping Plan C vs baseline comparison (LLVM not available): {}",
                 e
             );

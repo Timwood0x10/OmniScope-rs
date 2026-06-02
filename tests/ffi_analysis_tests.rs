@@ -2,6 +2,7 @@
 
 use omniscope_ir::IRModule;
 use std::path::PathBuf;
+use tracing::info;
 
 /// Analyze rust_hash.ll for FFI issues
 #[test]
@@ -9,7 +10,7 @@ fn test_detect_rust_ffi_boundaries() {
     let test_file = PathBuf::from("tests/integration/rust_hash.ll");
 
     if !test_file.exists() {
-        eprintln!("Test file not found: {:?}", test_file);
+        info!("Test file not found: {:?}", test_file);
         return;
     }
 

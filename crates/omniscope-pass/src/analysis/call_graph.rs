@@ -10,7 +10,6 @@
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::Result;
-use omniscope_ir::parser::IRModule;
 use omniscope_semantics::LanguageDetector;
 use omniscope_types::call_graph_types::{
     is_dangerous, is_libc, CallGraphEdge, CallGraphNode, CrossLangEdge, FunctionKind,
@@ -50,15 +49,11 @@ impl Pass for CallGraphPass {
         let start = std::time::Instant::now();
 
         // Retrieve the IR module from context
-        let module: Option<IRModule> = ctx.get("ir_module");
-        let module = match module {
-            Some(m) => m,
-            None => {
-                debug!("CallGraphPass: no IR module in context, producing empty results");
-                return Ok(PassResult::new(self.name())
-                    .with_nodes(0)
-                    .with_duration(start.elapsed().as_millis() as u64));
-            }
+        let Some(module) = ctx.get_ir_module() else {
+            debug!("CallGraphPass: no IR module in context, producing empty results");
+            return Ok(PassResult::new(self.name())
+                .with_nodes(0)
+                .with_duration(start.elapsed().as_millis() as u64));
         };
 
         let mut nodes: Vec<CallGraphNode> = Vec::new();

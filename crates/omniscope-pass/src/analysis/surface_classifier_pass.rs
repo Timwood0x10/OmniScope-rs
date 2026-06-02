@@ -9,7 +9,6 @@
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::Result;
-use omniscope_ir::parser::IRModule;
 use omniscope_semantics::{FunctionSurface, SurfaceClassifier};
 use omniscope_types::call_graph_types::CrossLangEdge;
 use std::collections::HashMap;
@@ -56,8 +55,7 @@ impl Pass for SurfaceClassifierPass {
             .unwrap_or_default();
 
         // Retrieve IR module
-        let module: Option<IRModule> = ctx.get("ir_module");
-        let module = match module {
+        let module = match ctx.get_ir_module() {
             Some(m) => m,
             None => {
                 debug!("SurfaceClassifierPass: no IR module, skipping");

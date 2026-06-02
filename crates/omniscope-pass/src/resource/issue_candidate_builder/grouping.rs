@@ -120,5 +120,7 @@ fn insert_edge(
         seen_set.insert(key);
         seen_order.push(key);
     }
-    groups.get_mut(&key).unwrap().push(idx);
+    groups.get_mut(&key)
+        .expect("grouping: key should exist after or_default insert")
+        .push(idx);
 }

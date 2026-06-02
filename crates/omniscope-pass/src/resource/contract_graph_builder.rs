@@ -182,13 +182,26 @@ impl Pass for ContractGraphBuilderPass {
                 // Check for cross-family release
                 let is_cross_family = alloc_family.is_some() && alloc_family != Some(family);
 
+                // Check for cross-language release (different language families)
+                let is_cross_language = is_cross_language_mismatch(alloc_family, Some(family));
+
                 let effect = if is_cross_family {
-                    // Cross-family release: release family differs from alloc family.
-                    // Model as ConditionalRelease to signal potential CrossFamilyFree risk —
-                    // the release may not follow the allocation family's protocol.
-                    Effect::ConditionalRelease {
-                        family, // the actual release family
-                        arg: fact.arg_index.unwrap_or(0),
+                    if is_cross_language {
+                        // Cross-language release: different language families
+                        // This is a stronger signal than just cross-family
+                        Effect::CrossLanguageFree {
+                            alloc_family: alloc_family.unwrap_or(FamilyId::C_HEAP),
+                            release_family: family,
+                            arg: fact.arg_index.unwrap_or(0),
+                        }
+                    } else {
+                        // Cross-family release: release family differs from alloc family.
+                        // Model as ConditionalRelease to signal potential CrossFamilyFree risk —
+                        // the release may not follow the allocation family's protocol.
+                        Effect::ConditionalRelease {
+                            family, // the actual release family
+                            arg: fact.arg_index.unwrap_or(0),
+                        }
                     }
                 } else {
                     Effect::Release {
@@ -332,7 +345,8 @@ impl Pass for ContractGraphBuilderPass {
                     let source_id = if let Some(pos) =
                         func_acquires.iter().position(|(_, f, _)| *f == *family)
                     {
-                        let (id, _, _) = func_acquires.remove(pos).unwrap();
+                        let (id, _, _) = func_acquires.remove(pos)
+                            .expect("contract_graph_builder: position should be valid after find");
                         id
                     } else if let Some((id, _, _)) = func_acquires.pop_front() {
                         // Cross-family fallback: consume oldest unmatched acquire
@@ -372,7 +386,8 @@ impl Pass for ContractGraphBuilderPass {
                     let source_id = if let Some(pos) =
                         func_acquires.iter().position(|(_, f, _)| *f == *family)
                     {
-                        let (id, _, _) = func_acquires.remove(pos).unwrap();
+                        let (id, _, _) = func_acquires.remove(pos)
+                            .expect("contract_graph_builder: position should be valid after find");
                         id
                     } else {
                         *escape_id
@@ -775,6 +790,118 @@ fn is_callback_registration_api(callee: &str) -> bool {
     }
 
     false
+}
+
+/// Checks if the alloc family and release family are from different language families.
+///
+/// This function identifies cross-language free patterns where memory allocated
+/// in one language (e.g., Rust) is freed in another language (e.g., C).
+/// This is a stronger signal than just cross-family mismatch.
+///
+/// Returns true if the families are from different language families.
+pub fn is_cross_language_mismatch(
+    alloc_family: Option<FamilyId>,
+    release_family: Option<FamilyId>,
+) -> bool {
+    let Some(alloc_fam) = alloc_family else {
+        return false;
+    };
+    let Some(release_fam) = release_family else {
+        return false;
+    };
+
+    // Define language family groups
+    let rust_families = [FamilyId::RUST_GLOBAL, FamilyId::RUST_RAW_OWNERSHIP];
+    let c_families = [
+        FamilyId::C_HEAP,
+        FamilyId::CPP_NEW_SCALAR,
+        FamilyId::CPP_NEW_ARRAY,
+        FamilyId::ZLIB_STREAM,
+        FamilyId::OPENSSL_RESOURCE,
+        FamilyId::SQLITE_RESOURCE,
+        FamilyId::MIMALLOC,
+    ];
+    let python_families = [
+        FamilyId::PYTHON_OBJECT,
+        FamilyId::PYTHON_MEM,
+        FamilyId::PYTHON_MEM_RAW,
+    ];
+    let java_families = [FamilyId::JAVA_LOCAL_REF, FamilyId::JAVA_GLOBAL_REF];
+    let csharp_families = [
+        FamilyId::CSHARP_HGLOBAL,
+        FamilyId::CSHARP_COTASK,
+        FamilyId::CSHARP_COM,
+    ];
+    let go_families = [FamilyId::GO_GC, FamilyId::GO_CGO];
+    let zig_families = [FamilyId::ZIG_ALLOCATOR];
+
+    // Check if alloc and release families are in different language groups
+    let alloc_is_rust = rust_families.contains(&alloc_fam);
+    let alloc_is_c = c_families.contains(&alloc_fam);
+    let alloc_is_python = python_families.contains(&alloc_fam);
+    let alloc_is_java = java_families.contains(&alloc_fam);
+    let alloc_is_csharp = csharp_families.contains(&alloc_fam);
+    let alloc_is_go = go_families.contains(&alloc_fam);
+    let alloc_is_zig = zig_families.contains(&alloc_fam);
+
+    let release_is_rust = rust_families.contains(&release_fam);
+    let release_is_c = c_families.contains(&release_fam);
+    let release_is_python = python_families.contains(&release_fam);
+    let release_is_java = java_families.contains(&release_fam);
+    let release_is_csharp = csharp_families.contains(&release_fam);
+    let release_is_go = go_families.contains(&release_fam);
+    let release_is_zig = zig_families.contains(&release_fam);
+
+    // Cross-language if both are in different language groups
+    (alloc_is_rust
+        && (release_is_c
+            || release_is_python
+            || release_is_java
+            || release_is_csharp
+            || release_is_go
+            || release_is_zig))
+        || (alloc_is_c
+            && (release_is_rust
+                || release_is_python
+                || release_is_java
+                || release_is_csharp
+                || release_is_go
+                || release_is_zig))
+        || (alloc_is_python
+            && (release_is_rust
+                || release_is_c
+                || release_is_java
+                || release_is_csharp
+                || release_is_go
+                || release_is_zig))
+        || (alloc_is_java
+            && (release_is_rust
+                || release_is_c
+                || release_is_python
+                || release_is_csharp
+                || release_is_go
+                || release_is_zig))
+        || (alloc_is_csharp
+            && (release_is_rust
+                || release_is_c
+                || release_is_python
+                || release_is_java
+                || release_is_go
+                || release_is_zig))
+        || (alloc_is_go
+            && (release_is_rust
+                || release_is_c
+                || release_is_python
+                || release_is_java
+                || release_is_csharp
+                || release_is_zig))
+        || (alloc_is_zig
+            && (release_is_rust
+                || release_is_c
+                || release_is_python
+                || release_is_java
+                || release_is_csharp
+                || release_is_go))
 }
 
 #[cfg(test)]

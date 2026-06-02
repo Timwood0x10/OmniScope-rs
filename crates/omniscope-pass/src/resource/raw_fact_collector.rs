@@ -83,7 +83,9 @@ impl RawFactCollectorPass {
                 continue;
             }
 
-            let effect = call_meta.symbol_effect.unwrap();
+            let effect = call_meta.symbol_effect.expect(
+                "raw_fact_collector: symbol_effect should be Some after is_none check"
+            );
             let is_acquire = matches!(
                 effect,
                 omniscope_semantics::SymbolEffect::Acquire
@@ -322,13 +324,13 @@ impl Pass for RawFactCollectorPass {
             );
         } else {
             // Fallback: try to extract facts from the IRModule in the context.
-            let ir_module: Option<IRModule> = ctx.get("ir_module");
-            tracing::debug!(
-                "RawFactCollector: ir_module present = {}",
-                ir_module.is_some()
-            );
-            if let Some(ref module) = ir_module {
-                raw_facts = Self::collect_from_ir(module, ctx.pool_mut());
+            // We need to clone the IRModule to avoid borrow conflicts between
+            // get_ir_module() and pool_mut().
+            if let Some(module) = ctx.get_ir_module() {
+                // Clone the IRModule to avoid borrow conflicts
+                let module_clone = module.clone();
+                let pool = ctx.pool_mut();
+                raw_facts = Self::collect_from_ir(&module_clone, pool);
                 tracing::debug!(
                     "RawFactCollector: collected {} facts from IR",
                     raw_facts.len()

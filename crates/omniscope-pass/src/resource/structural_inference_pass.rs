@@ -277,36 +277,21 @@ impl Pass for StructuralInferencePass {
         // Now we only annotate when the call is external (is_external flag)
         // or the callee is an FFI symbol — these are the true cross-language
         // boundaries where pointer parameters come from the C side.
-        let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
-        if let Some(ref module) = ir_module {
+        if let Some(module) = ctx.get_ir_module() {
             let registry = FamilyRegistry::new();
             for call in &module.calls {
-                // Only annotate callers at FFI boundaries:
-                // 1. The callee is an external call (is_external flag)
-                // 2. The callee is a known symbol in the registry (alloc/dealloc/FFI)
-                // 3. The callee name has FFI indicators (C-style naming)
                 let callee = call.callee.trim_start_matches('@');
                 let caller = call.caller.trim_start_matches('@');
                 let is_ffi_call = call.is_external
                     || registry.lookup(callee).is_some()
                     || is_ffi_boundary_function(caller);
 
-                // Only annotate the CALLER with FromParameter when it's an
-                // FFI boundary — the caller's pointers come from its own
-                // caller (parameters), so passing them to FFI is not a
-                // "stack escape".
-                //
-                // Do NOT annotate the CALLEE. External FFI functions may
-                // return null or allocate — we don't know their pointer
-                // provenance.
                 if !caller.is_empty() && is_ffi_call && registry.lookup(caller).is_none() {
                     srt_resolutions
                         .entry(caller.to_string())
                         .or_insert_with(|| vec![SemanticKind::FromParameter]);
                 }
             }
-            // Put IRModule back for downstream passes.
-            ctx.store("ir_module", module.clone());
         }
 
         let srt_entry_count = srt_resolutions.len();

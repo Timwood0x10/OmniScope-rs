@@ -111,6 +111,10 @@ impl Pass for IssueCandidateBuilderPass {
                         Effect::Release { .. } | Effect::ConditionalRelease { .. } => {
                             release_indices.push(idx)
                         }
+                        Effect::CrossLanguageFree { .. } => {
+                            // CrossLanguageFree is a release with cross-language mismatch
+                            release_indices.push(idx);
+                        }
                         Effect::EscapesToCallback { .. } => escape_callback_indices.push(idx),
                         Effect::OwnershipEscape { .. } => ownership_escape_indices.push(idx),
                         Effect::OwnershipReclaim { .. } => ownership_reclaim_indices.push(idx),
@@ -128,6 +132,10 @@ impl Pass for IssueCandidateBuilderPass {
                         let release_family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
                         let release_func = graph.edges[ri].function_name.as_str();
 
+                        // Check if this is a CrossLanguageFree edge
+                        let is_cross_language =
+                            matches!(graph.edges[ri].effect, Effect::CrossLanguageFree { .. });
+
                         if registry.is_compatible_release(alloc_family, release_family) {
                             continue;
                         }
@@ -135,20 +143,47 @@ impl Pass for IssueCandidateBuilderPass {
                         let id = next_id;
                         next_id += 1;
 
-                        let candidate = IssueCandidate::new(
-                            id,
-                            IssueCandidateKind::CrossFamilyFree,
-                            alloc_family,
-                            alloc_func,
-                        )
-                        .with_release_family(release_family)
-                        .with_release_function(release_func)
-                        .with_description(format!(
-                            "cross-family release: {} ({:?}) released by {} ({:?})",
-                            alloc_func, alloc_family, release_func, release_family
-                        ));
-
-                        candidates.push(candidate);
+                        if is_cross_language {
+                            // Cross-language free: stronger signal
+                            let mut candidate = IssueCandidate::new(
+                                id,
+                                IssueCandidateKind::CrossFamilyFree,
+                                alloc_family,
+                                alloc_func,
+                            )
+                            .with_release_family(release_family)
+                            .with_release_function(release_func)
+                            .with_description(format!(
+                                "cross-language free: {} ({:?}) released by {} ({:?})",
+                                alloc_func, alloc_family, release_func, release_family
+                            ));
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::CrossLanguageFree,
+                                    format!(
+                                        "resource allocated in {:?} family freed in {:?} family",
+                                        alloc_family, release_family
+                                    ),
+                                )
+                                .with_confidence(0.9),
+                            );
+                            candidates.push(candidate);
+                        } else {
+                            // Regular cross-family free
+                            let candidate = IssueCandidate::new(
+                                id,
+                                IssueCandidateKind::CrossFamilyFree,
+                                alloc_family,
+                                alloc_func,
+                            )
+                            .with_release_family(release_family)
+                            .with_release_function(release_func)
+                            .with_description(format!(
+                                "cross-family release: {} ({:?}) released by {} ({:?})",
+                                alloc_func, alloc_family, release_func, release_family
+                            ));
+                            candidates.push(candidate);
+                        }
                     }
                 }
 
@@ -218,9 +253,50 @@ impl Pass for IssueCandidateBuilderPass {
                     }
                 }
 
+                // ── InvalidBorrowedFree: borrowed pointer with release edge ──
+                // This detects when a borrowed pointer (not owned) is passed to
+                // a release function. This is a contract violation because
+                // borrowed pointers should not be freed by the borrower.
+                if !release_indices.is_empty() {
+                    if let Some(&sidx) = state_index.get(instance_id) {
+                        if let Some(states) = ownership_states {
+                            let inst = &states[sidx];
+                            if inst.contract == PointerContract::Borrowed {
+                                let id = next_id;
+                                next_id += 1;
+
+                                let func_name = if inst.function_name.is_empty() {
+                                    "unknown"
+                                } else {
+                                    &inst.function_name
+                                };
+                                let mut candidate = IssueCandidate::new(
+                                    id,
+                                    IssueCandidateKind::InvalidBorrowedFree,
+                                    inst.family,
+                                    func_name,
+                                );
+                                candidate.add_evidence(
+                                    Evidence::new(
+                                        EvidenceKind::InvalidBorrowedFree,
+                                        format!(
+                                            "borrowed pointer (instance {}) passed to release function",
+                                            instance_id
+                                        ),
+                                    )
+                                    .with_confidence(0.8),
+                                );
+
+                                candidates.push(candidate);
+                            }
+                        }
+                    }
+                }
+
                 // ── UseAfterFree: released resource then used ──
                 if !release_indices.is_empty() {
-                    let last_release_idx = *release_indices.last().unwrap();
+                    let last_release_idx = *release_indices.last()
+                        .expect("issue_candidate_builder: release_indices should not be empty");
 
                     // Check for use edges after the last release.
                     let post_release_uses: Vec<usize> = edge_indices
@@ -315,7 +391,8 @@ impl Pass for IssueCandidateBuilderPass {
 
                 // ── OwnershipEscapeLeak: into_raw without matching from_raw ──
                 if !ownership_escape_indices.is_empty() && ownership_reclaim_indices.is_empty() {
-                    let &escape_idx = ownership_escape_indices.first().unwrap();
+                    let &escape_idx = ownership_escape_indices.first()
+                        .expect("issue_candidate_builder: ownership_escape_indices should not be empty");
                     let family = graph.edges[escape_idx]
                         .family
                         .unwrap_or(FamilyId::RUST_RAW_OWNERSHIP);

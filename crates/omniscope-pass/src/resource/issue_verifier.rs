@@ -209,6 +209,11 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
             // The resource was freed and then used — this is undefined behavior.
             VerifierVerdict::ConfirmedIssue
         }
+        IssueCandidateKind::InvalidBorrowedFree => {
+            // Invalid free of a borrowed pointer is always a real issue.
+            // Borrowed pointers should not be freed by the borrower.
+            VerifierVerdict::ConfirmedIssue
+        }
     }
 }
 
@@ -364,6 +369,7 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::DoubleReclaim => "double reclaim",
         IssueCandidateKind::OwnershipEscapeLeak => "ownership escape leak",
         IssueCandidateKind::UseAfterFree => "use-after-free",
+        IssueCandidateKind::InvalidBorrowedFree => "invalid borrowed free",
     };
 
     let verdict_label = match verdict {
@@ -400,6 +406,12 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::NeedsModel => {
             format!(
                 "{kind_label}: unknown resource family in '{}' [{verdict_label}]",
+                candidate.alloc_function
+            )
+        }
+        IssueCandidateKind::InvalidBorrowedFree => {
+            format!(
+                "{kind_label}: borrowed pointer in '{}' passed to release function [{verdict_label}]",
                 candidate.alloc_function
             )
         }

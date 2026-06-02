@@ -77,6 +77,18 @@ pub enum Effect {
         /// Value ID that receives the reclaimed resource.
         result: u64,
     },
+    /// Cross-language free: resource allocated in one language family
+    /// but freed in another language family (e.g., Rust alloc + C free).
+    /// This is a stronger signal than ConditionalRelease for language
+    /// boundary violations.
+    CrossLanguageFree {
+        /// The family that allocated the resource.
+        alloc_family: FamilyId,
+        /// The family that is releasing the resource.
+        release_family: FamilyId,
+        /// Argument index that holds the resource to release.
+        arg: ArgIndex,
+    },
 }
 
 impl Effect {
@@ -92,6 +104,7 @@ impl Effect {
             Effect::InitializesOutParam { family, .. } => Some(*family),
             Effect::OwnershipEscape { family, .. } => Some(*family),
             Effect::OwnershipReclaim { family, .. } => Some(*family),
+            Effect::CrossLanguageFree { release_family, .. } => Some(*release_family),
             Effect::ReturnsBorrowed
             | Effect::StoresArgToOwner { .. }
             | Effect::StoresArgToGlobal { .. }
@@ -111,7 +124,9 @@ impl Effect {
     pub fn is_release(&self) -> bool {
         matches!(
             self,
-            Effect::Release { .. } | Effect::ConditionalRelease { .. }
+            Effect::Release { .. }
+                | Effect::ConditionalRelease { .. }
+                | Effect::CrossLanguageFree { .. }
         )
     }
 
@@ -141,6 +156,7 @@ impl Effect {
             Effect::EscapesToCallback { .. } => "escapes_to_callback",
             Effect::OwnershipEscape { .. } => "ownership_escape",
             Effect::OwnershipReclaim { .. } => "ownership_reclaim",
+            Effect::CrossLanguageFree { .. } => "cross_language_free",
         }
     }
 }

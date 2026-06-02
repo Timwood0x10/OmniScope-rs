@@ -80,6 +80,8 @@ pub struct CachedFunctionMeta {
     pub has_ffi_calls: bool,
     /// Whether this function has any store instructions (in function body).
     pub has_stores: bool,
+    /// Whether this function is runtime internal (Zig stdlib, compiler_rt, etc.).
+    pub is_runtime_internal: bool,
 }
 
 /// Shared instruction metadata cache.
@@ -169,6 +171,55 @@ fn classify_function_cached(name: &str, is_declaration: bool, language: Language
 
     // Declarations without bodies: could be external FFI targets
     FunctionKind::ExternalUnknown
+}
+
+/// Check if a function is Zig runtime internal.
+///
+/// This includes Zig standard library, compiler runtime, allocator glue,
+/// and other runtime initialization paths that should be suppressed in
+/// WriteToImmutable analysis to reduce false positives.
+fn is_zig_runtime_internal(name: &str, language: Language) -> bool {
+    // Only apply to Zig functions
+    if language != Language::Zig {
+        return false;
+    }
+
+    // Zig standard library functions (std.*)
+    if name.starts_with("std.") {
+        return true;
+    }
+
+    // Zig builtin functions
+    if name.contains("builtin") {
+        return true;
+    }
+
+    // Zig compiler runtime
+    if name.contains("compiler_rt") {
+        return true;
+    }
+
+    // Zig allocator vtable and runtime glue
+    if name.starts_with("zig_allocator_") {
+        return true;
+    }
+
+    // Zig runtime initialization and glue
+    if name.starts_with("zig.") {
+        return true;
+    }
+
+    // Zig heap management functions
+    if name.starts_with("zig.heap.") {
+        return true;
+    }
+
+    // Zig memory management functions
+    if name.starts_with("zig.mem.") {
+        return true;
+    }
+
+    false
 }
 
 impl ModuleIndex {
@@ -317,6 +368,9 @@ impl ModuleIndex {
                 })
                 .unwrap_or(false);
 
+            // Check if this function is Zig runtime internal
+            let is_runtime_internal = is_zig_runtime_internal(&trimmed, language);
+
             function_metas.insert(
                 trimmed.clone(),
                 CachedFunctionMeta {
@@ -330,6 +384,7 @@ impl ModuleIndex {
                     calls_dealloc,
                     has_ffi_calls,
                     has_stores,
+                    is_runtime_internal,
                 },
             );
         }
@@ -340,6 +395,9 @@ impl ModuleIndex {
             let language = detector.detect_from_function(&trimmed);
             let calls = caller_calls.get(&trimmed);
             let call_count = calls.map(|c| c.len()).unwrap_or(0);
+
+            // Check if this function is Zig runtime internal
+            let is_runtime_internal = is_zig_runtime_internal(&trimmed, language);
 
             function_metas.insert(
                 trimmed.clone(),
@@ -354,6 +412,7 @@ impl ModuleIndex {
                     calls_dealloc: false,
                     has_ffi_calls: false,
                     has_stores: false,
+                    is_runtime_internal,
                 },
             );
         }
@@ -486,6 +545,17 @@ impl ModuleIndex {
     /// Returns whether a callee involves memory ownership (cached).
     pub fn involves_memory_ownership(&self, callee: &str) -> bool {
         self.syscall_semantic(callee).involves_memory_ownership()
+    }
+
+    /// Returns whether a function is runtime internal (cached).
+    ///
+    /// This avoids repeated string matching in downstream passes.
+    /// Returns `false` if the function is not in the cache.
+    pub fn is_runtime_internal(&self, name: &str) -> bool {
+        self.function_metas
+            .get(name.trim_start_matches('@'))
+            .map(|meta| meta.is_runtime_internal)
+            .unwrap_or(false)
     }
 }
 
@@ -736,6 +806,166 @@ mod tests {
         assert!(
             !ffi_funcs.is_empty(),
             "Must detect at least 1 function with FFI calls"
+        );
+    }
+
+    /// Objective: Verify that is_zig_runtime_internal correctly identifies Zig runtime functions.
+    /// Invariants: Zig stdlib, builtin, compiler_rt, and allocator functions are detected.
+    #[test]
+    fn test_is_zig_runtime_internal() {
+        // Zig standard library functions
+        assert!(
+            is_zig_runtime_internal("std.mem.Allocator", Language::Zig),
+            "std.mem.Allocator must be Zig runtime internal"
+        );
+        assert!(
+            is_zig_runtime_internal("std.heap.page_allocator", Language::Zig),
+            "std.heap.page_allocator must be Zig runtime internal"
+        );
+        assert!(
+            is_zig_runtime_internal("std.math.log2", Language::Zig),
+            "std.math.log2 must be Zig runtime internal"
+        );
+
+        // Zig builtin functions
+        assert!(
+            is_zig_runtime_internal("builtin.mul", Language::Zig),
+            "builtin.mul must be Zig runtime internal"
+        );
+        assert!(
+            is_zig_runtime_internal("zig.builtin.add", Language::Zig),
+            "zig.builtin.add must be Zig runtime internal"
+        );
+
+        // Zig compiler runtime
+        assert!(
+            is_zig_runtime_internal("compiler_rt.add", Language::Zig),
+            "compiler_rt.add must be Zig runtime internal"
+        );
+
+        // Zig allocator vtable
+        assert!(
+            is_zig_runtime_internal("zig_allocator_allocImpl", Language::Zig),
+            "zig_allocator_allocImpl must be Zig runtime internal"
+        );
+        assert!(
+            is_zig_runtime_internal("zig_allocator_freeImpl", Language::Zig),
+            "zig_allocator_freeImpl must be Zig runtime internal"
+        );
+
+        // Zig runtime functions
+        assert!(
+            is_zig_runtime_internal("zig.heap.page_allocator", Language::Zig),
+            "zig.heap.page_allocator must be Zig runtime internal"
+        );
+        assert!(
+            is_zig_runtime_internal("zig.mem.Allocator", Language::Zig),
+            "zig.mem.Allocator must be Zig runtime internal"
+        );
+
+        // Non-Zig functions should not be detected
+        assert!(
+            !is_zig_runtime_internal("std::vector", Language::Cpp),
+            "C++ std::vector must not be Zig runtime internal"
+        );
+        assert!(
+            !is_zig_runtime_internal("_ZN4core3str4len", Language::Rust),
+            "Rust function must not be Zig runtime internal"
+        );
+        assert!(
+            !is_zig_runtime_internal("malloc", Language::C),
+            "C malloc must not be Zig runtime internal"
+        );
+
+        // User Zig functions should not be detected
+        assert!(
+            !is_zig_runtime_internal("my_function", Language::Zig),
+            "User Zig function must not be Zig runtime internal"
+        );
+        assert!(
+            !is_zig_runtime_internal("main", Language::Zig),
+            "main function must not be Zig runtime internal"
+        );
+    }
+
+    /// Objective: Verify that ModuleIndex caches is_runtime_internal correctly.
+    /// Invariants: Zig runtime functions have is_runtime_internal=true in cached metadata.
+    #[test]
+    fn test_module_index_runtime_internal_cache() {
+        let mut module = IRModule::new();
+
+        // Add a Zig runtime function with explicit Zig prefix
+        module.functions.insert(
+            "@zig.mem.Allocator".to_string(),
+            Function {
+                name: "zig.mem.Allocator".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+
+        // Add a Zig allocator function
+        module.functions.insert(
+            "@zig_allocator_allocImpl".to_string(),
+            Function {
+                name: "zig_allocator_allocImpl".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+
+        // Add a user function
+        module.functions.insert(
+            "@my_function".to_string(),
+            Function {
+                name: "my_function".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+
+        let index = ModuleIndex::build(&module);
+
+        // Check that runtime internal is cached correctly
+        assert!(
+            index.is_runtime_internal("zig.mem.Allocator"),
+            "zig.mem.Allocator must be cached as runtime internal"
+        );
+        assert!(
+            index.is_runtime_internal("zig_allocator_allocImpl"),
+            "zig_allocator_allocImpl must be cached as runtime internal"
+        );
+        assert!(
+            !index.is_runtime_internal("my_function"),
+            "my_function must not be cached as runtime internal"
+        );
+
+        // Check function_meta returns correct is_runtime_internal
+        let zig_runtime_meta = index
+            .function_meta("zig.mem.Allocator")
+            .expect("zig.mem.Allocator must have cached profile");
+        assert!(
+            zig_runtime_meta.is_runtime_internal,
+            "zig.mem.Allocator profile must have is_runtime_internal=true"
+        );
+
+        let zig_allocator_meta = index
+            .function_meta("zig_allocator_allocImpl")
+            .expect("zig_allocator_allocImpl must have cached profile");
+        assert!(
+            zig_allocator_meta.is_runtime_internal,
+            "zig_allocator_allocImpl profile must have is_runtime_internal=true"
+        );
+
+        let user_func_meta = index
+            .function_meta("my_function")
+            .expect("my_function must have cached profile");
+        assert!(
+            !user_func_meta.is_runtime_internal,
+            "my_function profile must have is_runtime_internal=false"
         );
     }
 }

@@ -174,6 +174,9 @@ impl TerminalReporter {
             IssueCandidateKind::UseAfterFree => {
                 self.format_use_after_free(candidate, verdict, &badge)
             }
+            IssueCandidateKind::InvalidBorrowedFree => {
+                self.format_invalid_borrowed_free(candidate, verdict, &badge)
+            }
         }
     }
 
@@ -320,6 +323,19 @@ impl TerminalReporter {
         let family = format_family_label(candidate.alloc_family, self.use_color);
         format!(
             "{badge} use-after-free: freed resource used in '{}' ({})",
+            candidate.alloc_function, family
+        )
+    }
+
+    fn format_invalid_borrowed_free(
+        &self,
+        candidate: &IssueCandidate,
+        _verdict: VerifierVerdict,
+        badge: &str,
+    ) -> String {
+        let family = format_family_label(candidate.alloc_family, self.use_color);
+        format!(
+            "{badge} invalid free of borrowed pointer: borrowed pointer freed in '{}' ({})",
             candidate.alloc_function, family
         )
     }

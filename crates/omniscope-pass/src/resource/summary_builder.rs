@@ -11,7 +11,6 @@
 //! for functions whose names are not in the family registry.
 
 use omniscope_core::Result;
-use omniscope_ir::IRModule;
 use omniscope_semantics::{
     behavior_to_summary, extract_behavior, FamilyRegistry, FunctionBehavior, SummaryStore,
 };
@@ -76,8 +75,7 @@ impl Pass for SummaryBuilderPass {
         //  Also try to extract behaviors directly from IRModule
         // if function_bodies exist but IRBehaviorSummaryPass hasn't run yet.
         if behaviors.is_none() {
-            let ir_module: Option<IRModule> = ctx.get("ir_module");
-            if let Some(module) = ir_module {
+            if let Some(module) = ctx.get_ir_module() {
                 for (idx, (name, body)) in module.function_bodies.iter().enumerate() {
                     let behavior = extract_behavior(body);
                     if !behavior.patterns.is_empty() && registry.lookup(name).is_none() {

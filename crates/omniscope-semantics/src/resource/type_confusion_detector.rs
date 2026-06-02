@@ -1041,6 +1041,7 @@ pub fn type_confusion_cwe_id() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::debug;
 
     /// Objective: Verify basic type confusion detection with inttoptr.
     /// Invariants: inttoptr conversions must be detected as pointer/integer confusion.
@@ -1063,18 +1064,18 @@ mod tests {
         let module = IRModule::parse_from_text(ir);
 
         for (name, body) in &module.function_bodies {
-            eprintln!(
+            debug!(
                 "Function '{}' has {} instructions:",
                 name,
                 body.instructions.len()
             );
             for (i, inst) in body.instructions.iter().enumerate() {
-                eprintln!("  {}: {:?} - {}", i, inst.kind, inst.raw_text);
+                debug!("  {}: {:?} - {}", i, inst.kind, inst.raw_text);
             }
 
             // Check if use_pointer is recognized as external
             let ffi_calls = collect_ffi_calls(body);
-            eprintln!("FFI calls found: {:?}", ffi_calls);
+            debug!("FFI calls found: {:?}", ffi_calls);
 
             // Check if inttoptr is detected
             let conv_insts: Vec<_> = body
@@ -1082,23 +1083,23 @@ mod tests {
                 .iter()
                 .filter(|i| i.kind == IRInstructionKind::Conversion)
                 .collect();
-            eprintln!("Conversion instructions: {:?}", conv_insts);
+            debug!("Conversion instructions: {:?}", conv_insts);
 
             // Check proximity
             for inst in &conv_insts {
                 let (near_ffi, ffi_func) = check_ffi_proximity(&inst.raw_text, &ffi_calls, body);
-                eprintln!(
+                debug!(
                     "Instruction '{}' near FFI: {} (function: {:?})",
                     inst.raw_text, near_ffi, ffi_func
                 );
 
                 // Test type parsing
                 let is_inttoptr = inst.raw_text.contains("inttoptr");
-                eprintln!("Is inttoptr: {}", is_inttoptr);
+                debug!("Is inttoptr: {}", is_inttoptr);
 
                 if is_inttoptr {
                     let types = parse_intptr_types(&inst.raw_text, true);
-                    eprintln!("Parsed types: {:?}", types);
+                    debug!("Parsed types: {:?}", types);
                 }
             }
         }

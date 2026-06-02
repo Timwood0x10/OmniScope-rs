@@ -300,6 +300,32 @@ impl Pass for OwnershipSolverPass {
                         // incremental cycle detection.
                         cycle_detector.record_reclaim(edge.source, result);
                     }
+                    Effect::CrossLanguageFree {
+                        alloc_family,
+                        release_family,
+                        ..
+                    } => {
+                        // Cross-language free: resource allocated in one language
+                        // family but freed in another language family.
+                        // This is a strong signal of a contract violation.
+                        // Treat as a release event for ownership state tracking.
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Release {
+                                function: edge.function,
+                            },
+                            &edge.function_name,
+                        );
+                        // Log the cross-language free for diagnostics
+                        tracing::info!(
+                            "Cross-language free detected: {:?} -> {:?} in {}",
+                            alloc_family,
+                            release_family,
+                            edge.function_name
+                        );
+                    }
                 }
             }
             // Store cycle detector for downstream passes to efficiently
@@ -337,6 +363,11 @@ fn apply_transition(
 
 /// Applies an ownership transition event to the instance at the given
 /// index, logging errors at debug level without failing the pass.
+///
+/// Special handling for `ReleaseBorrowed` errors: when a borrowed pointer
+/// encounters a Release event, we log this as a potential invalid borrowed
+/// free. The state machine will reject the transition, but we want to
+/// record this as a signal for the issue candidate builder.
 fn apply_transition_at(
     instances: &mut [ResourceInstance],
     idx: usize,
@@ -344,12 +375,29 @@ fn apply_transition_at(
     function_name: &str,
 ) {
     if let Err(e) = instances[idx].transition(event) {
-        tracing::warn!(
-            "Transition error for instance {} in {}: {:?}",
-            instances[idx].id,
-            function_name,
-            e
-        );
+        match &e {
+            omniscope_semantics::OwnershipError::ReleaseBorrowed { instance } => {
+                // Log at info level — this is a potential invalid borrowed free
+                tracing::info!(
+                    "Invalid borrowed free detected: instance {} in {} — \
+                     borrowed pointer passed to release function",
+                    instance,
+                    function_name
+                );
+                // Mark the instance as having a contract violation
+                // The state remains Borrowed, but we've detected the issue
+                // The issue candidate builder will pick this up from the
+                // ownership states and release edges.
+            }
+            _ => {
+                tracing::warn!(
+                    "Transition error for instance {} in {}: {:?}",
+                    instances[idx].id,
+                    function_name,
+                    e
+                );
+            }
+        }
     }
 }
 

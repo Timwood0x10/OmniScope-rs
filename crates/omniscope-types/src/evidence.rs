@@ -72,6 +72,15 @@ pub enum EvidenceKind {
     /// Distinct from BorrowEscape — this requires the resource to
     /// have been freed before the use.
     UseAfterFree,
+    /// Invalid free of a borrowed pointer: a borrowed pointer (not owned)
+    /// was passed to a release function. This is a contract violation
+    /// because borrowed pointers should not be freed by the borrower.
+    /// Evidence: borrowed pointer instance with release edge.
+    InvalidBorrowedFree,
+    /// Cross-language free: resource allocated in one language family
+    /// but freed in another language family (e.g., Rust alloc + C free).
+    /// This is a subset of CrossFamilyMismatch for language boundaries.
+    CrossLanguageFree,
     /// Unknown or insufficient evidence.
     Insufficient,
 }
@@ -180,6 +189,12 @@ pub enum IssueCandidateKind {
     /// specifically covers the FFI boundary case where a freed
     /// pointer is passed across the language boundary.
     UseAfterFree,
+    /// Invalid free of a borrowed pointer: a borrowed pointer (not owned)
+    /// was passed to a release function. This is a contract violation
+    /// because borrowed pointers should not be freed by the borrower.
+    /// This is different from BorrowEscape (which is about escaping scope)
+    /// — this is about actually freeing a borrowed pointer.
+    InvalidBorrowedFree,
 }
 
 #[cfg(test)]
@@ -237,11 +252,12 @@ mod tests {
             IssueCandidateKind::DoubleReclaim,
             IssueCandidateKind::OwnershipEscapeLeak,
             IssueCandidateKind::UseAfterFree,
+            IssueCandidateKind::InvalidBorrowedFree,
         ];
         assert_eq!(
             kinds.len(),
-            11,
-            "Must have 11 candidate kinds as specified in architecture doc"
+            12,
+            "Must have 12 candidate kinds as specified in architecture doc"
         );
     }
 }

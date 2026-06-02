@@ -18,7 +18,7 @@
 //! - Skips `Box::into_raw` / `from_raw` (Rust raw ownership, already tracked)
 
 use omniscope_core::{Issue, Result};
-use omniscope_ir::{FunctionBody, IRInstructionKind, IRModule};
+use omniscope_ir::{IRInstruction, IRInstructionKind, IRModule};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
@@ -58,6 +58,9 @@ impl Pass for FfiReturnCheckPass {
             // Try to use ModuleIndex for FFI function pre-filtering
             let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
 
+            // Collect function bodies to scan (avoid borrow conflicts)
+            let mut functions_to_scan = Vec::new();
+
             if let Some(ref index) = module_index {
                 // Fast path: only scan functions that have FFI calls
                 let ffi_functions = index.ffi_functions();
@@ -70,13 +73,18 @@ impl Pass for FfiReturnCheckPass {
                     if !ffi_set.contains(trimmed_name) {
                         continue;
                     }
-                    scan_function_body(module, func_name, body, &mut issues, ctx);
+                    functions_to_scan.push((func_name.clone(), body.instructions.clone()));
                 }
             } else {
                 // Fallback: scan all function bodies
                 for (func_name, body) in &module.function_bodies {
-                    scan_function_body(module, func_name, body, &mut issues, ctx);
+                    functions_to_scan.push((func_name.clone(), body.instructions.clone()));
                 }
+            }
+
+            // Now scan function bodies without borrow conflicts
+            for (func_name, instructions) in functions_to_scan {
+                scan_function_body(module, &func_name, &instructions, &mut issues, ctx);
             }
         }
 
@@ -107,7 +115,7 @@ impl Default for FfiReturnCheckPass {
 fn scan_function_body(
     module: &IRModule,
     func_name: &str,
-    body: &FunctionBody,
+    instructions: &[IRInstruction],
     issues: &mut Vec<Issue>,
     ctx: &mut PassContext,
 ) {
@@ -117,7 +125,7 @@ fn scan_function_body(
     // Track which registers are FFI call results (potential null).
     let mut ffi_return_regs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for inst in &body.instructions {
+    for inst in instructions {
         match inst.kind {
             IRInstructionKind::Call | IRInstructionKind::IndirectCall => {
                 if let Some(ref callee) = inst.callee {

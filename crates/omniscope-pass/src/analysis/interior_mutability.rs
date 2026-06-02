@@ -9,7 +9,6 @@
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use omniscope_core::Result;
-use omniscope_ir::IRModule;
 use omniscope_semantics::{SemanticKind, SemanticResolution, SemanticTree};
 
 /// Interior mutability detection pass.
@@ -42,8 +41,7 @@ impl Pass for InteriorMutabilityPass {
         let start = std::time::Instant::now();
 
         // Get IR module for analysis
-        let ir_module: Option<IRModule> = ctx.get("ir_module");
-        let Some(module) = ir_module else {
+        let Some(module) = ctx.get_ir_module() else {
             return Ok(PassResult::new(self.name())
                 .with_issues(0)
                 .with_nodes(0)

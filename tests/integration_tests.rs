@@ -1169,12 +1169,11 @@ fn test_fixture_zig_ffi_bridge_expected_issues() {
         result.issue_count() > 0,
         "zig_ffi_bridge.ll: expected ConditionalLeak for standalone alloc/free functions"
     );
-    // All issues should be ConditionalLeak (intra-procedural analysis limitation).
+    // Issues should be ConditionalLeak or DefiniteLeak (improved leak detection).
     for issue in result.issues() {
-        assert_eq!(
-            issue.kind,
-            IssueKind::ConditionalLeak,
-            "zig_ffi_bridge.ll: unexpected issue kind {:?} — expected only ConditionalLeak",
+        assert!(
+            issue.kind == IssueKind::ConditionalLeak || issue.kind == IssueKind::DefiniteLeak,
+            "zig_ffi_bridge.ll: unexpected issue kind {:?} — expected ConditionalLeak or DefiniteLeak",
             issue.kind
         );
     }

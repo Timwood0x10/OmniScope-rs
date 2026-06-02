@@ -108,7 +108,8 @@ impl OwnershipUnionFind {
 
     /// Internal recursive find with path compression.
     fn find_root(&self, x: u64) -> u64 {
-        let parent = *self.parent.get(&x).unwrap();
+        let parent = *self.parent.get(&x)
+            .expect("union_find: element should exist in parent map");
         if parent == x {
             x
         } else {
@@ -120,7 +121,8 @@ impl OwnershipUnionFind {
     fn compress_path(&mut self, x: u64, root: u64) {
         let mut current = x;
         while current != root {
-            let parent = *self.parent.get(&current).unwrap();
+            let parent = *self.parent.get(&current)
+                .expect("union_find: element should exist in parent map");
             self.parent.insert(current, root);
             current = parent;
         }
@@ -145,8 +147,10 @@ impl OwnershipUnionFind {
         self.make_set(x);
         self.make_set(y);
 
-        let root_x = self.find(x).unwrap();
-        let root_y = self.find(y).unwrap();
+        let root_x = self.find(x)
+            .expect("union_find: element should exist after make_set");
+        let root_y = self.find(y)
+            .expect("union_find: element should exist after make_set");
 
         // Already in the same set
         if root_x == root_y {
@@ -154,8 +158,10 @@ impl OwnershipUnionFind {
         }
 
         // Union by rank: attach smaller tree under larger tree
-        let rank_x = *self.rank.get(&root_x).unwrap();
-        let rank_y = *self.rank.get(&root_y).unwrap();
+        let rank_x = *self.rank.get(&root_x)
+            .expect("union_find: root should exist in rank map");
+        let rank_y = *self.rank.get(&root_y)
+            .expect("union_find: root should exist in rank map");
 
         let (smaller, larger) = if rank_x < rank_y {
             (root_x, root_y)
@@ -171,8 +177,10 @@ impl OwnershipUnionFind {
         self.parent.insert(smaller, larger);
 
         // Update size
-        let size_smaller = *self.size.get(&smaller).unwrap();
-        let size_larger = *self.size.get(&larger).unwrap();
+        let size_smaller = *self.size.get(&smaller)
+            .expect("union_find: element should exist in size map");
+        let size_larger = *self.size.get(&larger)
+            .expect("union_find: element should exist in size map");
         self.size.insert(larger, size_smaller + size_larger);
 
         true

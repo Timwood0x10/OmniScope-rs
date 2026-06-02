@@ -43,8 +43,7 @@ impl Pass for BorrowEscapePass {
         let start = std::time::Instant::now();
 
         // Get IR module for analysis
-        let ir_module: Option<omniscope_ir::IRModule> = ctx.get("ir_module");
-        let Some(module) = ir_module else {
+        let Some(module) = ctx.get_ir_module() else {
             return Ok(PassResult::new(self.name())
                 .with_issues(0)
                 .with_nodes(0)
@@ -60,11 +59,8 @@ impl Pass for BorrowEscapePass {
         // Try to use ModuleIndex for FFI call pre-filtering
         let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
 
-        // Scan for FFI calls that might pass stack pointers.
-        // Only flag calls where we have POSITIVE evidence of stack provenance
-        // (alloca or address-of-local patterns), not just "external call + no
-        // heap pattern". Without positive stack evidence, the default should
-        // be silent — name-based heuristics are too noisy for a default-on pass.
+        // Collect FFI calls to analyze (avoid borrow conflicts)
+        let mut ffi_calls = Vec::new();
         for (idx, call) in module.calls.iter().enumerate() {
             nodes_analyzed += 1;
 
@@ -96,14 +92,19 @@ impl Pass for BorrowEscapePass {
                 continue;
             }
 
-            let call_symbol = format!("{}->{}", call.caller, call.callee);
+            ffi_calls.push((call.caller.clone(), call.callee.clone()));
+        }
+
+        // Now process FFI calls without borrow conflicts
+        for (caller, callee) in ffi_calls {
+            let call_symbol = format!("{}->{}", caller, callee);
 
             self.analyze_ffi_call(
                 ctx,
                 &mut semantic_tree,
                 &call_symbol,
-                &call.caller,
-                &call.callee,
+                &caller,
+                &callee,
                 &mut issues,
             );
         }

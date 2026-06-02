@@ -153,6 +153,7 @@ impl IssueCandidate {
             IssueCandidateKind::DoubleReclaim => IssueKind::DoubleReclaim,
             IssueCandidateKind::OwnershipEscapeLeak => IssueKind::OwnershipEscapeLeak,
             IssueCandidateKind::UseAfterFree => IssueKind::UseAfterFree,
+            IssueCandidateKind::InvalidBorrowedFree => IssueKind::InvalidFree,
         }
     }
 

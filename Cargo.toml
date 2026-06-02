@@ -27,6 +27,7 @@ omniscope-pass = { path = "crates/omniscope-pass" }
 omniscope-semantics = { path = "crates/omniscope-semantics" }
 omniscope-types = { path = "crates/omniscope-types" }
 serde_json = "1.0"
+tracing = { workspace = true }
 
 [[bench]]
 name = "ir_parsing"
