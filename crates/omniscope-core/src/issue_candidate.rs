@@ -146,6 +146,7 @@ impl IssueCandidate {
             IssueCandidateKind::UseAfterRelease => IssueKind::UseAfterFree,
             IssueCandidateKind::DoubleRelease => IssueKind::DoubleFree,
             IssueCandidateKind::ConditionalLeak => IssueKind::ConditionalLeak,
+            IssueCandidateKind::DefiniteLeak => IssueKind::DefiniteLeak,
             IssueCandidateKind::BorrowEscape => IssueKind::BorrowEscape,
             IssueCandidateKind::CallbackEscape => IssueKind::CallbackEscapeIssue,
             IssueCandidateKind::NeedsModel => IssueKind::NeedsModel,
@@ -286,6 +287,12 @@ mod tests {
             .to_issue_kind(),
             IssueKind::ConditionalLeak,
             "ConditionalLeak candidate should map to ConditionalLeak issue kind"
+        );
+        assert_eq!(
+            IssueCandidate::new(4, IssueCandidateKind::DefiniteLeak, FamilyId::C_HEAP, "f")
+                .to_issue_kind(),
+            IssueKind::DefiniteLeak,
+            "DefiniteLeak candidate should map to DefiniteLeak issue kind"
         );
         assert_eq!(
             IssueCandidate::new(5, IssueCandidateKind::BorrowEscape, FamilyId::C_HEAP, "f")

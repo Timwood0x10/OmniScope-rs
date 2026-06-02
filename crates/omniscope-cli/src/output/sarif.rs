@@ -185,6 +185,7 @@ impl SarifFormatter {
             IssueKind::IntegerOverflow,
             IssueKind::CrossFamilyFree,
             IssueKind::ConditionalLeak,
+            IssueKind::DefiniteLeak,
             IssueKind::BorrowEscape,
             IssueKind::CallbackEscapeIssue,
             IssueKind::NeedsModel,

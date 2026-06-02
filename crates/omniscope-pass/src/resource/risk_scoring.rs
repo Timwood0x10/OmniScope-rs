@@ -79,6 +79,7 @@ fn base_severity(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::DoubleRelease => 0.8,
         // Medium severity: conditional issues
         IssueCandidateKind::ConditionalLeak => 0.6,
+        IssueCandidateKind::DefiniteLeak => 0.85,
         IssueCandidateKind::BorrowEscape => 0.55,
         // Low severity: informational
         IssueCandidateKind::CallbackEscape => 0.3,

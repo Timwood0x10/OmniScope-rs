@@ -13,7 +13,7 @@
 //! - Produces ConditionalLeak candidates for the IssueVerifier
 
 use omniscope_core::diagnostics::Severity;
-use omniscope_core::{Issue, IssueCandidate, IssueKind, Result};
+use omniscope_core::{Confidence, Issue, IssueCandidate, IssueKind, Result};
 use omniscope_semantics::SummaryStore;
 use omniscope_types::{Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
 
@@ -113,13 +113,74 @@ impl Pass for LeakDetectionPass {
         for alloc in &alloc_sites {
             let family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
-            // Check if there's a matching same-family release in the
-            // same function or via a summary in the summary store.
-            let has_same_family_release = check_release_in_facts(&raw_facts, alloc)
-                || check_release_in_summaries(&summary_store, alloc);
+            let (alloc_count, release_count) = count_alloc_release_in_facts(&raw_facts, alloc);
+            let has_release_in_summaries = check_release_in_summaries(&summary_store, alloc);
 
-            if !has_same_family_release {
-                // No same-family release found — potential leak.
+            if !has_release_in_summaries && release_count == 0 {
+                let candidate_kind = if alloc_count > 0 {
+                    IssueCandidateKind::DefiniteLeak
+                } else {
+                    IssueCandidateKind::ConditionalLeak
+                };
+                let issue_kind = IssueKind::DefiniteLeak;
+                let confidence = if alloc_count > 1 {
+                    Confidence::High
+                } else {
+                    Confidence::Medium
+                };
+
+                let mut candidate =
+                    IssueCandidate::new(candidate_id, candidate_kind, family, &alloc.function_name);
+                candidate = candidate.with_alloc_contract(alloc.contract);
+                candidate = candidate.with_description(format!(
+                    "allocation in '{}' of family {} has no same-family release on any analyzed path (definite leak)",
+                    alloc.function_name, family.display_name()
+                ));
+                candidate.add_evidence(
+                    Evidence::new(
+                        EvidenceKind::Insufficient,
+                        format!(
+                            "no {}-family release found for allocation in '{}' (definite)",
+                            family.display_name(),
+                            alloc.function_name
+                        ),
+                    )
+                    .with_family(family),
+                );
+
+                let candidate_description = candidate.description.clone().unwrap_or_else(|| {
+                    format!(
+                        "definite memory leak: allocation of family {:?} in '{}' has no same-family release",
+                        candidate.alloc_family, candidate.alloc_function
+                    )
+                });
+                let candidate_alloc_function = candidate.alloc_function.clone();
+                let _candidate_alloc_family = candidate.alloc_family;
+
+                leak_candidates.push(candidate);
+                candidate_id += 1;
+
+                let mut issue = Issue::new(
+                    ctx.next_issue_id(),
+                    issue_kind,
+                    Severity::Warning,
+                    candidate_description,
+                )
+                .with_symbol(candidate_alloc_function.clone())
+                .with_confidence(confidence);
+
+                if !candidate_alloc_function.is_empty() && candidate_alloc_function != "unknown" {
+                    let location =
+                        omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
+                            .with_function(&candidate_alloc_function);
+                    issue = issue.with_location(location);
+                }
+
+                ctx.emit_issue(issue);
+                continue;
+            }
+
+            if !has_release_in_summaries && release_count > 0 && release_count < alloc_count {
                 let mut candidate = IssueCandidate::new(
                     candidate_id,
                     IssueCandidateKind::ConditionalLeak,
@@ -128,59 +189,55 @@ impl Pass for LeakDetectionPass {
                 );
                 candidate = candidate.with_alloc_contract(alloc.contract);
                 candidate = candidate.with_description(format!(
-                    "allocation in '{}' of family {} has no same-family release on any analyzed path",
-                    alloc.function_name, family.display_name()
+                    "allocation in '{}' of family {} has partial same-family release ({} alloc, {} release) on analyzed paths (conditional leak)",
+                    alloc.function_name, family.display_name(), alloc_count, release_count
                 ));
-
-                // Attach evidence about the missing release.
                 candidate.add_evidence(
                     Evidence::new(
                         EvidenceKind::Insufficient,
                         format!(
-                            "no {}-family release found for allocation in '{}'",
+                            "partial {}-family release: {} allocs, {} releases in '{}' (conditional)",
                             family.display_name(),
+                            alloc_count,
+                            release_count,
                             alloc.function_name
                         ),
                     )
                     .with_family(family),
                 );
 
+                let candidate_description = candidate.description.clone().unwrap_or_else(|| {
+                    format!(
+                        "conditional memory leak: allocation of family {:?} in '{}' has partial release coverage",
+                        candidate.alloc_family, candidate.alloc_function
+                    )
+                });
+                let candidate_alloc_function = candidate.alloc_function.clone();
+
                 leak_candidates.push(candidate);
                 candidate_id += 1;
+
+                let mut issue = Issue::new(
+                    ctx.next_issue_id(),
+                    IssueKind::ConditionalLeak,
+                    Severity::Warning,
+                    candidate_description,
+                )
+                .with_symbol(candidate_alloc_function.clone())
+                .with_confidence(Confidence::Medium);
+
+                if !candidate_alloc_function.is_empty() && candidate_alloc_function != "unknown" {
+                    let location =
+                        omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
+                            .with_function(&candidate_alloc_function);
+                    issue = issue.with_location(location);
+                }
+
+                ctx.emit_issue(issue);
             }
         }
 
         let leak_count = leak_candidates.len();
-
-        // Emit each leak candidate as an Issue through the SRT gate.
-        // Previously, candidates were only stored in the context but
-        // never read by any downstream pass, causing silent data loss.
-        for candidate in &leak_candidates {
-            let issue_id = ctx.next_issue_id();
-            let mut issue = Issue::new(
-                issue_id,
-                IssueKind::ConditionalLeak,
-                Severity::Warning,
-                candidate.description.clone().unwrap_or_else(|| {
-                    format!(
-                        "potential memory leak: allocation of family {:?} in '{}' \
-                         has no same-family release on some paths",
-                        candidate.alloc_family, candidate.alloc_function
-                    )
-                }),
-            )
-            .with_symbol(candidate.alloc_function.clone());
-
-            // Set the issue location with the function name from the candidate.
-            if !candidate.alloc_function.is_empty() && candidate.alloc_function != "unknown" {
-                let location =
-                    omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
-                        .with_function(&candidate.alloc_function);
-                issue = issue.with_location(location);
-            }
-
-            ctx.emit_issue(issue);
-        }
 
         // Still store candidates for downstream diagnostic consumers
         ctx.store("leak_candidates", leak_candidates);
@@ -204,27 +261,15 @@ impl Default for LeakDetectionPass {
     }
 }
 
-/// Checks if there's a same-family release in the raw facts for
-/// the given allocation site, scoped to the allocation's function
-/// or its likely cleanup callees.
+/// Counts allocations and releases of the same family for the given
+/// allocation site, scoped to the allocation's function.
 ///
-/// Previously this searched ALL facts globally, which caused false
-/// suppression: any release in any function with the same family
-/// would suppress the leak, even if the release was in a completely
-/// unrelated function.
-///
-/// Now we restrict the search to:
-/// 1. Facts whose `function` ID matches the alloc's function ID (same scope), OR
-/// 2. Facts whose `function_name` matches the alloc's `function_name` (the
-///    alloc's callee itself is a cleanup like `free`/`close`).
-///
-/// **Important**: This function counts the number of same-family allocations
-/// vs releases. If there are more allocations than releases, some allocations
-/// are not freed (potential leak).
-fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) -> bool {
+/// Returns (alloc_count, release_count). If release_count == 0 and
+/// no summary release exists, the allocation is a definite leak.
+/// If 0 < release_count < alloc_count, it is a conditional leak.
+fn count_alloc_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) -> (u32, u32) {
     let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
-    // Count allocations and releases of the same family in the same function
     let mut alloc_count = 0u32;
     let mut release_count = 0u32;
 
@@ -232,7 +277,6 @@ fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) ->
         if fact.family != Some(alloc_family) {
             continue;
         }
-        // Only consider facts in the same function scope
         if fact.function != alloc.function && fact.function_name != alloc.function_name {
             continue;
         }
@@ -243,8 +287,7 @@ fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) ->
         }
     }
 
-    // If there are more releases than allocations, or equal, no leak
-    release_count >= alloc_count
+    (alloc_count, release_count)
 }
 
 /// Checks if the summary store contains a function that releases
@@ -495,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_release_in_facts() {
+    fn test_check_alloc_release_in_facts() {
         let alloc = RawResourceFact {
             function: 1,
             function_name: "malloc".to_string(),
@@ -517,14 +560,13 @@ mod tests {
         };
 
         let facts = vec![alloc.clone(), release];
-        assert!(
-            check_release_in_facts(&facts, &alloc),
-            "Same-family release in same function should be found"
-        );
+        let (alloc_count, release_count) = count_alloc_release_in_facts(&facts, &alloc);
+        assert_eq!(alloc_count, 1, "One alloc fact expected");
+        assert_eq!(release_count, 1, "One release fact expected");
     }
 
     #[test]
-    fn test_check_release_in_facts_cross_family() {
+    fn test_check_alloc_release_in_facts_cross_family() {
         let alloc = RawResourceFact {
             function: 1,
             function_name: "malloc".to_string(),
@@ -546,9 +588,98 @@ mod tests {
         };
 
         let facts = vec![alloc.clone(), release];
+        let (alloc_count, release_count) = count_alloc_release_in_facts(&facts, &alloc);
+        assert_eq!(alloc_count, 1, "One alloc fact expected");
+        assert_eq!(release_count, 0, "Cross-family release should not count");
+    }
+
+    /// Objective: Verify DefiniteLeak candidate/issue is emitted when the
+    /// same function has same-family allocations but zero same-family releases.
+    /// Invariants: candidate kind == DefiniteLeak; emitted issue kind == DefiniteLeak;
+    /// at least one issue is raised through emit_issue.
+    #[test]
+    fn test_pass_run_produces_definite_leak_when_no_release() {
+        let mut ctx = PassContext::new();
+        let alloc = RawResourceFact {
+            function: 1,
+            function_name: "leaky_func".to_string(),
+            caller_name: "caller".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            is_acquire: true,
+            contract: omniscope_types::PointerContract::Owned,
+            arg_index: Some(0),
+        };
+        ctx.store("raw_resource_facts", vec![alloc]);
+
+        let pass = LeakDetectionPass::new();
+        let result = pass.run(&mut ctx).unwrap();
+        assert!(result.nodes_analyzed > 0, "pass must process alloc sites");
+
+        let issues = ctx.issues();
+        let definite = issues.iter().find(|i| i.kind == IssueKind::DefiniteLeak);
         assert!(
-            !check_release_in_facts(&facts, &alloc),
-            "Cross-family release should NOT count as same-family"
+            definite.is_some(),
+            "Must emit at least one DefiniteLeak issue"
         );
+        assert!(
+            !issues.iter().any(|i| i.kind == IssueKind::ConditionalLeak),
+            "Must NOT emit ConditionalLeak when release_count == 0"
+        );
+    }
+
+    /// Objective: Verify ConditionalLeak is emitted only when the same
+    /// function has partial release coverage (some allocs freed, some not).
+    /// Invariants: no DefiniteLeak issue; at least one ConditionalLeak issue.
+    #[test]
+    fn test_pass_run_produces_conditional_leak_for_partial_release() {
+        let mut ctx = PassContext::new();
+        let alloc1 = RawResourceFact {
+            function: 1,
+            function_name: "partial_leak".to_string(),
+            caller_name: "caller".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            is_acquire: true,
+            contract: omniscope_types::PointerContract::Owned,
+            arg_index: Some(0),
+        };
+        let alloc2 = alloc1.clone();
+        let release = RawResourceFact {
+            function: 1,
+            function_name: "partial_leak".to_string(),
+            caller_name: "caller".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            is_acquire: false,
+            contract: omniscope_types::PointerContract::Released,
+            arg_index: Some(0),
+        };
+        ctx.store("raw_resource_facts", vec![alloc1, alloc2, release]);
+
+        let pass = LeakDetectionPass::new();
+        let result = pass.run(&mut ctx).unwrap();
+        assert!(result.nodes_analyzed > 0, "pass must process alloc sites");
+
+        let issues = ctx.issues();
+        assert!(
+            issues.iter().any(|i| i.kind == IssueKind::ConditionalLeak),
+            "Must emit ConditionalLeak for partial release coverage"
+        );
+        assert!(
+            !issues.iter().any(|i| i.kind == IssueKind::DefiniteLeak),
+            "Must NOT emit DefiniteLeak when release_count > 0"
+        );
+    }
+
+    /// Objective: Verify the path-sensitive leak state machines stay
+    /// mutually exclusive: definite implies !conditional and vice-versa.
+    /// Invariants: is_definite_leak and is_conditional_leak cannot both be true.
+    #[test]
+    fn test_path_analysis_states_are_mutually_exclusive() {
+        let definite = PathAnalysisResult::new(2, 2, 0, false);
+        let conditional = PathAnalysisResult::new(4, 2, 2, false);
+        let safe = PathAnalysisResult::new(3, 0, 3, false);
+
+        assert!(definite.is_definite_leak() && !definite.is_conditional_leak());
+        assert!(!conditional.is_definite_leak() && conditional.is_conditional_leak());
+        assert!(!safe.is_definite_leak() && !safe.is_conditional_leak());
     }
 }

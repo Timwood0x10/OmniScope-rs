@@ -75,6 +75,7 @@ pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
         IssueKind::IntegerOverflow => "integer_overflow",
         IssueKind::CrossFamilyFree => "cross_family_free",
         IssueKind::ConditionalLeak => "conditional_leak",
+        IssueKind::DefiniteLeak => "definite_leak",
         IssueKind::BorrowEscape => "borrow_escape",
         IssueKind::CallbackEscapeIssue => "callback_escape_issue",
         IssueKind::NeedsModel => "needs_model",

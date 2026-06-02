@@ -182,6 +182,7 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
             VerifierVerdict::ConfirmedIssue
         }
         IssueCandidateKind::ConditionalLeak => verify_conditional_leak(candidate),
+        IssueCandidateKind::DefiniteLeak => verify_definite_leak(candidate),
         IssueCandidateKind::BorrowEscape => verify_borrow_escape(candidate),
         IssueCandidateKind::CallbackEscape => {
             // Callback escape — diagnostic, not necessarily a bug.
@@ -245,6 +246,18 @@ fn verify_cross_family_free(
     }
 
     // Genuinely different families with no valid escape — confirmed.
+    VerifierVerdict::ConfirmedIssue
+}
+
+/// Verifies a definite leak candidate (all analyzed paths leak).
+fn verify_definite_leak(candidate: &IssueCandidate) -> VerifierVerdict {
+    // OwnershipEscapeLeak is still a strong signal even for definite leaks.
+    if has_evidence(candidate, EvidenceKind::OwnershipEscapeLeak) {
+        return VerifierVerdict::ConfirmedIssue;
+    }
+
+    // Definite leak: all paths leak. No valid escape can explain it.
+    // This is the strongest leak signal — confirmed issue.
     VerifierVerdict::ConfirmedIssue
 }
 
@@ -344,6 +357,7 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::UseAfterRelease => "use after release",
         IssueCandidateKind::DoubleRelease => "double release",
         IssueCandidateKind::ConditionalLeak => "conditional leak",
+        IssueCandidateKind::DefiniteLeak => "definite leak",
         IssueCandidateKind::BorrowEscape => "borrow escape",
         IssueCandidateKind::CallbackEscape => "callback escape",
         IssueCandidateKind::NeedsModel => "needs model",
@@ -369,6 +383,12 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
                 "{kind_label}: {alloc_label} allocated in '{}' released as {release_label} in '{}' [{verdict_label}]",
                 candidate.alloc_function,
                 candidate.release_function.as_deref().unwrap_or("unknown")
+            )
+        }
+        IssueCandidateKind::DefiniteLeak => {
+            format!(
+                "{kind_label}: resource from '{}' ({:?}) has no release on any analyzed path [{verdict_label}]",
+                candidate.alloc_function, candidate.alloc_family
             )
         }
         IssueCandidateKind::ConditionalLeak => {
@@ -629,6 +649,89 @@ mod tests {
             verdict,
             VerifierVerdict::ProbableIssue,
             "Unknown release family should be probable issue"
+        );
+    }
+
+    #[test]
+    fn test_verify_definite_leak_without_escape_is_confirmed() {
+        let registry = FamilyRegistry::new();
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "Definite leak without valid escape must be confirmed issue"
+        );
+    }
+
+    #[test]
+    fn test_verify_definite_leak_with_ownership_escape_is_confirmed() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "into_raw_wrapper",
+        );
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::OwnershipEscapeLeak,
+                "Box::into_raw without matching from_raw",
+            )
+            .with_confidence(0.95),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "Definite leak with OwnershipEscapeLeak evidence must still be confirmed"
+        );
+    }
+
+    #[test]
+    fn test_verdict_description_definite_leak() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        let desc = build_verdict_description(&candidate, VerifierVerdict::ConfirmedIssue);
+        assert!(
+            desc.contains("definite leak"),
+            "Description must mention definite leak"
+        );
+        assert!(
+            desc.contains("no release on any analyzed path"),
+            "Description must mention no release on any analyzed path"
+        );
+    }
+
+    #[test]
+    fn test_verdict_description_conditional_leak() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::ConditionalLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        let desc = build_verdict_description(&candidate, VerifierVerdict::ProbableIssue);
+        assert!(
+            desc.contains("conditional leak"),
+            "Description must mention conditional leak"
+        );
+        assert!(
+            desc.contains("may not be freed on all paths"),
+            "Description must mention partial release coverage"
         );
     }
 

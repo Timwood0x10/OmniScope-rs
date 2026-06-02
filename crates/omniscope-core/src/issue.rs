@@ -66,6 +66,8 @@ pub enum IssueKind {
     CrossFamilyFree,
     /// Resource not freed on some execution paths.
     ConditionalLeak,
+    /// Resource not freed on any analyzed path (definite leak).
+    DefiniteLeak,
     /// Borrowed pointer escaped to a context requiring ownership.
     BorrowEscape,
     /// Pointer escaped to a callback that may assume ownership.
@@ -132,6 +134,7 @@ impl IssueKind {
             self,
             IssueKind::CrossFamilyFree
                 | IssueKind::ConditionalLeak
+                | IssueKind::DefiniteLeak
                 | IssueKind::BorrowEscape
                 | IssueKind::CallbackEscapeIssue
                 | IssueKind::NeedsModel
@@ -174,7 +177,8 @@ impl IssueKind {
             // Resource contract issues
             IssueKind::CrossFamilyFree => Some(762), // CWE-762: Mismatched Memory Management Routines
             IssueKind::ConditionalLeak => Some(772), // CWE-772: Missing Release of Resource after Effective Lifetime
-            IssueKind::BorrowEscape => Some(822),    // CWE-822: Untrusted Pointer Dereference
+            IssueKind::DefiniteLeak => Some(772), // CWE-772: Missing Release of Resource after Effective Lifetime
+            IssueKind::BorrowEscape => Some(822), // CWE-822: Untrusted Pointer Dereference
             IssueKind::CallbackEscapeIssue => Some(749), // CWE-749: Exposed Dangerous Method or Function
             IssueKind::WriteToImmutable => Some(123),    // CWE-123: Write-what-where Condition
             IssueKind::DoubleReclaim => Some(415),       // CWE-415: Double Free

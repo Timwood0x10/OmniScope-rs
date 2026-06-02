@@ -149,7 +149,7 @@ impl TerminalReporter {
             IssueCandidateKind::CrossFamilyFree => {
                 self.format_cross_family(candidate, verdict, &badge)
             }
-            IssueCandidateKind::ConditionalLeak => {
+            IssueCandidateKind::DefiniteLeak | IssueCandidateKind::ConditionalLeak => {
                 self.format_conditional_leak(candidate, verdict, &badge)
             }
             IssueCandidateKind::NeedsModel => self.format_needs_model(candidate, verdict, &badge),

@@ -159,6 +159,8 @@ pub enum IssueCandidateKind {
     DoubleRelease,
     /// Resource not freed on some execution paths.
     ConditionalLeak,
+    /// Resource not freed on any analyzed path (definite leak).
+    DefiniteLeak,
     /// Borrowed pointer escaped to a context requiring ownership.
     BorrowEscape,
     /// Pointer escaped to a callback that may assume ownership.
@@ -228,6 +230,7 @@ mod tests {
             IssueCandidateKind::UseAfterRelease,
             IssueCandidateKind::DoubleRelease,
             IssueCandidateKind::ConditionalLeak,
+            IssueCandidateKind::DefiniteLeak,
             IssueCandidateKind::BorrowEscape,
             IssueCandidateKind::CallbackEscape,
             IssueCandidateKind::NeedsModel,
@@ -237,8 +240,8 @@ mod tests {
         ];
         assert_eq!(
             kinds.len(),
-            10,
-            "Must have 10 candidate kinds as specified in architecture doc"
+            11,
+            "Must have 11 candidate kinds as specified in architecture doc"
         );
     }
 }

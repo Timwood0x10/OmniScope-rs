@@ -16,6 +16,7 @@ omniscope-ir = { path = "../omniscope-ir" }
 
 serde = { workspace = true }
 phf = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

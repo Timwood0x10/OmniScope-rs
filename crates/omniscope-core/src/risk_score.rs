@@ -125,6 +125,7 @@ fn kind_base_score(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::UseAfterRelease => 0.95,
         IssueCandidateKind::DoubleRelease => 0.95,
         IssueCandidateKind::ConditionalLeak => 0.6,
+        IssueCandidateKind::DefiniteLeak => 0.85,
         IssueCandidateKind::BorrowEscape => 0.5,
         IssueCandidateKind::CallbackEscape => 0.3,
         IssueCandidateKind::NeedsModel => 0.1,

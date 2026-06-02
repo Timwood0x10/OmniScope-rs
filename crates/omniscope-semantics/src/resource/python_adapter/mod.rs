@@ -19,6 +19,7 @@
 //! ```
 
 // Re-export submodules
+pub mod exception;
 pub mod gil;
 pub mod memory;
 pub mod patterns;
@@ -71,6 +72,13 @@ pub enum PythonPattern {
     MemoryAllocation,
     /// Python memory deallocation (PyMem_Free, etc.)
     MemoryDeallocation,
+    /// Exception handling (PyErr_SetString, PyErr_Format, etc.)
+    ExceptionHandling {
+        /// Whether this function sets an exception (PyErr_SetString, PyErr_Format)
+        is_setter: bool,
+        /// Whether this function clears an exception (PyErr_Clear, PyErr_Print)
+        is_clearer: bool,
+    },
     /// Unknown Python pattern
     Unknown,
 }
@@ -92,6 +100,8 @@ pub enum PythonFFISafety {
     ConcernOverRelease,
     /// Concern: mixing Python and C memory domains
     ConcernMixedMemory,
+    /// Concern: exception path resource leak (PyErr_SetString without cleanup)
+    ConcernExceptionLeak,
     /// Unknown: cannot determine safety
     Unknown,
 }
@@ -118,6 +128,7 @@ impl PythonFFISafety {
             PythonFFISafety::ConcernRefLeak => 0.3,
             PythonFFISafety::ConcernOverRelease => 0.2,
             PythonFFISafety::ConcernMixedMemory => 0.25,
+            PythonFFISafety::ConcernExceptionLeak => 0.15,
             PythonFFISafety::Unknown => 0.5,
         }
     }
@@ -379,6 +390,13 @@ impl PythonAdapter {
                     // These handle Python memory allocation/deallocation
                     if let Some(pattern) = memory::analyze_memory_from_ir(callee) {
                         patterns.push(pattern);
+                        continue;
+                    }
+
+                    // Priority 7: Exception handling operations (PyErr_SetString, PyErr_Format, etc.)
+                    // These manage Python exceptions and may indicate error paths
+                    if let Some(pattern) = exception::analyze_exception_from_ir(callee) {
+                        patterns.push(pattern);
                     }
                 }
             }
@@ -431,7 +449,13 @@ impl PythonAdapter {
             return memory_safety;
         }
 
-        // Priority 4: Pattern-based safety (structural analysis)
+        // Priority 4: Exception handling safety (setter without clearer)
+        let exception_safety = exception::determine_exception_safety(patterns);
+        if exception_safety != PythonFFISafety::Unknown {
+            return exception_safety;
+        }
+
+        // Priority 5: Pattern-based safety (structural analysis)
         patterns::determine_pattern_safety(patterns)
     }
 
@@ -468,7 +492,12 @@ impl PythonAdapter {
             return Some(semantic);
         }
 
-        // Priority 4: General patterns (object creation, borrowed refs, etc.)
+        // Priority 4: Exception handling patterns (PyErr_SetString, PyErr_Format, etc.)
+        if let Some(semantic) = exception::analyze_exception_pattern(function_name) {
+            return Some(semantic);
+        }
+
+        // Priority 5: General patterns (object creation, borrowed refs, etc.)
         patterns::analyze_pattern(function_name)
     }
 
@@ -689,6 +718,106 @@ impl PythonAdapter {
             PythonFunction {
                 name: "PyGILState_Release".to_string(),
                 pattern: PythonPattern::GILRelease,
+                is_safe: true,
+                family,
+            },
+            // Exception handling
+            PythonFunction {
+                name: "PyErr_SetString".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: true,
+                    is_clearer: false,
+                },
+                is_safe: false,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_Format".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: true,
+                    is_clearer: false,
+                },
+                is_safe: false,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_Occurred".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_Clear".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: true,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_Print".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: true,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_ExceptionMatches".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_GivenExceptionMatches".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_NewException".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_NewExceptionWithDoc".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_Fetch".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
+                is_safe: true,
+                family,
+            },
+            PythonFunction {
+                name: "PyErr_Restore".to_string(),
+                pattern: PythonPattern::ExceptionHandling {
+                    is_setter: false,
+                    is_clearer: false,
+                },
                 is_safe: true,
                 family,
             },

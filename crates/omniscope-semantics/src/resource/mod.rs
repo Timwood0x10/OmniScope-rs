@@ -15,11 +15,13 @@
 //! - `abi_layout_detector`: ABI layout analysis for struct padding, alignment, and cross-language compatibility.
 //! - `length_truncation_detector`: Length/size truncation detection for FFI safety.
 //! - `buffer_overflow_detector`: Buffer overflow detection for memory safety.
+//! - `container_type`: Container type inference for resource lifecycle analysis.
 
 pub mod abi_layout_detector;
 pub mod allocator_shim;
 pub mod buffer_overflow_detector;
 pub mod confidence_scorer;
+pub mod container_type;
 pub mod cpp_adapter;
 pub mod cross_function_lifetime;
 pub mod csharp_adapter;

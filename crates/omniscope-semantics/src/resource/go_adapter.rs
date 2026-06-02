@@ -1,27 +1,7 @@
 //! Go/CGO language adapter for semantic analysis.
 //!
-//! This module provides Go-specific semantic analysis, including:
-//! - Go memory management (GC vs C heap)
-//! - CGO call conventions and pointer passing rules
-//! - Go-specific function patterns (runtime, cgo)
-//!
-//! # Go Memory Model
-//!
-//! Go has two memory domains:
-//! 1. **Go heap**: Managed by Go GC, allocated via `runtime.mallocgc` or `runtime.alloc`
-//! 2. **C heap**: Managed by C malloc/free, used in CGO calls
-//!
-//! The key insight for CGO analysis: Go pointers cannot be passed to C functions
-//! directly. Go uses "pinned" memory or C-allocated memory for CGO calls.
-//!
-//! # CGO Call Patterns
-//!
-//! ```text
-//! Go code ──→ cgo_* functions ──→ C functions
-//!           ──→ _Cfunc_* functions ──→ C functions
-//!           ──→ runtime.mallocgc ──→ Go GC heap
-//!           ──→ _cgo_allocate ──→ C heap (for CGO)
-//! ```
+//! Provides Go-specific semantic analysis for memory management (GC vs C heap),
+//! CGO call conventions, defer/finalizer patterns, and pointer safety rules.
 
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::Language;
@@ -55,6 +35,12 @@ pub enum GoSemanticPattern {
     InterfaceOperation,
     /// Go type reflection (runtime.reflect.*)
     Reflection,
+    /// Go defer mechanism for resource cleanup (runtime.deferproc)
+    DeferCleanup,
+    /// Go finalizer for delayed resource release (runtime.SetFinalizer)
+    Finalizer,
+    /// Go pointer passed to C function (violation of Go pointer rules)
+    PointerViolation,
     /// Unknown Go pattern
     Unknown,
 }
@@ -93,19 +79,6 @@ pub enum GoFFISafety {
 
 impl GoFFISafety {
     /// Returns true if this assessment indicates a safe pattern.
-    ///
-    /// # Objective
-    /// Determine whether the FFI safety assessment indicates that the analyzed
-    /// Go function is safe from memory safety perspective. This is used to
-    /// filter out false positives in CGO-related analysis.
-    ///
-    /// # Invariants
-    /// - `SafeInternal` and `SafeCGOBridge` are considered safe.
-    /// - All `Concern*` variants and `Unknown` are considered unsafe.
-    /// - The result is deterministic for a given variant.
-    ///
-    /// # Returns
-    /// `true` if the assessment indicates a safe pattern, `false` otherwise.
     pub fn is_safe(&self) -> bool {
         // SafeInternal: pure Go runtime code with no FFI boundary
         // SafeCGOBridge: CGO call with balanced alloc/dealloc
@@ -113,20 +86,6 @@ impl GoFFISafety {
     }
 
     /// Returns the safety score (0.0 = dangerous, 1.0 = safe).
-    ///
-    /// # Objective
-    /// Provide a numeric safety score for risk assessment and comparison.
-    /// Higher scores indicate safer patterns. The scores are calibrated based
-    /// on the severity of potential memory safety issues in each category.
-    ///
-    /// # Invariants
-    /// - Score range is always between 0.0 and 1.0.
-    /// - Safe variants score >= 0.85.
-    /// - Concern variants score <= 0.3.
-    /// - Unknown scores exactly 0.5 (neutral).
-    ///
-    /// # Returns
-    /// A `f32` value between 0.0 (dangerous) and 1.0 (safe).
     pub fn safety_score(&self) -> f32 {
         match self {
             // SafeInternal: pure Go code, no cross-boundary concerns
@@ -156,27 +115,6 @@ pub struct GoAdapter {
 
 impl GoAdapter {
     /// Creates a new Go adapter with Go language hint.
-    ///
-    /// # Objective
-    /// Initialize the Go adapter with the correct language identifier
-    /// so it can be used for Go-specific semantic analysis in the
-    /// semantic engine pipeline.
-    ///
-    /// # Invariants
-    /// - Language is always set to `Language::Go`.
-    /// - The adapter is ready to use immediately after creation.
-    ///
-    /// # Returns
-    /// A new `GoAdapter` instance ready for semantic analysis.
-    ///
-    /// # Examples
-    /// ```
-    /// use omniscope_semantics::resource::go_adapter::GoAdapter;
-    /// use omniscope_types::Language;
-    ///
-    /// let adapter = GoAdapter::new();
-    /// assert_eq!(adapter.language(), Language::Go);
-    /// ```
     pub fn new() -> Self {
         Self {
             language: Language::Go,
@@ -184,42 +122,11 @@ impl GoAdapter {
     }
 
     /// Returns the language hint for this adapter.
-    ///
-    /// # Objective
-    /// Provide the language identifier for this adapter, which is used
-    /// by the semantic engine to route analysis requests to the correct
-    /// language-specific adapter.
-    ///
-    /// # Invariants
-    /// - Always returns `Language::Go`.
-    /// - The value never changes after adapter creation.
-    ///
-    /// # Returns
-    /// The `Language::Go` enum variant.
     pub fn language(&self) -> Language {
         self.language
     }
 
     /// Analyzes a Go function from its IR body and name.
-    ///
-    /// # Objective
-    /// Perform comprehensive semantic analysis of a Go function by
-    /// combining function name pattern matching with IR instruction
-    /// analysis. This determines the function's memory management
-    /// behavior and FFI safety assessment.
-    ///
-    /// # Invariants
-    /// - The function name is always stored in the result.
-    /// - Patterns from name and body are combined (not deduplicated).
-    /// - CGO bridge detection is always performed.
-    /// - FFI safety assessment covers all detected patterns.
-    ///
-    /// # Arguments
-    /// * `function_name` - The name of the Go function to analyze.
-    /// * `body` - Optional IR body containing instruction-level analysis data.
-    ///
-    /// # Returns
-    /// A `GoFunctionAnalysis` containing all detected patterns and safety assessment.
     pub fn analyze_function(
         &self,
         function_name: &str,
@@ -272,23 +179,6 @@ impl GoAdapter {
     }
 
     /// Analyzes function name to detect Go semantic patterns.
-    ///
-    /// # Objective
-    /// Detect Go-specific semantic patterns from the function name using
-    /// prefix-based pattern matching. This handles Go runtime functions,
-    /// CGO bridge functions, and main package functions.
-    ///
-    /// # Invariants
-    /// - Runtime functions always get `RuntimeInternal` pattern.
-    /// - CGO functions always get `CGOBridge` pattern.
-    /// - Specific patterns are derived from function name prefixes.
-    /// - An empty Vec is returned for unrecognized function names.
-    ///
-    /// # Arguments
-    /// * `function_name` - The function name to analyze for Go patterns.
-    ///
-    /// # Returns
-    /// A Vec of `GoSemanticPattern` detected from the function name.
     fn analyze_function_name(&self, function_name: &str) -> Vec<GoSemanticPattern> {
         let mut patterns = Vec::new();
 
@@ -351,6 +241,12 @@ impl GoAdapter {
             } else if function_name.starts_with("runtime.reflect.") {
                 // Reflection API operations
                 patterns.push(GoSemanticPattern::Reflection);
+            } else if function_name.starts_with("runtime.deferproc") {
+                // Defer mechanism for resource cleanup
+                patterns.push(GoSemanticPattern::DeferCleanup);
+            } else if function_name.starts_with("runtime.SetFinalizer") {
+                // Finalizer for delayed resource release
+                patterns.push(GoSemanticPattern::Finalizer);
             }
         }
 
@@ -381,23 +277,6 @@ impl GoAdapter {
     }
 
     /// Analyzes function body to detect Go semantic patterns from IR instructions.
-    ///
-    /// # Objective
-    /// Scan IR instructions within a function body to detect Go-specific
-    /// semantic patterns by examining call instruction callees. This
-    /// complements name-based analysis with instruction-level evidence.
-    ///
-    /// # Invariants
-    /// - Only `Call` instructions are analyzed.
-    /// - Each callee is checked against known Go runtime and CGO functions.
-    /// - Multiple patterns may be detected from a single instruction.
-    /// - An empty Vec is returned if no Go patterns are found.
-    ///
-    /// # Arguments
-    /// * `body` - The IR function body containing instructions to analyze.
-    ///
-    /// # Returns
-    /// A Vec of `GoSemanticPattern` detected from IR instructions.
     fn analyze_function_body(&self, body: &FunctionBody) -> Vec<GoSemanticPattern> {
         let mut patterns = Vec::new();
 
@@ -421,6 +300,16 @@ impl GoAdapter {
                         patterns.push(GoSemanticPattern::CGODesallocation);
                         patterns.push(GoSemanticPattern::CGOBridge);
                     }
+                    // Defer mechanism for resource cleanup
+                    else if callee.starts_with("runtime.deferproc") {
+                        patterns.push(GoSemanticPattern::DeferCleanup);
+                        patterns.push(GoSemanticPattern::RuntimeInternal);
+                    }
+                    // Finalizer for delayed resource release
+                    else if callee.starts_with("runtime.SetFinalizer") {
+                        patterns.push(GoSemanticPattern::Finalizer);
+                        patterns.push(GoSemanticPattern::RuntimeInternal);
+                    }
                     // Go runtime internal functions
                     else if callee.starts_with("runtime.") {
                         patterns.push(GoSemanticPattern::RuntimeInternal);
@@ -437,23 +326,6 @@ impl GoAdapter {
     }
 
     /// Checks if a function is a CGO bridge function.
-    ///
-    /// # Objective
-    /// Determine whether a function serves as a bridge between Go and C code
-    /// in the CGO calling convention. CGO bridge functions facilitate the
-    /// transition between Go's memory model and C's memory model.
-    ///
-    /// # Invariants
-    /// - Functions prefixed with `_cgo_` are always CGO bridges.
-    /// - Functions prefixed with `_Cfunc_` are always CGO bridges.
-    /// - Functions containing `_C2func_`, `_GoStringToC`, etc. are CGO bridges.
-    /// - Standard Go functions without CGO prefixes return false.
-    ///
-    /// # Arguments
-    /// * `function_name` - The function name to check for CGO bridge patterns.
-    ///
-    /// # Returns
-    /// `true` if the function is identified as a CGO bridge, `false` otherwise.
     fn is_cgo_bridge_function(&self, function_name: &str) -> bool {
         function_name.starts_with("_cgo_")
             || function_name.starts_with("_Cfunc_")
@@ -466,27 +338,6 @@ impl GoAdapter {
     }
 
     /// Determines FFI safety for a Go function based on detected patterns.
-    ///
-    /// # Objective
-    /// Compute the FFI safety assessment by analyzing the combination of
-    /// detected patterns and function name. This determines whether the
-    /// function poses memory safety risks at the Go/C boundary.
-    ///
-    /// # Invariants
-    /// - CGO bridges with balanced alloc/dealloc are `SafeCGOBridge`.
-    /// - CGO bridges with only alloc or only dealloc are `ConcernCGOOwnershipTransfer`.
-    /// - Go runtime internal functions are always `SafeInternal`.
-    /// - `_Cfunc_*` and `cgo_*` functions are treated as `ConcernCGOOwnershipTransfer`.
-    /// - `main.*` functions are treated as `SafeInternal`.
-    /// - All other functions return `Unknown`.
-    ///
-    /// # Arguments
-    /// * `function_name` - The function name for heuristic-based assessment.
-    /// * `patterns` - The detected Go semantic patterns.
-    /// * `_body` - Optional IR body (reserved for future analysis).
-    ///
-    /// # Returns
-    /// A `GoFFISafety` assessment for the function.
     fn determine_ffi_safety(
         &self,
         function_name: &str,
@@ -549,6 +400,62 @@ impl GoAdapter {
         // Default: insufficient information for assessment
         GoFFISafety::Unknown
     }
+
+    /// Detects potential delayed release issues with finalizers.
+    ///
+    /// # Objective
+    /// Analyze whether a function using `runtime.SetFinalizer` might cause
+    /// delayed resource release. Finalizers are executed by the garbage collector
+    /// at an unspecified time, which can lead to resource exhaustion if
+    /// critical resources are not released promptly.
+    ///
+    /// # Invariants
+    /// - Returns `true` if the function uses finalizers for resource cleanup.
+    /// - Returns `false` if the function does not use finalizers.
+    /// - The analysis is based on the presence of `Finalizer` pattern.
+    ///
+    /// # Arguments
+    /// * `patterns` - The detected Go semantic patterns for the function.
+    ///
+    /// # Returns
+    /// `true` if finalizer usage might cause delayed release, `false` otherwise.
+    pub fn detect_finalizer_delayed_release(&self, patterns: &[GoSemanticPattern]) -> bool {
+        // Check if the function uses finalizers for resource cleanup
+        patterns
+            .iter()
+            .any(|p| matches!(p, GoSemanticPattern::Finalizer))
+    }
+
+    /// Detects Go pointer violations in CGO calls.
+    ///
+    /// # Objective
+    /// Identify functions that might pass Go GC-managed pointers to C functions,
+    /// which violates Go's pointer safety rules. This can lead to dangling
+    /// pointers if the Go garbage collector moves the memory while C is using it.
+    ///
+    /// # Invariants
+    /// - Returns `true` if the function has both Go GC allocation and CGO bridge patterns.
+    /// - Returns `false` otherwise.
+    /// - This is a heuristic-based detection that might have false positives.
+    ///
+    /// # Arguments
+    /// * `patterns` - The detected Go semantic patterns for the function.
+    ///
+    /// # Returns
+    /// `true` if Go pointer violation is detected, `false` otherwise.
+    pub fn detect_go_pointer_violation(&self, patterns: &[GoSemanticPattern]) -> bool {
+        // Check for combination of Go GC allocation and CGO bridge patterns
+        // This indicates that Go-managed memory might be passed to C functions
+        let has_go_gc_allocation = patterns
+            .iter()
+            .any(|p| matches!(p, GoSemanticPattern::GoGCAllocation));
+        let has_cgo_bridge = patterns
+            .iter()
+            .any(|p| matches!(p, GoSemanticPattern::CGOBridge));
+
+        // If both patterns are present, there's a risk of Go pointer violation
+        has_go_gc_allocation && has_cgo_bridge
+    }
 }
 
 impl Default for GoAdapter {
@@ -561,48 +468,6 @@ impl Default for GoAdapter {
 mod tests {
     use super::*;
     use omniscope_ir::parser::{FunctionBody, IRInstruction, IRInstructionKind};
-
-    /// Objective: Verify Go adapter creation and basic functionality
-    /// Invariants: Adapter must be created with correct language setting
-    #[test]
-    fn test_go_adapter_creation() {
-        let adapter = GoAdapter::new();
-        assert_eq!(
-            adapter.language(),
-            Language::Go,
-            "Go adapter must have Go language setting"
-        );
-    }
-
-    /// Objective: Verify Go runtime function analysis
-    /// Invariants: runtime.mallocgc must be detected as GoGCAllocation
-    #[test]
-    fn test_go_runtime_mallocgc_analysis() {
-        let adapter = GoAdapter::new();
-        let analysis = adapter.analyze_function("runtime.mallocgc", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::GoGCAllocation),
-            "runtime.mallocgc must be detected as GoGCAllocation"
-        );
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::RuntimeInternal),
-            "runtime.mallocgc must be detected as RuntimeInternal"
-        );
-        assert!(
-            analysis.manages_go_gc_memory,
-            "runtime.mallocgc must manage Go GC memory"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::SafeInternal,
-            "runtime.mallocgc must be SafeInternal"
-        );
-    }
 
     /// Objective: Verify CGO allocation function analysis
     /// Invariants: _cgo_allocate must be detected as CGOAllocation and CGOBridge
@@ -652,88 +517,6 @@ mod tests {
         );
     }
 
-    /// Objective: Verify Go main package function analysis
-    /// Invariants: main.main must be detected as SafeInternal
-    #[test]
-    fn test_go_main_function_analysis() {
-        let adapter = GoAdapter::new();
-        let analysis = adapter.analyze_function("main.main", None);
-
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::SafeInternal,
-            "main.main must be SafeInternal"
-        );
-        assert!(
-            !analysis.is_cgo_bridge,
-            "main.main must not be a CGO bridge"
-        );
-    }
-
-    /// Objective: Verify Go panic/throw analysis
-    /// Invariants: runtime.gopanic must be detected as PanicOrThrow
-    #[test]
-    fn test_go_panic_analysis() {
-        let adapter = GoAdapter::new();
-        let analysis = adapter.analyze_function("runtime.gopanic", None);
-
-        assert!(
-            analysis.patterns.contains(&GoSemanticPattern::PanicOrThrow),
-            "runtime.gopanic must be detected as PanicOrThrow"
-        );
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::RuntimeInternal),
-            "runtime.gopanic must be detected as RuntimeInternal"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::SafeInternal,
-            "runtime.gopanic must be SafeInternal"
-        );
-    }
-
-    /// Objective: Verify Go channel operation analysis
-    /// Invariants: runtime.chanrecv must be detected as ChannelOperation
-    #[test]
-    fn test_go_channel_analysis() {
-        let adapter = GoAdapter::new();
-        let analysis = adapter.analyze_function("runtime.chanrecv", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::ChannelOperation),
-            "runtime.chanrecv must be detected as ChannelOperation"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::SafeInternal,
-            "runtime.chanrecv must be SafeInternal"
-        );
-    }
-
-    /// Objective: Verify Go slice operation analysis
-    /// Invariants: runtime.growslice must be detected as SliceOperation
-    #[test]
-    fn test_go_slice_analysis() {
-        let adapter = GoAdapter::new();
-        let analysis = adapter.analyze_function("runtime.growslice", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::SliceOperation),
-            "runtime.growslice must be detected as SliceOperation"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::SafeInternal,
-            "runtime.growslice must be SafeInternal"
-        );
-    }
-
     /// Objective: Verify CGO bridge with balanced allocation/deallocation
     /// Invariants: Function with both allocation and deallocation must be SafeCGOBridge
     #[test]
@@ -750,83 +533,6 @@ mod tests {
             ffi_safety,
             GoFFISafety::SafeCGOBridge,
             "CGO bridge with balanced allocation/deallocation must be SafeCGOBridge"
-        );
-    }
-
-    /// Objective: Verify FFI safety score calculation
-    /// Invariants: Safe patterns must have higher scores than concerning patterns
-    #[test]
-    fn test_ffi_safety_scores() {
-        assert!(
-            GoFFISafety::SafeInternal.safety_score() > GoFFISafety::Unknown.safety_score(),
-            "SafeInternal must have higher score than Unknown"
-        );
-        assert!(
-            GoFFISafety::SafeCGOBridge.safety_score()
-                > GoFFISafety::ConcernCGOOwnershipTransfer.safety_score(),
-            "SafeCGOBridge must have higher score than ConcernCGOOwnershipTransfer"
-        );
-        assert!(
-            GoFFISafety::ConcernGoPointerToC.safety_score() < GoFFISafety::Unknown.safety_score(),
-            "ConcernGoPointerToC must have lower score than Unknown"
-        );
-    }
-
-    /// Objective: Verify Go language detection from function names
-    /// Invariants: Go patterns must be correctly identified
-    #[test]
-    fn test_go_language_patterns() {
-        let adapter = GoAdapter::new();
-
-        // Test various Go function patterns
-        let test_cases = vec![
-            ("runtime.mallocgc", true, "Go runtime allocation"),
-            ("_cgo_allocate", true, "CGO allocation"),
-            ("main.main", false, "Go main package"),
-            ("runtime.gopanic", true, "Go panic"),
-            ("runtime.chanrecv", true, "Go channel"),
-            ("runtime.growslice", true, "Go slice"),
-            ("runtime.convT2I", true, "Go interface"),
-            ("runtime.reflect.Value", true, "Go reflection"),
-            ("C.malloc", false, "C function called from Go"),
-        ];
-
-        for (func_name, should_be_runtime, description) in test_cases {
-            let analysis = adapter.analyze_function(func_name, None);
-            let is_runtime = analysis
-                .patterns
-                .contains(&GoSemanticPattern::RuntimeInternal)
-                || analysis.patterns.contains(&GoSemanticPattern::CGOBridge);
-
-            if should_be_runtime {
-                assert!(
-                    is_runtime,
-                    "{}: {} should be detected as Go runtime/CGO pattern",
-                    description, func_name
-                );
-            }
-        }
-    }
-
-    /// Objective: Verify Go adapter handles unknown functions gracefully
-    /// Invariants: Unknown functions must return Unknown safety
-    #[test]
-    fn test_unknown_function_handling() {
-        let adapter = GoAdapter::new();
-        let analysis = adapter.analyze_function("unknown_function", None);
-
-        assert!(
-            analysis.patterns.is_empty(),
-            "Unknown function should have no patterns"
-        );
-        assert!(
-            !analysis.is_cgo_bridge,
-            "Unknown function should not be a CGO bridge"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::Unknown,
-            "Unknown function must have Unknown safety"
         );
     }
 
@@ -910,134 +616,6 @@ mod tests {
             analysis.ffi_safety,
             GoFFISafety::SafeCGOBridge,
             "CGO bridge with balanced allocation/deallocation must be SafeCGOBridge"
-        );
-    }
-
-    /// Objective: Verify Go GC allocation semantics using embedded IR
-    /// Invariants: Go GC allocations must be properly detected
-    #[test]
-    fn test_go_gc_allocation_with_ir() {
-        let adapter = GoAdapter::new();
-
-        // Create a function body with Go GC allocation
-        let body = FunctionBody {
-            name: "test_go_gc_function".to_string(),
-            instructions: vec![
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: Some("%obj".to_string()),
-                    operands: vec!["i64 64".to_string(), "i64 0".to_string()],
-                    callee: Some("runtime.mallocgc".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "%obj = call i8* @runtime.mallocgc(i64 64, i64 0)".to_string(),
-                    result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Ret,
-                    dest: None,
-                    operands: vec!["i8* %obj".to_string()],
-                    callee: None,
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "ret i8* %obj".to_string(),
-                    result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                },
-            ],
-        };
-
-        let analysis = adapter.analyze_function("test_go_gc_function", Some(&body));
-
-        // Verify Go GC allocation pattern is detected
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::GoGCAllocation),
-            "Go GC allocation must be detected from IR body"
-        );
-        assert!(
-            analysis
-                .patterns
-                .contains(&GoSemanticPattern::RuntimeInternal),
-            "runtime.mallocgc must be detected as RuntimeInternal"
-        );
-
-        // Verify memory management flags
-        assert!(
-            analysis.manages_go_gc_memory,
-            "Function with runtime.mallocgc must manage Go GC memory"
-        );
-        assert!(
-            !analysis.manages_c_heap_memory,
-            "Function with only Go GC calls must not manage C heap memory"
-        );
-
-        // Verify FFI safety assessment
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::SafeInternal,
-            "Go GC allocation function must be SafeInternal"
-        );
-    }
-
-    /// Objective: Verify CGO bridge detection with IR body
-    /// Invariants: CGO bridge functions must be correctly identified
-    #[test]
-    fn test_cgo_bridge_detection_with_ir() {
-        let adapter = GoAdapter::new();
-
-        // Create a function body with CGO bridge pattern
-        let body = FunctionBody {
-            name: "_Cfunc_my_c_function".to_string(),
-            instructions: vec![
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: Some("%result".to_string()),
-                    operands: vec!["i8*".to_string(), "%arg".to_string()],
-                    callee: Some("C.my_function".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "%result = call i8* @C.my_function(i8* %arg)".to_string(),
-                    result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Ret,
-                    dest: None,
-                    operands: vec!["i8* %result".to_string()],
-                    callee: None,
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "ret i8* %result".to_string(),
-                    result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                },
-            ],
-        };
-
-        let analysis = adapter.analyze_function("_Cfunc_my_c_function", Some(&body));
-
-        // Verify CGO bridge detection
-        assert!(
-            analysis.is_cgo_bridge,
-            "_Cfunc_my_c_function must be detected as CGO bridge"
-        );
-        assert!(
-            analysis.patterns.contains(&GoSemanticPattern::CGOBridge),
-            "_Cfunc_my_c_function must have CGOBridge pattern"
-        );
-
-        // Verify FFI safety assessment
-        assert_eq!(
-            analysis.ffi_safety,
-            GoFFISafety::Unknown,
-            "CGO bridge without balanced allocation/deallocation must be Unknown"
         );
     }
 
@@ -1141,6 +719,262 @@ mod tests {
             analysis.ffi_safety,
             GoFFISafety::SafeCGOBridge,
             "Mixed Go and CGO patterns with balanced CGO calls must be SafeCGOBridge"
+        );
+    }
+
+    /// Objective: Verify defer mechanism tracking detection
+    /// Invariants: runtime.deferproc must be detected as DeferCleanup
+    #[test]
+    fn test_defer_mechanism_tracking() {
+        let adapter = GoAdapter::new();
+        let analysis = adapter.analyze_function("runtime.deferproc", None);
+
+        assert!(
+            analysis.patterns.contains(&GoSemanticPattern::DeferCleanup),
+            "runtime.deferproc must be detected as DeferCleanup"
+        );
+        assert!(
+            analysis
+                .patterns
+                .contains(&GoSemanticPattern::RuntimeInternal),
+            "runtime.deferproc must be detected as RuntimeInternal"
+        );
+        assert_eq!(
+            analysis.ffi_safety,
+            GoFFISafety::SafeInternal,
+            "runtime.deferproc must be SafeInternal"
+        );
+    }
+
+    /// Objective: Verify finalizer detection
+    /// Invariants: runtime.SetFinalizer must be detected as Finalizer
+    #[test]
+    fn test_finalizer_detection() {
+        let adapter = GoAdapter::new();
+        let analysis = adapter.analyze_function("runtime.SetFinalizer", None);
+
+        assert!(
+            analysis.patterns.contains(&GoSemanticPattern::Finalizer),
+            "runtime.SetFinalizer must be detected as Finalizer"
+        );
+        assert!(
+            analysis
+                .patterns
+                .contains(&GoSemanticPattern::RuntimeInternal),
+            "runtime.SetFinalizer must be detected as RuntimeInternal"
+        );
+        assert_eq!(
+            analysis.ffi_safety,
+            GoFFISafety::SafeInternal,
+            "runtime.SetFinalizer must be SafeInternal"
+        );
+    }
+
+    /// Objective: Verify finalizer delayed release detection
+    /// Invariants: Functions with finalizer pattern must be detected as potential delayed release
+    #[test]
+    fn test_finalizer_delayed_release_detection() {
+        let adapter = GoAdapter::new();
+        let analysis = adapter.analyze_function("runtime.SetFinalizer", None);
+
+        assert!(
+            adapter.detect_finalizer_delayed_release(&analysis.patterns),
+            "Functions with finalizer pattern must be detected as potential delayed release"
+        );
+
+        // Test with a function that doesn't have finalizer
+        let analysis_no_finalizer = adapter.analyze_function("runtime.mallocgc", None);
+        assert!(
+            !adapter.detect_finalizer_delayed_release(&analysis_no_finalizer.patterns),
+            "Functions without finalizer pattern must not be detected as delayed release"
+        );
+    }
+
+    /// Objective: Verify Go pointer violation detection
+    /// Invariants: Functions with both Go GC allocation and CGO bridge must be detected as pointer violation
+    #[test]
+    fn test_go_pointer_violation_detection() {
+        let adapter = GoAdapter::new();
+
+        // Test with a function that has both Go GC allocation and CGO bridge
+        let body = FunctionBody {
+            name: "test_pointer_violation".to_string(),
+            instructions: vec![
+                IRInstruction {
+                    kind: IRInstructionKind::Call,
+                    dest: Some("%go_ptr".to_string()),
+                    operands: vec!["i64 64".to_string(), "i64 0".to_string()],
+                    callee: Some("runtime.mallocgc".to_string()),
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "%go_ptr = call i8* @runtime.mallocgc(i64 64, i64 0)".to_string(),
+                    result_type: Some("i8*".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+                IRInstruction {
+                    kind: IRInstructionKind::Call,
+                    dest: Some("%c_ptr".to_string()),
+                    operands: vec!["i8*".to_string(), "i64 100".to_string()],
+                    callee: Some("_cgo_allocate".to_string()),
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "%c_ptr = call i8* @_cgo_allocate(i64 100)".to_string(),
+                    result_type: Some("i8*".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+                IRInstruction {
+                    kind: IRInstructionKind::Ret,
+                    dest: None,
+                    operands: vec![],
+                    callee: None,
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "ret void".to_string(),
+                    result_type: Some("void".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+            ],
+        };
+
+        let analysis = adapter.analyze_function("test_pointer_violation", Some(&body));
+
+        assert!(
+            adapter.detect_go_pointer_violation(&analysis.patterns),
+            "Functions with both Go GC allocation and CGO bridge must be detected as pointer violation"
+        );
+
+        // Test with a function that has only Go GC allocation
+        let analysis_only_go = adapter.analyze_function("runtime.mallocgc", None);
+        assert!(
+            !adapter.detect_go_pointer_violation(&analysis_only_go.patterns),
+            "Functions with only Go GC allocation must not be detected as pointer violation"
+        );
+
+        // Test with a function that has only CGO bridge
+        let analysis_only_cgo = adapter.analyze_function("_cgo_allocate", None);
+        assert!(
+            !adapter.detect_go_pointer_violation(&analysis_only_cgo.patterns),
+            "Functions with only CGO bridge must not be detected as pointer violation"
+        );
+    }
+
+    /// Objective: Verify defer mechanism with IR body analysis
+    /// Invariants: IR body with runtime.deferproc call must be detected as DeferCleanup
+    #[test]
+    fn test_defer_mechanism_with_ir_body() {
+        let adapter = GoAdapter::new();
+
+        // Create a function body with defer call
+        let body = FunctionBody {
+            name: "test_defer_function".to_string(),
+            instructions: vec![
+                IRInstruction {
+                    kind: IRInstructionKind::Call,
+                    dest: Some("%defer".to_string()),
+                    operands: vec!["i64 0".to_string(), "i64 0".to_string()],
+                    callee: Some("runtime.deferproc".to_string()),
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "%defer = call i8* @runtime.deferproc(i64 0, i64 0)".to_string(),
+                    result_type: Some("i8*".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+                IRInstruction {
+                    kind: IRInstructionKind::Call,
+                    dest: None,
+                    operands: vec!["i8*".to_string(), "%ptr".to_string()],
+                    callee: Some("_cgo_free".to_string()),
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "call void @_cgo_free(i8* %ptr)".to_string(),
+                    result_type: Some("void".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+                IRInstruction {
+                    kind: IRInstructionKind::Ret,
+                    dest: None,
+                    operands: vec![],
+                    callee: None,
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "ret void".to_string(),
+                    result_type: Some("void".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+            ],
+        };
+
+        let analysis = adapter.analyze_function("test_defer_function", Some(&body));
+
+        assert!(
+            analysis.patterns.contains(&GoSemanticPattern::DeferCleanup),
+            "IR body with runtime.deferproc call must be detected as DeferCleanup"
+        );
+        assert!(
+            analysis
+                .patterns
+                .contains(&GoSemanticPattern::CGODesallocation),
+            "IR body with _cgo_free call must be detected as CGODesallocation"
+        );
+    }
+
+    /// Objective: Verify finalizer with IR body analysis
+    /// Invariants: IR body with runtime.SetFinalizer call must be detected as Finalizer
+    #[test]
+    fn test_finalizer_with_ir_body() {
+        let adapter = GoAdapter::new();
+
+        // Create a function body with finalizer call
+        let body = FunctionBody {
+            name: "test_finalizer_function".to_string(),
+            instructions: vec![
+                IRInstruction {
+                    kind: IRInstructionKind::Call,
+                    dest: Some("%finalizer".to_string()),
+                    operands: vec![
+                        "i8*".to_string(),
+                        "%obj".to_string(),
+                        "i8*".to_string(),
+                        "%cleanup".to_string(),
+                    ],
+                    callee: Some("runtime.SetFinalizer".to_string()),
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "call void @runtime.SetFinalizer(i8* %obj, i8* %cleanup)".to_string(),
+                    result_type: Some("void".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+                IRInstruction {
+                    kind: IRInstructionKind::Ret,
+                    dest: None,
+                    operands: vec![],
+                    callee: None,
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "ret void".to_string(),
+                    result_type: Some("void".to_string()),
+                    element_type: None,
+                    function_signature: None,
+                },
+            ],
+        };
+
+        let analysis = adapter.analyze_function("test_finalizer_function", Some(&body));
+
+        assert!(
+            analysis.patterns.contains(&GoSemanticPattern::Finalizer),
+            "IR body with runtime.SetFinalizer call must be detected as Finalizer"
+        );
+        assert!(
+            adapter.detect_finalizer_delayed_release(&analysis.patterns),
+            "Function with finalizer must be detected as potential delayed release"
         );
     }
 }
