@@ -30,8 +30,8 @@ C、C++、Rust、Zig、Go、Python、Java、C# — 通过 IR 元数据（mangled
 ```
 用户 IR 文件（.ll / .bc）
        │
+       ├── Plan C: llvm-sys C API（feature-gated，直接构建 IRModule）
        ├── Plan A: SafetyExportPass.so（C++ LLVM Pass → 增强型 JSON）
-       ├── Plan C: llvm-sys C API（直接构建 IRModuleModel）
        └── Plan B（回退）：纯文本解析（零外部依赖）
 ```
 

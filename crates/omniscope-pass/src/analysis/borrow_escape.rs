@@ -57,12 +57,15 @@ impl Pass for BorrowEscapePass {
         // Build semantic tree for R-0~R-8 pattern suppression
         let mut semantic_tree = SemanticTree::new();
 
+        // Try to use ModuleIndex for FFI call pre-filtering
+        let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
+
         // Scan for FFI calls that might pass stack pointers.
         // Only flag calls where we have POSITIVE evidence of stack provenance
         // (alloca or address-of-local patterns), not just "external call + no
         // heap pattern". Without positive stack evidence, the default should
         // be silent — name-based heuristics are too noisy for a default-on pass.
-        for call in &module.calls {
+        for (idx, call) in module.calls.iter().enumerate() {
             nodes_analyzed += 1;
 
             // Skip LLVM intrinsics
@@ -73,6 +76,17 @@ impl Pass for BorrowEscapePass {
             // Check if this is an external call (potential FFI boundary)
             if !call.is_external {
                 continue;
+            }
+
+            // Use ModuleIndex to check if this call is an FFI boundary
+            if let Some(ref index) = module_index {
+                if idx < index.call_metas.len() {
+                    let meta = &index.call_metas[idx];
+                    // Skip non-FFI boundary calls
+                    if !meta.is_ffi_boundary {
+                        continue;
+                    }
+                }
             }
 
             // Check for positive stack provenance evidence:

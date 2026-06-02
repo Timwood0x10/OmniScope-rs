@@ -136,8 +136,38 @@ impl Pass for FFIBoundaryPass {
                     }
                 }
             } else if let Some(ref module) = ir_module {
-                // Fallback path: recompute metadata (legacy behavior)
-                let detector = omniscope_semantics::LanguageDetector::new();
+                // Fallback path: recompute metadata (legacy behavior).
+                // Uses cached LanguageDetector from ModuleIndex if available,
+                // otherwise creates a new one.
+                let detector = if let Some(index) =
+                    ctx.get_ref::<crate::module_index::ModuleIndex>("module_index")
+                {
+                    index.language_detector.clone()
+                } else {
+                    omniscope_semantics::LanguageDetector::new()
+                };
+                let mut lang_cache: std::collections::HashMap<
+                    String,
+                    omniscope_types::config::Language,
+                > = std::collections::HashMap::with_capacity(
+                    module.functions.len() + module.calls.len() * 2,
+                );
+
+                // Helper: detect and cache language for a function name.
+                let detect_cached = |cache: &mut std::collections::HashMap<
+                    String,
+                    omniscope_types::config::Language,
+                >,
+                                     detector: &omniscope_semantics::LanguageDetector,
+                                     name: &str|
+                 -> omniscope_types::config::Language {
+                    if let Some(&lang) = cache.get(name) {
+                        return lang;
+                    }
+                    let lang = detector.detect_from_function(name);
+                    cache.insert(name.to_string(), lang);
+                    lang
+                };
 
                 // Pre-build a map of local function names for quick lookup
                 let local_functions: std::collections::HashSet<&str> = module
@@ -164,21 +194,21 @@ impl Pass for FFIBoundaryPass {
                         continue;
                     }
 
-                    // Determine callee language
-                    let callee_lang = detector.detect_from_function(callee_name);
+                    // Determine callee language (cached)
+                    let callee_lang = detect_cached(&mut lang_cache, &detector, callee_name);
 
-                    // Determine caller language
+                    // Determine caller language (cached)
                     let caller_lang = if module.functions.contains_key(call.caller.as_str())
                         || module.functions.contains_key(&call.caller)
                     {
-                        let detected = detector.detect_from_function(caller_name);
+                        let detected = detect_cached(&mut lang_cache, &detector, caller_name);
                         if detected == omniscope_types::config::Language::Unknown {
                             omniscope_types::config::Language::C
                         } else {
                             detected
                         }
                     } else {
-                        detector.detect_from_function(caller_name)
+                        detect_cached(&mut lang_cache, &detector, caller_name)
                     };
 
                     // Check if this is a cross-language call
@@ -237,7 +267,8 @@ impl Pass for FFIBoundaryPass {
                         // If so, emit a CrossLanguageFree issue for the caller → callee boundary.
                         if let Some(nested_callees) = callees_of.get(callee_name) {
                             for &nested_callee in nested_callees {
-                                let nested_lang = detector.detect_from_function(nested_callee);
+                                let nested_lang =
+                                    detect_cached(&mut lang_cache, &detector, nested_callee);
                                 let is_nested_cpp_ffi = nested_callee.starts_with("_Z");
                                 let is_nested_cross_lang = nested_lang
                                     != omniscope_types::config::Language::Unknown
@@ -331,7 +362,14 @@ impl FFIBoundaryPass {
             assess_ffi_safety(&boundary.callee_name, &boundary.caller_name, module)
         } else {
             // No IR module available — fall back to name-based heuristic
-            let syscall_semantic = SyscallSemantic::classify(&boundary.callee_name);
+            // Use cached SyscallSemantic from ModuleIndex if available
+            let syscall_semantic = if let Some(index) =
+                ctx.get_ref::<crate::module_index::ModuleIndex>("module_index")
+            {
+                index.syscall_semantic(&boundary.callee_name)
+            } else {
+                SyscallSemantic::classify(&boundary.callee_name)
+            };
             let verdict = if syscall_semantic.involves_memory_ownership() {
                 FFIVerdict::ConcernOwnershipTransfer
             } else if syscall_semantic == SyscallSemantic::Unknown {

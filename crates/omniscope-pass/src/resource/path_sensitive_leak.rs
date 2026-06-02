@@ -217,20 +217,34 @@ impl Default for LeakDetectionPass {
 /// 1. Facts whose `function` ID matches the alloc's function ID (same scope), OR
 /// 2. Facts whose `function_name` matches the alloc's `function_name` (the
 ///    alloc's callee itself is a cleanup like `free`/`close`).
+///
+/// **Important**: This function counts the number of same-family allocations
+/// vs releases. If there are more allocations than releases, some allocations
+/// are not freed (potential leak).
 fn check_release_in_facts(facts: &[RawResourceFact], alloc: &RawResourceFact) -> bool {
     let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
-    facts
-        .iter()
-        .filter(|f| !f.is_acquire && f.family == Some(alloc_family))
-        .any(|f| {
-            // Scope: only consider releases related to the allocation's context.
-            // 1. Same function ID — release is in the same function as the alloc.
-            // 2. Same function name — handles cases where the same logical function
-            //    might appear with different IDs (e.g. across IR modules or after
-            //    inlining). This matches condition #2 from the doc comment.
-            f.function == alloc.function || f.function_name == alloc.function_name
-        })
+    // Count allocations and releases of the same family in the same function
+    let mut alloc_count = 0u32;
+    let mut release_count = 0u32;
+
+    for fact in facts {
+        if fact.family != Some(alloc_family) {
+            continue;
+        }
+        // Only consider facts in the same function scope
+        if fact.function != alloc.function && fact.function_name != alloc.function_name {
+            continue;
+        }
+        if fact.is_acquire {
+            alloc_count += 1;
+        } else {
+            release_count += 1;
+        }
+    }
+
+    // If there are more releases than allocations, or equal, no leak
+    release_count >= alloc_count
 }
 
 /// Checks if the summary store contains a function that releases

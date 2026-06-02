@@ -49,8 +49,9 @@ pub use resource::semantic_engine::{
     assess_ffi_safety, FFISafetyAssessment, FFIVerdict, IREvidence,
 };
 pub use resource::semantic_tree::{
-    build_semantic_tree, infer_provenance_from_context, PointerProvenance, SemanticKind,
-    SemanticNode, SemanticResolution, SemanticTree, SyscallSemantic, TypeSemantic,
+    build_semantic_tree, build_semantic_tree_with_cache, infer_provenance_from_context,
+    infer_provenance_from_syscall, PointerProvenance, SemanticKind, SemanticNode,
+    SemanticResolution, SemanticTree, SyscallSemantic, TypeSemantic,
 };
 pub use resource::structural_inference::{
     infer_bridge_summary, infer_destructor_summary, infer_refcount_release_summary,

@@ -58,6 +58,31 @@ impl SemanticNode {
         }
     }
 
+    /// Creates a semantic node for an FFI call with a pre-computed syscall semantic.
+    ///
+    /// This is the cached version that avoids repeated `SyscallSemantic::classify()`
+    /// calls when the classification is already available from `ModuleIndex`.
+    pub fn for_ffi_call_with_syscall(
+        caller: &str,
+        callee: &str,
+        provenance: PointerProvenance,
+        type_semantic: TypeSemantic,
+        syscall_semantic: SyscallSemantic,
+    ) -> Self {
+        let safety_score = Self::compute_safety_score(provenance, type_semantic, syscall_semantic);
+        let reason = Self::compute_reason(provenance, type_semantic, syscall_semantic, callee);
+
+        Self {
+            symbol: format!("{} -> {}", caller, callee),
+            provenance,
+            type_semantic,
+            syscall_semantic,
+            resolutions: Vec::new(),
+            safety_score,
+            reason,
+        }
+    }
+
     /// Computes the combined safety score from three dimensions.
     fn compute_safety_score(
         provenance: PointerProvenance,

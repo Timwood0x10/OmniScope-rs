@@ -17,6 +17,7 @@
 
 use omniscope_ir::IRModule;
 use omniscope_semantics::{FamilyRegistry, LanguageDetector};
+use omniscope_types::call_graph_types::{is_dangerous, is_libc, FunctionKind};
 use omniscope_types::config::Language;
 use std::collections::HashMap;
 
@@ -107,6 +108,67 @@ pub struct ModuleIndex {
     pub family_registry: FamilyRegistry,
     /// Pre-built LanguageDetector (shared across passes to avoid repeated construction).
     pub language_detector: LanguageDetector,
+    /// Cached SyscallSemantic classification for each unique callee name.
+    /// Avoids repeated string matching in downstream passes.
+    pub syscall_cache: HashMap<String, omniscope_semantics::SyscallSemantic>,
+    /// Cached FunctionKind classification for each unique function name.
+    /// Avoids repeated classify_function() calls in call_graph and other passes.
+    pub function_kind_cache: HashMap<String, FunctionKind>,
+}
+
+/// Check if a function name is a language runtime intrinsic (cached version).
+///
+/// This is a copy of the function in call_graph.rs, used to avoid
+/// importing it and creating a circular dependency.
+fn is_runtime_intrinsic_cached(name: &str, language: Language) -> bool {
+    match language {
+        Language::Rust => {
+            name.starts_with("__rust_")
+                || name.starts_with("_ZN4core")
+                || name.starts_with("_ZN5alloc")
+        }
+        Language::C => {
+            name.starts_with("__libc_")
+                || name.starts_with("__cxa_")
+                || name.starts_with("_Unwind_")
+                || name.starts_with("_tlv_")
+        }
+        Language::Cpp => {
+            name.starts_with("__cxxabiv1")
+                || name.starts_with("__cxa_")
+                || name.starts_with("__gxx_")
+        }
+        _ => false,
+    }
+}
+
+/// Classify a function based on its name, declaration status, and language (cached version).
+///
+/// This is a copy of the function in call_graph.rs, used to pre-compute
+/// function kinds during ModuleIndex construction.
+fn classify_function_cached(name: &str, is_declaration: bool, language: Language) -> FunctionKind {
+    // Known libc functions are trusted regardless of declaration status
+    if is_libc(name) {
+        return FunctionKind::LibC;
+    }
+
+    // Dangerous functions are always treated as potential FFI boundaries
+    if is_dangerous(name) {
+        return FunctionKind::ExternalUnknown;
+    }
+
+    // Language runtime intrinsics are external
+    if is_runtime_intrinsic_cached(name, language) {
+        return FunctionKind::ExternalUnknown;
+    }
+
+    // Functions with bodies are internal to the analyzed module
+    if !is_declaration {
+        return FunctionKind::Internal;
+    }
+
+    // Declarations without bodies: could be external FFI targets
+    FunctionKind::ExternalUnknown
 }
 
 impl ModuleIndex {
@@ -309,6 +371,27 @@ impl ModuleIndex {
             .map(|m| m.name.clone())
             .collect();
 
+        // Pre-compute SyscallSemantic classification for each unique callee name.
+        // This avoids repeated string matching in downstream passes (semantic tree,
+        // FFI boundary detection, etc.).
+        let mut syscall_cache: HashMap<String, omniscope_semantics::SyscallSemantic> =
+            HashMap::new();
+        for call_meta in &call_metas {
+            syscall_cache
+                .entry(call_meta.callee_name.clone())
+                .or_insert_with(|| {
+                    omniscope_semantics::SyscallSemantic::classify(&call_meta.callee_name)
+                });
+        }
+
+        // Pre-compute FunctionKind classification for each unique function name.
+        // This avoids repeated classify_function() calls in call_graph and other passes.
+        let mut function_kind_cache: HashMap<String, FunctionKind> = HashMap::new();
+        for (name, meta) in &function_metas {
+            let kind = classify_function_cached(name, meta.is_declaration, meta.language);
+            function_kind_cache.insert(name.clone(), kind);
+        }
+
         Self {
             call_metas,
             function_metas,
@@ -320,6 +403,8 @@ impl ModuleIndex {
             total_call_count,
             family_registry: registry,
             language_detector: detector,
+            syscall_cache,
+            function_kind_cache,
         }
     }
 
@@ -367,6 +452,40 @@ impl ModuleIndex {
     /// Returns all function profiles that call allocation functions.
     pub fn alloc_functions(&self) -> &[String] {
         &self.alloc_caller_functions
+    }
+
+    /// Returns the cached SyscallSemantic classification for a callee name.
+    ///
+    /// This avoids repeated string matching in downstream passes.
+    /// Returns `SyscallSemantic::Unknown` if the callee is not in the cache.
+    pub fn syscall_semantic(&self, callee: &str) -> omniscope_semantics::SyscallSemantic {
+        self.syscall_cache
+            .get(callee.trim_start_matches('@'))
+            .copied()
+            .unwrap_or(omniscope_semantics::SyscallSemantic::Unknown)
+    }
+
+    /// Returns the cached FunctionKind classification for a function name.
+    ///
+    /// This avoids repeated classify_function() calls in downstream passes.
+    /// Returns `None` if the function is not in the cache.
+    pub fn function_kind(&self, name: &str) -> Option<FunctionKind> {
+        self.function_kind_cache
+            .get(name.trim_start_matches('@'))
+            .copied()
+    }
+
+    /// Returns whether a callee is a known allocation function (cached).
+    pub fn is_alloc_function(&self, callee: &str) -> bool {
+        matches!(
+            self.syscall_semantic(callee),
+            omniscope_semantics::SyscallSemantic::MemoryManagement
+        )
+    }
+
+    /// Returns whether a callee involves memory ownership (cached).
+    pub fn involves_memory_ownership(&self, callee: &str) -> bool {
+        self.syscall_semantic(callee).involves_memory_ownership()
     }
 }
 

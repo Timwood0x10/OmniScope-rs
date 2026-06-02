@@ -39,7 +39,10 @@ pub use kind::{SemanticKind, SemanticResolution};
 pub use node::SemanticNode;
 pub use provenance::PointerProvenance;
 pub use syscall::SyscallSemantic;
-pub use tree::{build_semantic_tree, infer_provenance_from_context, SemanticTree};
+pub use tree::{
+    build_semantic_tree, build_semantic_tree_with_cache, infer_provenance_from_context,
+    infer_provenance_from_syscall, SemanticTree,
+};
 pub use type_semantic::TypeSemantic;
 
 // ── Tests ──

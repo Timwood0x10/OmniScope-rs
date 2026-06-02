@@ -30,8 +30,8 @@ C, C++, Rust, Zig, Go, Python, Java, C# — with automatic language detection fr
 ```
 User IR (.ll / .bc)
        │
+       ├── Plan C: llvm-sys C API (feature-gated, direct IRModule construction)
        ├── Plan A: SafetyExportPass.so (C++ LLVM Pass → enriched JSON)
-       ├── Plan C: llvm-sys C API (direct IR model construction)
        └── Plan B (fallback): Pure-text IR parser (zero deps)
 ```
 

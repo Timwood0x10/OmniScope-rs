@@ -39,6 +39,14 @@ impl FFIBoundaryDetector {
         }
     }
 
+    /// Creates a new detector with a pre-existing language detector.
+    ///
+    /// This is useful when a cached `LanguageDetector` is available
+    /// from `ModuleIndex`, avoiding redundant construction.
+    pub fn with_detector(detector: LanguageDetector) -> Self {
+        Self { detector }
+    }
+
     /// Detect the caller language with an optional C fallback.
     ///
     /// When `caller_is_defined` is true and the detected language is

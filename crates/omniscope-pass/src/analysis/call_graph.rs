@@ -121,13 +121,42 @@ impl Pass for CallGraphPass {
                 }
             }
         } else {
-            // Fallback path: recompute metadata (legacy behavior)
+            // Fallback path: recompute metadata (legacy behavior).
+            // Uses a language cache to avoid redundant `detect_from_function`
+            // calls for the same function name across nodes and edges.
             let detector = LanguageDetector::new();
+            let mut lang_cache: std::collections::HashMap<String, Language> =
+                std::collections::HashMap::with_capacity(
+                    module.functions.len() + module.declarations.len() + module.calls.len() * 2,
+                );
+
+            // Helper: detect and cache language for a function name.
+            let detect_cached = |cache: &mut std::collections::HashMap<String, Language>,
+                                 detector: &LanguageDetector,
+                                 name: &str|
+             -> Language {
+                if let Some(&lang) = cache.get(name) {
+                    return lang;
+                }
+                let lang = detector.detect_from_function(name);
+                cache.insert(name.to_string(), lang);
+                lang
+            };
 
             // Phase 1: Build function nodes from definitions and declarations
-            for (name, func) in &module.functions {
-                let language = detector.detect_from_function(name);
-                let kind = classify_function(name, false, language);
+            // in a single merged iteration chain.
+            let def_iter = module
+                .functions
+                .iter()
+                .map(|(name, func)| (name, func, false));
+            let decl_iter = module
+                .declarations
+                .iter()
+                .map(|(name, func)| (name, func, true));
+
+            for (name, func, is_declaration) in def_iter.chain(decl_iter) {
+                let language = detect_cached(&mut lang_cache, &detector, name);
+                let kind = classify_function(name, is_declaration, language);
                 nodes.push(CallGraphNode {
                     name: name.clone(),
                     kind,
@@ -137,22 +166,10 @@ impl Pass for CallGraphPass {
                 });
             }
 
-            for (name, func) in &module.declarations {
-                let language = detector.detect_from_function(name);
-                let kind = classify_function(name, true, language);
-                nodes.push(CallGraphNode {
-                    name: name.clone(),
-                    kind,
-                    param_count: func.params.len(),
-                    is_declaration: func.is_declaration,
-                    language: Some(language),
-                });
-            }
-
-            // Phase 2: Build edges from call instructions
+            // Phase 2+3: Build edges and detect FFI boundaries in one pass.
             for call in &module.calls {
-                let caller_lang = detector.detect_from_function(&call.caller);
-                let callee_lang = detector.detect_from_function(&call.callee);
+                let caller_lang = detect_cached(&mut lang_cache, &detector, &call.caller);
+                let callee_lang = detect_cached(&mut lang_cache, &detector, &call.callee);
                 let is_cross_lang = caller_lang != Language::Unknown
                     && callee_lang != Language::Unknown
                     && caller_lang != callee_lang;
@@ -165,7 +182,7 @@ impl Pass for CallGraphPass {
                     callee_lang: Some(callee_lang),
                 });
 
-                // Phase 3: Detect FFI boundaries from cross-language edges
+                // Detect FFI boundaries from cross-language edges inline
                 if is_cross_lang {
                     let is_ffi =
                         is_ffi_boundary(&call.caller, &call.callee, caller_lang, callee_lang);

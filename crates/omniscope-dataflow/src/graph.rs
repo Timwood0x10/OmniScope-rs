@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Data flow graph for analysis
+///
+/// Uses CSR (Compressed Sparse Row) format after `freeze()` for cache-friendly
+/// successor/predecessor queries. Before freezing, uses HashMap-based adjacency
+/// lists for incremental construction.
 pub struct DataFlowGraph {
     /// All nodes in the graph
     nodes: HashMap<NodeId, DataNode>,
@@ -25,6 +29,22 @@ pub struct DataFlowGraph {
     forward_adj: HashMap<NodeId, Vec<NodeId>>,
     /// Reverse adjacency: node -> predecessor node IDs (O(1) lookup for predecessors)
     reverse_adj: HashMap<NodeId, Vec<NodeId>>,
+
+    // ── Frozen CSR fields (populated by `freeze()`) ──────────────────
+    //
+    // CSR format stores adjacency in two contiguous arrays:
+    //   offsets[i]..offsets[i+1] indexes into `forward_targets` for node i's successors
+    //   offsets[i]..offsets[i+1] indexes into `reverse_targets` for node i's predecessors
+    //
+    // This eliminates per-node HashMap/Vec allocations and improves cache locality.
+    /// CSR offsets for forward adjacency (len = max_node_id + 2)
+    frozen_forward_offsets: Vec<usize>,
+    /// Contiguous successor node IDs for forward adjacency
+    frozen_forward_targets: Vec<NodeId>,
+    /// CSR offsets for reverse adjacency (len = max_node_id + 2)
+    frozen_reverse_offsets: Vec<usize>,
+    /// Contiguous predecessor node IDs for reverse adjacency
+    frozen_reverse_targets: Vec<NodeId>,
 }
 
 impl DataFlowGraph {
@@ -39,6 +59,10 @@ impl DataFlowGraph {
             next_edge_id: 0,
             forward_adj: HashMap::new(),
             reverse_adj: HashMap::new(),
+            frozen_forward_offsets: Vec::new(),
+            frozen_forward_targets: Vec::new(),
+            frozen_reverse_offsets: Vec::new(),
+            frozen_reverse_targets: Vec::new(),
         }
     }
 
@@ -60,6 +84,10 @@ impl DataFlowGraph {
     /// a debug-level warning and the edge is skipped for those nodes' edge
     /// lists, but still stored in `self.edges` and adjacency maps for
     /// diagnostic purposes.
+    ///
+    /// **Note:** Adding edges invalidates any frozen CSR state (from a prior
+    /// `freeze()` call). The graph must be re-frozen before CSR-accelerated
+    /// queries are available again.
     pub fn add_edge(&mut self, edge: DataEdge) -> EdgeId {
         let id = self.next_edge_id;
         self.next_edge_id += 1;
@@ -81,6 +109,9 @@ impl DataFlowGraph {
 
         let mut edge = edge;
         edge.id = id;
+
+        // Invalidate frozen CSR — adjacency has changed
+        self.invalidate_csr();
 
         // Update node connectivity
         if let Some(from_node) = self.nodes.get_mut(&from) {
@@ -158,14 +189,149 @@ impl DataFlowGraph {
         self.edges.values().cloned().collect()
     }
 
-    /// Returns predecessors of a node (O(k) where k = number of predecessors)
-    pub fn predecessors(&self, node_id: NodeId) -> Vec<NodeId> {
-        self.reverse_adj.get(&node_id).cloned().unwrap_or_default()
+    /// Returns predecessors of a node.
+    ///
+    /// When the graph is frozen (CSR), returns a zero-copy slice into the
+    /// contiguous predecessor array — O(1) with no allocation.
+    /// When unfrozen, clones from the HashMap adjacency list.
+    pub fn predecessors(&self, node_id: NodeId) -> &[NodeId] {
+        if !self.frozen_reverse_offsets.is_empty() {
+            let idx = node_id as usize;
+            if idx + 1 < self.frozen_reverse_offsets.len() {
+                let start = self.frozen_reverse_offsets[idx];
+                let end = self.frozen_reverse_offsets[idx + 1];
+                return &self.frozen_reverse_targets[start..end];
+            }
+            return &[];
+        }
+        self.reverse_adj
+            .get(&node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
-    /// Returns successors of a node (O(k) where k = number of successors)
-    pub fn successors(&self, node_id: NodeId) -> Vec<NodeId> {
-        self.forward_adj.get(&node_id).cloned().unwrap_or_default()
+    /// Returns successors of a node.
+    ///
+    /// When the graph is frozen (CSR), returns a zero-copy slice into the
+    /// contiguous successor array — O(1) with no allocation.
+    /// When unfrozen, clones from the HashMap adjacency list.
+    pub fn successors(&self, node_id: NodeId) -> &[NodeId] {
+        if !self.frozen_forward_offsets.is_empty() {
+            let idx = node_id as usize;
+            if idx + 1 < self.frozen_forward_offsets.len() {
+                let start = self.frozen_forward_offsets[idx];
+                let end = self.frozen_forward_offsets[idx + 1];
+                return &self.frozen_forward_targets[start..end];
+            }
+            return &[];
+        }
+        self.forward_adj
+            .get(&node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Freezes the graph into CSR (Compressed Sparse Row) format.
+    ///
+    /// Converts the HashMap-based adjacency lists into contiguous arrays
+    /// for cache-friendly traversal. After freezing:
+    /// - `successors()` and `predecessors()` return zero-copy slices.
+    /// - The HashMap adjacency lists are cleared to reclaim memory.
+    /// - Adding new edges via `add_edge()` will auto-invalidate CSR and
+    ///   require re-freezing.
+    ///
+    /// This is a one-time O(V + E) conversion. Call after all edges are added.
+    pub fn freeze(&mut self) {
+        let max_id = self.next_node_id as usize;
+
+        // Build forward CSR
+        let mut fwd_counts = vec![0usize; max_id + 1];
+        for (&src, neighbors) in &self.forward_adj {
+            fwd_counts[src as usize] = neighbors.len();
+        }
+
+        let mut fwd_offsets = vec![0usize; max_id + 2];
+        for i in 0..=max_id {
+            fwd_offsets[i + 1] = fwd_offsets[i] + fwd_counts[i];
+        }
+
+        let total_fwd = fwd_offsets[max_id + 1];
+        let mut fwd_targets = vec![0u64; total_fwd];
+        let mut fwd_pos = fwd_offsets.clone();
+
+        for (&src, neighbors) in &self.forward_adj {
+            let idx = src as usize;
+            for &dst in neighbors {
+                let pos = fwd_pos[idx];
+                fwd_targets[pos] = dst;
+                fwd_pos[idx] += 1;
+            }
+        }
+
+        // Build reverse CSR
+        let mut rev_counts = vec![0usize; max_id + 1];
+        for (&dst, neighbors) in &self.reverse_adj {
+            rev_counts[dst as usize] = neighbors.len();
+        }
+
+        let mut rev_offsets = vec![0usize; max_id + 2];
+        for i in 0..=max_id {
+            rev_offsets[i + 1] = rev_offsets[i] + rev_counts[i];
+        }
+
+        let total_rev = rev_offsets[max_id + 1];
+        let mut rev_targets = vec![0u64; total_rev];
+        let mut rev_pos = rev_offsets.clone();
+
+        for (&dst, neighbors) in &self.reverse_adj {
+            let idx = dst as usize;
+            for &src in neighbors {
+                let pos = rev_pos[idx];
+                rev_targets[pos] = src;
+                rev_pos[idx] += 1;
+            }
+        }
+
+        // Store CSR and free HashMap adjacency lists
+        self.frozen_forward_offsets = fwd_offsets;
+        self.frozen_forward_targets = fwd_targets;
+        self.frozen_reverse_offsets = rev_offsets;
+        self.frozen_reverse_targets = rev_targets;
+        self.forward_adj.clear();
+        self.reverse_adj.clear();
+    }
+
+    /// Returns whether the graph is frozen in CSR format.
+    pub fn is_frozen(&self) -> bool {
+        !self.frozen_forward_offsets.is_empty()
+    }
+
+    /// Invalidates frozen CSR data (called internally when edges are added).
+    fn invalidate_csr(&mut self) {
+        if self.frozen_forward_offsets.is_empty() {
+            return;
+        }
+        // Rebuild HashMap adjacency from frozen CSR before clearing
+        let max_id = self.next_node_id as usize;
+        for node_idx in 0..max_id {
+            let start = self.frozen_forward_offsets[node_idx];
+            let end = self.frozen_forward_offsets[node_idx + 1];
+            if start < end {
+                let neighbors: Vec<NodeId> = self.frozen_forward_targets[start..end].to_vec();
+                self.forward_adj.insert(node_idx as NodeId, neighbors);
+            }
+
+            let r_start = self.frozen_reverse_offsets[node_idx];
+            let r_end = self.frozen_reverse_offsets[node_idx + 1];
+            if r_start < r_end {
+                let neighbors: Vec<NodeId> = self.frozen_reverse_targets[r_start..r_end].to_vec();
+                self.reverse_adj.insert(node_idx as NodeId, neighbors);
+            }
+        }
+        self.frozen_forward_offsets.clear();
+        self.frozen_forward_targets.clear();
+        self.frozen_reverse_offsets.clear();
+        self.frozen_reverse_targets.clear();
     }
 
     /// Clears the graph
@@ -174,6 +340,10 @@ impl DataFlowGraph {
         self.edges.clear();
         self.forward_adj.clear();
         self.reverse_adj.clear();
+        self.frozen_forward_offsets.clear();
+        self.frozen_forward_targets.clear();
+        self.frozen_reverse_offsets.clear();
+        self.frozen_reverse_targets.clear();
         self.entry_node = None;
         self.exit_node = None;
         self.next_node_id = 0;
@@ -608,5 +778,315 @@ mod tests {
         assert_eq!(loc.base, "base_ptr", "base must match the provided string");
         assert_eq!(loc.offset, None, "offset must default to None");
         assert_eq!(loc.size, None, "size must default to None");
+    }
+
+    // ── CSR (Compressed Sparse Row) freeze tests ─────────────────────
+
+    /// Objective: Verify that a newly created graph is not frozen.
+    /// Invariants: is_frozen() == false for a fresh graph.
+    #[test]
+    fn test_not_frozen_by_default() {
+        let graph = DataFlowGraph::new();
+        assert!(!graph.is_frozen(), "New graph must not be frozen");
+    }
+
+    /// Objective: Verify freeze() transitions graph to frozen state.
+    /// Invariants: After freeze(), is_frozen() == true.
+    #[test]
+    fn test_freeze_transitions_to_frozen() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+
+        graph.freeze();
+
+        assert!(
+            graph.is_frozen(),
+            "Graph must be frozen after calling freeze()"
+        );
+    }
+
+    /// Objective: Verify that freeze on empty graph does not panic.
+    /// Invariants: freeze() on an empty graph is a no-op, graph remains unfrozen.
+    #[test]
+    fn test_freeze_empty_graph_noop() {
+        let mut graph = DataFlowGraph::new();
+        graph.freeze();
+        // Empty graph has no nodes, CSR is vacuously empty
+        assert!(
+            graph.is_frozen(),
+            "freeze() on empty graph should still mark as frozen (vacuously)"
+        );
+    }
+
+    /// Objective: Verify that CSR successors match HashMap successors after freeze.
+    /// Invariants: successors() returns identical node IDs before and after freeze.
+    #[test]
+    fn test_csr_successors_match_hashmap() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        let n2 = graph.add_node(DataNode::new(ValueType::Variable("c".to_string())));
+        let n3 = graph.add_node(DataNode::new(ValueType::Variable("d".to_string())));
+
+        graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(n0, n2, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(n1, n3, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(n2, n3, EdgeType::Assignment));
+
+        // Snapshot pre-freeze successors
+        let pre_succ_n0 = graph.successors(n0).to_vec();
+        let pre_succ_n1 = graph.successors(n1).to_vec();
+        let pre_succ_n2 = graph.successors(n2).to_vec();
+
+        let pre_pred_n3 = graph.predecessors(n3).to_vec();
+
+        graph.freeze();
+
+        // Verify CSR successors match pre-freeze values
+        assert_eq!(
+            graph.successors(n0),
+            pre_succ_n0.as_slice(),
+            "CSR successors for n0 must match pre-freeze"
+        );
+        assert_eq!(
+            graph.successors(n1),
+            pre_succ_n1.as_slice(),
+            "CSR successors for n1 must match pre-freeze"
+        );
+        assert_eq!(
+            graph.successors(n2),
+            pre_succ_n2.as_slice(),
+            "CSR successors for n2 must match pre-freeze"
+        );
+        assert!(
+            graph.successors(n3).is_empty(),
+            "n3 must have no successors"
+        );
+
+        // Verify CSR predecessors match pre-freeze values
+        assert!(
+            graph.predecessors(n0).is_empty(),
+            "n0 must have no predecessors"
+        );
+        assert_eq!(
+            graph.predecessors(n3),
+            pre_pred_n3.as_slice(),
+            "CSR predecessors for n3 must match pre-freeze"
+        );
+    }
+
+    /// Objective: Verify that CSR handles self-loops correctly.
+    /// Invariants: A self-loop node must appear in its own successors list after freeze.
+    #[test]
+    fn test_csr_self_loop() {
+        let mut graph = DataFlowGraph::new();
+        let n = graph.add_node(DataNode::new(ValueType::Variable("loop".to_string())));
+        graph.add_edge(DataEdge::new(n, n, EdgeType::Assignment));
+
+        graph.freeze();
+
+        let succs = graph.successors(n);
+        assert_eq!(
+            succs.len(),
+            1,
+            "Self-loop node must have exactly 1 successor"
+        );
+        assert_eq!(succs[0], n, "Self-loop successor must be the node itself");
+
+        let preds = graph.predecessors(n);
+        assert_eq!(
+            preds.len(),
+            1,
+            "Self-loop node must have exactly 1 predecessor"
+        );
+        assert_eq!(preds[0], n, "Self-loop predecessor must be the node itself");
+    }
+
+    /// Objective: Verify that add_edge after freeze invalidates CSR and
+    /// requires re-freezing for CSR queries.
+    /// Invariants: After add_edge, is_frozen()==false; after re-freeze,
+    /// successors reflect the new edge.
+    #[test]
+    fn test_add_edge_invalidates_csr() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        let n2 = graph.add_node(DataNode::new(ValueType::Variable("c".to_string())));
+
+        graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+        graph.freeze();
+
+        assert!(graph.is_frozen(), "Must be frozen after freeze()");
+
+        // Add a new edge — should invalidate CSR
+        graph.add_edge(DataEdge::new(n0, n2, EdgeType::Assignment));
+        assert!(
+            !graph.is_frozen(),
+            "CSR must be invalidated after add_edge()"
+        );
+
+        // Re-freeze and verify new edge is included
+        graph.freeze();
+        assert!(graph.is_frozen(), "Must be frozen after re-freeze()");
+
+        let succs = graph.successors(n0);
+        assert!(succs.contains(&n1), "n0 successors must still contain n1");
+        assert!(succs.contains(&n2), "n0 successors must now include n2");
+    }
+
+    /// Objective: Verify that clear() resets frozen CSR state.
+    /// Invariants: After clear(), is_frozen()==false, node_count()==0.
+    #[test]
+    fn test_clear_resets_frozen_state() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".to_string())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".to_string())));
+        graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+        graph.freeze();
+
+        assert!(graph.is_frozen(), "Must be frozen before clear()");
+
+        graph.clear();
+
+        assert!(!graph.is_frozen(), "Must not be frozen after clear()");
+        assert_eq!(graph.node_count(), 0, "Must have 0 nodes after clear()");
+    }
+
+    /// Objective: Verify CSR on a larger diamond DAG with multiple edges.
+    /// Invariants: All successor/predecessor relationships are preserved
+    /// through the freeze conversion for a non-trivial graph.
+    #[test]
+    fn test_csr_diamond_dag() {
+        // Build: entry → left, entry → right, left → merge, right → merge
+        let mut graph = DataFlowGraph::new();
+        let entry = graph.add_node(DataNode::new(ValueType::Variable("entry".into())));
+        let left = graph.add_node(DataNode::new(ValueType::Variable("left".into())));
+        let right = graph.add_node(DataNode::new(ValueType::Variable("right".into())));
+        let merge = graph.add_node(DataNode::new(ValueType::Variable("merge".into())));
+
+        graph.add_edge(DataEdge::new(entry, left, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(entry, right, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(left, merge, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(right, merge, EdgeType::Assignment));
+
+        graph.freeze();
+
+        // Entry has 2 successors
+        let entry_succs = graph.successors(entry);
+        assert_eq!(entry_succs.len(), 2, "Entry must have 2 successors");
+        assert!(entry_succs.contains(&left), "Entry must reach left");
+        assert!(entry_succs.contains(&right), "Entry must reach right");
+
+        // Merge has 2 predecessors
+        let merge_preds = graph.predecessors(merge);
+        assert_eq!(merge_preds.len(), 2, "Merge must have 2 predecessors");
+        assert!(
+            merge_preds.contains(&left),
+            "Merge must be reached from left"
+        );
+        assert!(
+            merge_preds.contains(&right),
+            "Merge must be reached from right"
+        );
+
+        // Entry has no predecessors
+        assert!(
+            graph.predecessors(entry).is_empty(),
+            "Entry must have no predecessors"
+        );
+
+        // Merge has no successors
+        assert!(
+            graph.successors(merge).is_empty(),
+            "Merge must have no successors"
+        );
+    }
+
+    /// Objective: Verify that CSR produces zero-copy slices (same pointer identity).
+    /// Invariants: Two calls to successors() with the same node return
+    /// the same underlying memory slice (not just equal content).
+    #[test]
+    fn test_csr_returns_same_slice() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".into())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".into())));
+        graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+        graph.freeze();
+
+        let slice1 = graph.successors(n0);
+        let slice2 = graph.successors(n0);
+
+        assert_eq!(
+            slice1.as_ptr(),
+            slice2.as_ptr(),
+            "CSR must return the same slice pointer for repeated queries (zero-copy)"
+        );
+    }
+
+    /// Objective: Verify that freeze preserves data through a cycle.
+    /// Invariants: In a cycle a→b→c→a, each node's successor and predecessor
+    /// lists are identical before and after freeze.
+    #[test]
+    fn test_csr_preserves_cycle() {
+        let mut graph = DataFlowGraph::new();
+        let a = graph.add_node(DataNode::new(ValueType::Variable("a".into())));
+        let b = graph.add_node(DataNode::new(ValueType::Variable("b".into())));
+        let c = graph.add_node(DataNode::new(ValueType::Variable("c".into())));
+
+        graph.add_edge(DataEdge::new(a, b, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(b, c, EdgeType::Assignment));
+        graph.add_edge(DataEdge::new(c, a, EdgeType::Assignment));
+
+        let pre_a_succ = graph.successors(a).to_vec();
+        let pre_b_succ = graph.successors(b).to_vec();
+        let pre_c_succ = graph.successors(c).to_vec();
+        let pre_a_pred = graph.predecessors(a).to_vec();
+        let pre_b_pred = graph.predecessors(b).to_vec();
+        let pre_c_pred = graph.predecessors(c).to_vec();
+
+        graph.freeze();
+
+        assert_eq!(graph.successors(a), pre_a_succ.as_slice(), "a successors");
+        assert_eq!(graph.successors(b), pre_b_succ.as_slice(), "b successors");
+        assert_eq!(graph.successors(c), pre_c_succ.as_slice(), "c successors");
+        assert_eq!(
+            graph.predecessors(a),
+            pre_a_pred.as_slice(),
+            "a predecessors"
+        );
+        assert_eq!(
+            graph.predecessors(b),
+            pre_b_pred.as_slice(),
+            "b predecessors"
+        );
+        assert_eq!(
+            graph.predecessors(c),
+            pre_c_pred.as_slice(),
+            "c predecessors"
+        );
+    }
+
+    /// Objective: Verify that querying successors for a non-existent node
+    /// after freeze returns an empty slice (no panic).
+    /// Invariants: CSR query for out-of-range node returns &[], no panic.
+    #[test]
+    fn test_csr_out_of_range_node_returns_empty() {
+        let mut graph = DataFlowGraph::new();
+        let n0 = graph.add_node(DataNode::new(ValueType::Variable("a".into())));
+        let n1 = graph.add_node(DataNode::new(ValueType::Variable("b".into())));
+        graph.add_edge(DataEdge::new(n0, n1, EdgeType::Assignment));
+        graph.freeze();
+
+        // Node ID 999 was never added
+        assert!(
+            graph.successors(999).is_empty(),
+            "CSR query for non-existent node must return empty slice"
+        );
+        assert!(
+            graph.predecessors(999).is_empty(),
+            "CSR predecessor query for non-existent node must return empty slice"
+        );
     }
 }

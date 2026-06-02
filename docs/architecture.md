@@ -155,12 +155,11 @@ OmniScope-rs/
 │   │
 │   ├── omniscope-ir/
 │   │   └── src/
-│   │       ├── ir_model.rs           # IRModule / IRFunction / IRBasicBlock / IRInstruction 模型
-│   │       ├── parser.rs             # 文本 LLVM IR 解析器（Plan B 路径）
-│   │       ├── loader_v2.rs          # IRModule 加载器（JSON Plan A 优先，降级到 Plan B）
+│   │       ├── ir_model.rs           # JSON IRModuleModel 与 parser::IRModule 转换模型
+│   │       ├── parser.rs             # 文本 LLVM IR 解析器（.ll；.bc 通过 llvm-dis 转换）
+│   │       ├── loader_v2.rs          # 统一 IR 加载器（Auto / llvm-sys / C++ Pass / text parser）
 │   │       ├── instruction_parser.rs # 单条指令文本解析
 │   │       ├── location.rs           # 源码位置信息（文件/行/列）
-│   │       ├── platform.rs           # 平台信息（ABI、目标三元组）
 │   │       └── llvm_sys_adapter.rs   # 可选 llvm-sys 后端适配器（feature-gated）
 │   │
 │   ├── omniscope-types/
@@ -194,37 +193,48 @@ OmniScope-rs/
 
 ---
 
-## 4. 两条 IR 加载路径
+## 4. IR 加载路径
 
-`omniscope-ir` 支持两种加载方式，由 `loader_v2.rs` 统一调度：
+`omniscope-ir` 的 CLI/管线入口使用 `loader_v2.rs` 统一调度。当前支持显式策略 `llvm-sys`、`cpp-pass`、`text-parser`，以及自动探测策略 `auto`。
+
+### Plan C — `llvm-sys`（feature-gated）
+
+```
+  *.ll / *.bc 文件
+        │
+        │  llvm_sys_adapter.rs（LLVM C API）
+        ▼
+    IRModule（内存中统一 IR 表示）
+```
+
+- **启用条件**：使用 `--features llvm-backend` 编译，并且 LLVM C API 可用
+- **当前状态**：由 `LoadStrategy::LlvmSys` 或 `LoadStrategy::Auto` 调用；未启用 feature 时不会参与 auto 探测
 
 ### Plan A — JSON（优先路径）
 
 ```
-C++ LLVM Pass（编译期插件）
+C++ SafetyExportPass（通过 opt 动态加载插件）
         │
-        │  生成 JSON 序列化的 IR 结构
+        │  stdout 输出 JSON 序列化的 IR 结构
         ▼
-  *.ir.json 文件
-        │
-        │  IRModuleModel::from_json_str()
+  IRModuleModel::from_json_str()
         ▼
   IRModuleModel（中间序列化模型）
         │
-        │  Into<IRModule>（类型转换）
+        │  to_ir_module()（类型转换）
         ▼
     IRModule（内存中统一 IR 表示）
 ```
 
 - **优点**：保留完整类型信息、调试信息（DWARF）、语言元数据；解析速度快
-- **适用场景**：与 clang/rustc 构建集成的 CI 流水线
+- **启用条件**：能找到 `opt` 和 `SafetyExportPass` 插件
 
 ### Plan B — 文本 `.ll`（降级路径）
 
 ```
-  *.ll 文件（LLVM IR 文本格式）
+  *.ll 文件，或 *.bc 经 llvm-dis 转换后的文本 IR
         │
-        │  parser.rs（手写递归下降解析器）
+        │  parser.rs（文本解析器）
         │  instruction_parser.rs（逐条指令解析）
         ▼
     IRModule（内存中统一 IR 表示）
@@ -238,14 +248,14 @@ C++ LLVM Pass（编译期插件）
 `loader_v2.rs` 按以下顺序决定加载路径：
 
 ```
-输入路径
+LoadStrategy::Auto
     │
-    ├─ 存在对应 .ir.json 文件？ ──是──► Plan A（JSON 加载）
-    │
-    └─ 否 ──────────────────────────► Plan B（文本解析）
+    ├─ llvm-sys 可用？ ─────────────► Plan C（LLVM C API）
+    ├─ opt + SafetyExportPass 可用？ ─► Plan A（C++ Pass JSON）
+    └─ 否 / 前两者失败 ─────────────► Plan B（文本解析）
 ```
 
-两条路径最终均产出相同的 `IRModule` 结构，下游 Pass 无需感知来源差异。
+所有加载路径最终均产出相同的 `IRModule` 结构，下游 Pass 无需感知来源差异。
 
 ---
 
@@ -255,13 +265,18 @@ C++ LLVM Pass（编译期插件）
 CLI 参数（文件路径 / 配置）
         │
         ▼
+   load_ir(path, strategy)
+        │
+        ▼
+   IRModule
+        │
+        ▼
+   Pipeline::set_ir_module()
+        │
+        ▼
    Pipeline::run()
         │
-        ├──► loader_v2（IR 加载，Plan A 或 Plan B）
-        │          │
-        │          └──► IRModule
-        │
-        ├──► PassManager（拓扑顺序执行 Pass）
+        ├──► PassManager（拓扑顺序执行 Pass；parallel 模式按依赖层级并行）
         │          │
         │          ├── SurfaceClassifierPass
         │          │       └── language_detector + surface_classifier

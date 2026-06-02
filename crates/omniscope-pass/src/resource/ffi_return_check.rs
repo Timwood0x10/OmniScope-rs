@@ -55,8 +55,28 @@ impl Pass for FfiReturnCheckPass {
         // Retrieve the IRModule from context
         let ir_module: Option<IRModule> = ctx.get("ir_module");
         if let Some(ref module) = ir_module {
-            for (func_name, body) in &module.function_bodies {
-                scan_function_body(module, func_name, body, &mut issues, ctx);
+            // Try to use ModuleIndex for FFI function pre-filtering
+            let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
+
+            if let Some(ref index) = module_index {
+                // Fast path: only scan functions that have FFI calls
+                let ffi_functions = index.ffi_functions();
+                let ffi_set: std::collections::HashSet<&str> =
+                    ffi_functions.iter().map(|s| s.as_str()).collect();
+
+                for (func_name, body) in &module.function_bodies {
+                    let trimmed_name = func_name.trim_start_matches('@');
+                    // Skip functions that don't have FFI calls
+                    if !ffi_set.contains(trimmed_name) {
+                        continue;
+                    }
+                    scan_function_body(module, func_name, body, &mut issues, ctx);
+                }
+            } else {
+                // Fallback: scan all function bodies
+                for (func_name, body) in &module.function_bodies {
+                    scan_function_body(module, func_name, body, &mut issues, ctx);
+                }
             }
         }
 

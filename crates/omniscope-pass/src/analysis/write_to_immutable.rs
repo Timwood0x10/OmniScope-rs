@@ -56,9 +56,22 @@ impl Pass for WriteToImmutablePass {
         // Build semantic tree for R-0~R-8 pattern suppression
         let mut semantic_tree = SemanticTree::new();
 
+        // Try to use ModuleIndex for function pre-filtering
+        let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
+
         // Scan for store instructions that might be writing to immutable memory.
         // Store instructions live in function_bodies, not in module.calls.
         for (func_name, body) in &module.function_bodies {
+            // Use ModuleIndex to skip functions without store instructions
+            if let Some(ref index) = module_index {
+                let trimmed_name = func_name.trim_start_matches('@');
+                if let Some(meta) = index.function_meta(trimmed_name) {
+                    if !meta.has_stores {
+                        continue;
+                    }
+                }
+            }
+
             for inst in body.instructions_of_kind(omniscope_ir::IRInstructionKind::Store) {
                 nodes_analyzed += 1;
 
@@ -152,6 +165,23 @@ impl WriteToImmutablePass {
             return; // Not a violation - parameter is caller-owned
         }
 
+        // R-10: Check for stores to local SSA values (alloca'd stack
+        // variables, function parameters, or heap pointers). In LLVM IR,
+        // local SSA values (prefixed with `%`) are derived from alloca
+        // instructions, function parameters, or heap allocations — none
+        // of which are immutable. Truly immutable stores target global
+        // constants (`@` prefixed with `constant` keyword).
+        if self.is_store_to_local_ssa(callee) {
+            let resolution = SemanticResolution {
+                kind: SemanticKind::HeapProvenance,
+                confidence: 0.90,
+                evidence: "Store destination is a local SSA value (stack/param/heap)".to_string(),
+                pattern_id: "R-10",
+            };
+            semantic_tree.add_resolution(symbol, resolution);
+            return; // Not a violation - local SSA values are mutable
+        }
+
         // If none of the suppression patterns match, emit the issue
         let issue_id = ctx.next_issue_id();
         let location = omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ffi>"), 0)
@@ -202,6 +232,32 @@ impl WriteToImmutablePass {
     fn is_function_parameter(&self, symbol: &str) -> bool {
         // Heuristic: symbols containing function parameter patterns
         symbol.contains("param") || symbol.contains("arg") || symbol.contains("parameter")
+    }
+
+    /// Checks if a store instruction targets a local SSA value.
+    ///
+    /// In LLVM IR, store instructions have the form:
+    /// ```text
+    /// store <type> <value>, ptr <dest>, <attributes>
+    /// ```
+    ///
+    /// If `<dest>` is a local SSA value (prefixed with `%`), the store
+    /// targets stack memory (alloca), a function parameter, or a heap
+    /// pointer — all of which are mutable. Truly immutable stores target
+    /// global constants (`@` prefixed with `constant`).
+    fn is_store_to_local_ssa(&self, raw_text: &str) -> bool {
+        // Parse "store ..., ptr %N, ..." pattern
+        // Find "ptr " followed by the destination operand
+        if let Some(ptr_pos) = raw_text.find(" ptr ") {
+            let after_ptr = &raw_text[ptr_pos + 5..];
+            // The destination operand follows "ptr "
+            // It starts with "%" for local SSA values or "@" for globals
+            let trimmed = after_ptr.trim_start();
+            trimmed.starts_with('%')
+        } else {
+            // If we can't parse the store format, don't suppress
+            false
+        }
     }
 }
 
@@ -288,6 +344,35 @@ mod tests {
         assert!(
             !pass.is_function_parameter("func->local"),
             "func->local should NOT be recognized as function parameter"
+        );
+    }
+
+    /// Objective: Verify stores to local SSA values are suppressed.
+    /// Invariants: Stores to `%` prefixed destinations (alloca, params, heap) must be suppressed.
+    #[test]
+    fn test_is_store_to_local_ssa() {
+        let pass = WriteToImmutablePass::new();
+        // Stores to local SSA values (alloca, function params, heap pointers)
+        assert!(
+            pass.is_store_to_local_ssa("store i8 -128, ptr %12, align 1, !tbaa !5"),
+            "Store to alloca-derived %12 must be local SSA"
+        );
+        assert!(
+            pass.is_store_to_local_ssa("store i8 %41, ptr %2, align 1, !tbaa !5"),
+            "Store to function param %2 must be local SSA"
+        );
+        assert!(
+            pass.is_store_to_local_ssa("store <8 x i8> %29, ptr %18, align 1, !tbaa !5"),
+            "Store to GEP-derived %18 must be local SSA"
+        );
+        assert!(
+            pass.is_store_to_local_ssa("store i32 %116, ptr %1, align 4, !tbaa !10"),
+            "Store to param %1 must be local SSA"
+        );
+        // Stores to global constants are NOT local SSA
+        assert!(
+            !pass.is_store_to_local_ssa("store i32 42, ptr @global_const, align 4"),
+            "Store to global @global_const must NOT be local SSA"
         );
     }
 }

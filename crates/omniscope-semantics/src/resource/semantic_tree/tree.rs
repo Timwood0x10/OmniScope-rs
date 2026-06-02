@@ -173,18 +173,45 @@ impl Default for SemanticTree {
 pub fn build_semantic_tree(
     ffi_calls: &[(String, String, bool)], // (caller, callee, is_external)
 ) -> SemanticTree {
+    build_semantic_tree_with_cache(ffi_calls, &std::collections::HashMap::new())
+}
+
+/// Builds a semantic tree from an IR module's FFI boundaries with a syscall cache.
+///
+/// This is the cached version that uses pre-computed `SyscallSemantic` classifications
+/// from `ModuleIndex` to avoid repeated string matching.
+///
+/// For each FFI call in the module, this function:
+/// 1. Looks up the callee's syscall semantic from the cache (or classifies it)
+/// 2. Infers the type semantic from mangled names
+/// 3. Determines pointer provenance from IR patterns
+/// 4. Computes a combined safety score
+pub fn build_semantic_tree_with_cache(
+    ffi_calls: &[(String, String, bool)], // (caller, callee, is_external)
+    syscall_cache: &std::collections::HashMap<String, SyscallSemantic>,
+) -> SemanticTree {
     let mut tree = SemanticTree::new();
 
     for (caller, callee, _is_external) in ffi_calls {
         // Extract type semantic from caller name (if Rust)
         let type_semantic = TypeSemantic::from_mangled_name(caller);
 
-        // Determine pointer provenance
-        // For now, use heuristic: if callee is a known syscall/function,
-        // the provenance depends on the call pattern
-        let provenance = infer_provenance_from_context(caller, callee);
+        // Use cached syscall semantic if available
+        let syscall_semantic = syscall_cache
+            .get(callee)
+            .copied()
+            .unwrap_or_else(|| SyscallSemantic::classify(callee));
 
-        let node = SemanticNode::for_ffi_call(caller, callee, provenance, type_semantic);
+        // Determine pointer provenance using cached syscall semantic
+        let provenance = infer_provenance_from_syscall(caller, syscall_semantic);
+
+        let node = SemanticNode::for_ffi_call_with_syscall(
+            caller,
+            callee,
+            provenance,
+            type_semantic,
+            syscall_semantic,
+        );
         tree.add_node(node);
     }
 
@@ -200,7 +227,14 @@ pub fn build_semantic_tree(
 /// - Calling malloc/__rust_alloc → returns heap provenance
 pub fn infer_provenance_from_context(caller: &str, callee: &str) -> PointerProvenance {
     let syscall = SyscallSemantic::classify(callee);
+    infer_provenance_from_syscall(caller, syscall)
+}
 
+/// Infers pointer provenance from the call context with a pre-computed syscall semantic.
+///
+/// This is the cached version that avoids repeated `SyscallSemantic::classify()`
+/// calls when the classification is already available.
+pub fn infer_provenance_from_syscall(caller: &str, syscall: SyscallSemantic) -> PointerProvenance {
     match syscall {
         // These return heap pointers
         SyscallSemantic::MemoryManagement => PointerProvenance::Heap,

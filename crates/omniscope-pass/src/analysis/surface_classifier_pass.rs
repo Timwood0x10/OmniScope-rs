@@ -46,7 +46,14 @@ impl Pass for SurfaceClassifierPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
         let classifier = SurfaceClassifier::new();
-        let detector = omniscope_semantics::LanguageDetector::new();
+
+        // Use cached LanguageDetector from ModuleIndex if available,
+        // otherwise create a new one.
+        let module_index: Option<crate::module_index::ModuleIndex> = ctx.get("module_index");
+        let detector = module_index
+            .as_ref()
+            .map(|idx| idx.language_detector.clone())
+            .unwrap_or_default();
 
         // Retrieve IR module
         let module: Option<IRModule> = ctx.get("ir_module");

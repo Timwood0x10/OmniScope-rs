@@ -148,8 +148,12 @@ impl RawFactCollectorPass {
         facts
     }
 
-    /// Extracts raw facts from an IRModule by scanning its call instructions
-    /// and declarations against the FamilyRegistry.
+    /// Extracts raw facts from an IRModule by scanning its call instructions,
+    /// declarations, and function definitions against the FamilyRegistry.
+    ///
+    /// Performs a **single merged traversal** over all three IR collections
+    /// (calls, declarations, functions) to avoid repeated iteration. Uses a
+    /// `HashSet` for O(1) deduplication instead of linear scan.
     ///
     /// Temporary trimmed strings are allocated from `pool` (arena) to avoid
     /// per-lookup heap allocations. The pool is assumed to have been reset
@@ -161,13 +165,14 @@ impl RawFactCollectorPass {
         let estimated = module.calls.len() + module.declarations.len() + module.functions.len();
         let mut facts = Vec::with_capacity(estimated);
 
+        // Track seen function names for O(1) dedup (replaces O(n) linear scan).
+        let mut seen_names: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(estimated.max(32));
+
         // Stable function ID assignment: each unique function name gets the
         // same func_id across all calls, so the same function is never
         // treated as different functions (which would cause LeakDetection
         // false positives).
-        //
-        // Keys are `&str` pointing into the arena pool — avoids String
-        // allocation for every HashMap insert.
         let mut func_name_to_id: std::collections::HashMap<String, u64> =
             std::collections::HashMap::with_capacity(estimated.max(32));
         let mut next_func_id: u64 = 0;
@@ -184,28 +189,47 @@ impl RawFactCollectorPass {
             }
         };
 
-        // Scan all call instructions for known alloc/dealloc symbols
+        // Helper: build a RawResourceFact from a registry entry.
+        // Returns None if the symbol is not alloc/dealloc/escape.
+        let make_fact = |entry: &omniscope_semantics::FamilyEntry,
+                         callee_name: &str,
+                         caller_name: &str,
+                         func_id: u64|
+         -> RawResourceFact {
+            let is_acquire = matches!(
+                entry.effect,
+                omniscope_semantics::SymbolEffect::Acquire
+                    | omniscope_semantics::SymbolEffect::Retain
+                    | omniscope_semantics::SymbolEffect::Reclaim
+            );
+            let is_escape = matches!(entry.effect, omniscope_semantics::SymbolEffect::Escape);
+            let contract = if is_acquire {
+                PointerContract::Owned
+            } else if is_escape {
+                PointerContract::Escaped
+            } else {
+                PointerContract::Unknown
+            };
+            RawResourceFact {
+                function: func_id,
+                function_name: callee_name.to_string(),
+                caller_name: caller_name.to_string(),
+                family: Some(entry.family_id),
+                is_acquire,
+                contract,
+                arg_index: Some(0),
+            }
+        };
+
+        // ── Single merged traversal ──
+        // Process all three IR collections in one logical pass.
+
+        // Phase 1: Scan call instructions (highest priority — most specific).
         for call in &module.calls {
-            // Strip LLVM name decoration: @name → name
             let callee_name = call.callee.trim_start_matches('@');
             let caller_name = call.caller.trim_start_matches('@');
 
             if let Some(entry) = registry.lookup(callee_name) {
-                let is_acquire = matches!(
-                    entry.effect,
-                    omniscope_semantics::SymbolEffect::Acquire
-                        | omniscope_semantics::SymbolEffect::Retain
-                        | omniscope_semantics::SymbolEffect::Reclaim
-                );
-                let is_escape = matches!(entry.effect, omniscope_semantics::SymbolEffect::Escape);
-                let contract = if is_acquire {
-                    PointerContract::Owned
-                } else if is_escape {
-                    PointerContract::Escaped
-                } else {
-                    PointerContract::Unknown
-                };
-
                 // Use the CALLER's stable func_id so that acquire/release
                 // facts within the same function share the same ID.
                 let func_id = if caller_name.is_empty() {
@@ -214,66 +238,40 @@ impl RawFactCollectorPass {
                     get_func_id(caller_name)
                 };
 
-                facts.push(RawResourceFact {
-                    function: func_id,
-                    function_name: callee_name.to_string(),
-                    caller_name: caller_name.to_string(),
-                    family: Some(entry.family_id),
-                    is_acquire,
-                    contract,
-                    arg_index: Some(0),
-                });
+                seen_names.insert(callee_name.to_string());
+                facts.push(make_fact(entry, callee_name, caller_name, func_id));
             }
         }
 
-        // Scan declarations for external alloc/dealloc symbols
-        for name in module.declarations.keys() {
-            let sym_name = name.trim_start_matches('@');
+        // Phase 2: Scan declarations and functions in a single loop.
+        // Declarations and functions that were already seen in calls are skipped.
+        let decl_iter = module
+            .declarations
+            .keys()
+            .map(|name| (name.trim_start_matches('@'), true));
+        let func_iter = module.functions.keys().map(|name| (name.as_str(), false));
+
+        for (sym_name, _is_declaration) in decl_iter.chain(func_iter) {
+            // Skip if already processed from calls (O(1) HashSet lookup).
+            if seen_names.contains(sym_name) {
+                continue;
+            }
+
             if let Some(entry) = registry.lookup(sym_name) {
-                // Avoid duplicates from calls
-                if facts.iter().any(|f| f.function_name == sym_name) {
-                    continue;
-                }
+                let func_id = get_func_id(sym_name);
+                seen_names.insert(sym_name.to_string());
+
+                // For declarations/functions without a caller context,
+                // emit as standalone acquire/release facts.
                 let is_acquire = matches!(
                     entry.effect,
                     omniscope_semantics::SymbolEffect::Acquire
                         | omniscope_semantics::SymbolEffect::Retain
                         | omniscope_semantics::SymbolEffect::Reclaim
                 );
-                let func_id = get_func_id(sym_name);
                 facts.push(RawResourceFact {
                     function: func_id,
                     function_name: sym_name.to_string(),
-                    caller_name: String::new(),
-                    family: Some(entry.family_id),
-                    is_acquire,
-                    contract: if is_acquire {
-                        PointerContract::Owned
-                    } else {
-                        PointerContract::Unknown
-                    },
-                    arg_index: Some(0),
-                });
-            }
-        }
-
-        // Also scan function definitions for calls within them
-        for func_name in module.functions.keys() {
-            // Check if the function itself is a known symbol
-            if let Some(entry) = registry.lookup(func_name) {
-                if facts.iter().any(|f| f.function_name == func_name.as_str()) {
-                    continue;
-                }
-                let is_acquire = matches!(
-                    entry.effect,
-                    omniscope_semantics::SymbolEffect::Acquire
-                        | omniscope_semantics::SymbolEffect::Retain
-                        | omniscope_semantics::SymbolEffect::Reclaim
-                );
-                let func_id = get_func_id(func_name);
-                facts.push(RawResourceFact {
-                    function: func_id,
-                    function_name: func_name.clone(),
                     caller_name: String::new(),
                     family: Some(entry.family_id),
                     is_acquire,
