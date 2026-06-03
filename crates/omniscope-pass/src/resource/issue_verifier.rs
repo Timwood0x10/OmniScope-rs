@@ -177,10 +177,7 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
                 VerifierVerdict::ConfirmedIssue
             }
         }
-        IssueCandidateKind::DoubleRelease => {
-            // Double release is always a real issue.
-            VerifierVerdict::ConfirmedIssue
-        }
+        IssueCandidateKind::DoubleRelease => verify_double_release(candidate),
         IssueCandidateKind::ConditionalLeak => verify_conditional_leak(candidate),
         IssueCandidateKind::DefiniteLeak => verify_definite_leak(candidate),
         IssueCandidateKind::BorrowEscape => verify_borrow_escape(candidate),
@@ -254,15 +251,50 @@ fn verify_cross_family_free(
     VerifierVerdict::ConfirmedIssue
 }
 
+/// Verifies a double release candidate.
+///
+/// Checks if the double release is safe based on evidence:
+/// - Null-guarded release functions (release(NULL) is safe)
+/// - NULL stored after release (prevents dangling pointer)
+/// - Path state refinement (control flow analysis)
+fn verify_double_release(candidate: &IssueCandidate) -> VerifierVerdict {
+    let has_null_guard = has_evidence(candidate, EvidenceKind::NullGuardedRelease);
+    let has_null_store = has_evidence(candidate, EvidenceKind::NullStoreAfterRelease);
+    let has_path_refinement = has_evidence(candidate, EvidenceKind::PathStateRefinement);
+
+    // All three: fully analyzed null-guarded pattern → safe
+    if has_null_guard && has_null_store && has_path_refinement {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Null-guarded only (no path analysis) → diagnostic, needs more analysis
+    if has_null_guard && !has_path_refinement {
+        return VerifierVerdict::Diagnostic;
+    }
+
+    // Default: double-free is a confirmed issue
+    VerifierVerdict::ConfirmedIssue
+}
+
 /// Verifies a definite leak candidate (all analyzed paths leak).
 fn verify_definite_leak(candidate: &IssueCandidate) -> VerifierVerdict {
-    // OwnershipEscapeLeak is still a strong signal even for definite leaks.
+    // OwnershipEscapeLeak: into_raw without from_raw — the raw pointer
+    // was explicitly leaked across the FFI boundary.
     if has_evidence(candidate, EvidenceKind::OwnershipEscapeLeak) {
         return VerifierVerdict::ConfirmedIssue;
     }
 
+    // Resource returned via out-param on success — caller owns it.
+    if has_evidence(candidate, EvidenceKind::OutParamOwnedOnSuccess) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Resource returned to caller — not a local leak.
+    if has_evidence(candidate, EvidenceKind::ReturnToCaller) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
     // Definite leak: all paths leak. No valid escape can explain it.
-    // This is the strongest leak signal — confirmed issue.
     VerifierVerdict::ConfirmedIssue
 }
 
@@ -287,6 +319,16 @@ fn verify_conditional_leak(candidate: &IssueCandidate) -> VerifierVerdict {
         return VerifierVerdict::ExplainedSafe;
     }
 
+    // Resource returned via out-param on success — caller owns it.
+    if has_evidence(candidate, EvidenceKind::OutParamOwnedOnSuccess) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Out-param set to NULL on error — no dangling pointer on error path.
+    if has_evidence(candidate, EvidenceKind::OutParamNullOnError) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
     if has_evidence(candidate, EvidenceKind::FieldStoreToOwner) {
         // Stored in owner field — not an immediate leak.
         return VerifierVerdict::ExplainedSafe;
@@ -300,6 +342,13 @@ fn verify_conditional_leak(candidate: &IssueCandidate) -> VerifierVerdict {
     if has_evidence(candidate, EvidenceKind::RefcountConditional) {
         // Refcount conditional release — the leak is conditional
         // on refcount not reaching zero.
+        return VerifierVerdict::ProbableIssue;
+    }
+
+    // Check if we have path state refinement
+    if has_evidence(candidate, EvidenceKind::PathStateRefinement) {
+        // We've analyzed the control flow, but still a conditional leak
+        // This is more confident than without path analysis
         return VerifierVerdict::ProbableIssue;
     }
 
@@ -786,6 +835,212 @@ mod tests {
         assert!(
             desc.contains("diagnostic"),
             "Description must mention verdict"
+        );
+    }
+
+    #[test]
+    fn test_verify_double_release_with_null_guard_evidence() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            "free",
+        );
+
+        // Add null-guarded release evidence
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::NullGuardedRelease, "free(NULL) is safe in C")
+                .with_confidence(0.9),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::Diagnostic,
+            "Null-guarded release without path analysis should be diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_verify_double_release_with_all_evidence() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            "free",
+        );
+
+        // Add all required evidence for safe pattern
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::NullGuardedRelease, "free(NULL) is safe in C")
+                .with_confidence(0.9),
+        );
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::NullStoreAfterRelease,
+                "NULL stored after release",
+            )
+            .with_confidence(0.8),
+        );
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::PathStateRefinement, "control flow analyzed")
+                .with_confidence(0.85),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Double release with null guard, null store, and path refinement should be explained safe"
+        );
+    }
+
+    #[test]
+    fn test_verify_double_release_without_evidence() {
+        let registry = FamilyRegistry::new();
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            "free",
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "Double release without evidence should be confirmed issue"
+        );
+    }
+
+    #[test]
+    fn test_verify_definite_leak_with_out_param_evidence() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        // Add out-param evidence
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::OutParamOwnedOnSuccess,
+                "resource returned via out-param on success",
+            )
+            .with_confidence(0.9),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Definite leak with out-param escape should be explained safe"
+        );
+    }
+
+    #[test]
+    fn test_verify_definite_leak_with_return_evidence() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        // Add return-to-caller evidence
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::ReturnToCaller, "resource returned to caller")
+                .with_confidence(0.95),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Definite leak with return escape should be explained safe"
+        );
+    }
+
+    #[test]
+    fn test_verify_conditional_leak_with_out_param_on_success() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::ConditionalLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        // Add out-param on success evidence
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::OutParamOwnedOnSuccess,
+                "resource returned via out-param on success",
+            )
+            .with_confidence(0.9),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Conditional leak with out-param on success should be explained safe"
+        );
+    }
+
+    #[test]
+    fn test_verify_conditional_leak_with_out_param_null_on_error() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::ConditionalLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        // Add out-param null on error evidence
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::OutParamNullOnError,
+                "out-param set to NULL on error path",
+            )
+            .with_confidence(0.9),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ExplainedSafe,
+            "Conditional leak with out-param null on error should be explained safe"
+        );
+    }
+
+    #[test]
+    fn test_verify_conditional_leak_with_path_refinement() {
+        let registry = FamilyRegistry::new();
+        let mut candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::ConditionalLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+
+        // Add path state refinement evidence
+        candidate.add_evidence(
+            Evidence::new(EvidenceKind::PathStateRefinement, "control flow analyzed")
+                .with_confidence(0.85),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ProbableIssue,
+            "Conditional leak with path refinement should be probable issue"
         );
     }
 }

@@ -1011,7 +1011,7 @@ fn effect_to_contract_edge(
             caller_name: context.caller_name.clone(),
             family: context.family,
         },
-        Effect::OwnershipEscape { family, result } => {
+        Effect::OwnershipEscape { family, result: _ } => {
             let instance_id = graph.alloc_instance();
             ContractEdge {
                 source: context.instance_id.unwrap_or(0),
@@ -1026,7 +1026,7 @@ fn effect_to_contract_edge(
                 family: Some(*family),
             }
         }
-        Effect::OwnershipReclaim { family, result } => {
+        Effect::OwnershipReclaim { family, result: _ } => {
             let instance_id = graph.alloc_instance();
             ContractEdge {
                 source: context.instance_id.unwrap_or(instance_id),

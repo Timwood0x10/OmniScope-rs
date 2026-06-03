@@ -10,6 +10,8 @@
 //! which downstream passes (especially `IssueCandidateBuilder`) consume
 //! to detect leak candidates, double-release, and borrow-escape issues.
 
+use std::collections::HashMap;
+
 use omniscope_core::Result;
 use omniscope_semantics::{OwnershipEvent, ResourceInstance};
 use omniscope_types::{Effect, EscapeKind, FamilyId, PointerContract};
@@ -18,6 +20,27 @@ use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
 use crate::resource::rust_drop_tracker::RustDropTracker;
 use crate::resource::union_find::OwnershipCycleDetector;
+
+/// State of a pointer value at a specific program point.
+///
+/// Tracks the ownership state of pointer values to enable path-sensitive
+/// analysis and proper handling of null-guarded releases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PointerValueState {
+    /// Unknown state - cannot determine.
+    Unknown,
+    /// Pointer is known to be NULL.
+    Null,
+    /// Pointer owns a resource instance.
+    Owned { instance: u64, family: FamilyId },
+    /// Pointer's resource has been released.
+    Released { instance: u64 },
+    /// Pointer has escaped (returned to caller, stored to out-param, etc.).
+    Escaped { instance: u64 },
+}
+
+/// Maps pointer slots to their current state.
+pub type PointerStateMap = HashMap<String, PointerValueState>;
 
 /// Ownership solver pass.
 ///
@@ -65,6 +88,10 @@ impl Pass for OwnershipSolverPass {
         // Tracks automatic Drop operations to reduce false positives.
         let mut drop_tracker = RustDropTracker::new();
 
+        // Initialize pointer state map for path-sensitive tracking.
+        // Maps pointer slot names to their current ownership state.
+        let mut pointer_states: PointerStateMap = HashMap::new();
+
         if let Some(graph) = graph_ref {
             // Pre-allocate based on acquire edge count to avoid realloc.
             let acquire_count = graph
@@ -80,6 +107,17 @@ impl Pass for OwnershipSolverPass {
             // First pass: create ResourceInstance for each acquire edge.
             for edge in &graph.edges {
                 if let Effect::Acquire { family, result } = edge.effect {
+                    // Track pointer state for acquired resource.
+                    // The result value receives the acquired resource.
+                    let pointer_slot = format!("{}_result_{}", edge.caller_name, result);
+                    pointer_states.insert(
+                        pointer_slot,
+                        PointerValueState::Owned {
+                            instance: result,
+                            family,
+                        },
+                    );
+
                     if let std::collections::hash_map::Entry::Vacant(e) = instance_map.entry(result)
                     {
                         let mut instance =
@@ -102,13 +140,54 @@ impl Pass for OwnershipSolverPass {
                     Effect::Acquire { .. } => {
                         // Already handled above.
                     }
-                    Effect::Release { .. } => {
+                    Effect::Release { family: _, arg } => {
                         // Track potential Drop operations for RAII cleanup detection.
                         drop_tracker.track_drop_call(
                             edge.source,
                             &edge.function_name,
                             &edge.caller_name,
                         );
+
+                        // Track pointer state for path-sensitive analysis.
+                        let pointer_slot = format!("{}_{}", edge.caller_name, arg);
+                        let current_state = pointer_states.get(&pointer_slot).cloned();
+
+                        match current_state {
+                            Some(PointerValueState::Null) => {
+                                // release(NULL) - safe no-op if release function is null-guarded.
+                                // Otherwise potentially invalid.
+                                tracing::debug!("Releasing NULL pointer in {}", edge.function_name);
+                            }
+                            Some(PointerValueState::Owned { instance, .. }) => {
+                                // Normal release - transition to Released.
+                                pointer_states
+                                    .insert(pointer_slot, PointerValueState::Released { instance });
+                            }
+                            Some(PointerValueState::Released { instance }) => {
+                                // Double release!
+                                tracing::warn!(
+                                    "Double release detected: instance {} in {}",
+                                    instance,
+                                    edge.function_name
+                                );
+                            }
+                            Some(PointerValueState::Escaped { instance }) => {
+                                // Releasing an escaped pointer - potentially problematic.
+                                tracing::warn!(
+                                    "Releasing escaped pointer: instance {} in {}",
+                                    instance,
+                                    edge.function_name
+                                );
+                            }
+                            Some(PointerValueState::Unknown) | None => {
+                                // Cannot determine state - report as diagnostic.
+                                tracing::debug!(
+                                    "Releasing pointer with unknown state in {}",
+                                    edge.function_name
+                                );
+                            }
+                        }
+
                         apply_transition(
                             &mut instances,
                             &instance_map,
@@ -144,6 +223,19 @@ impl Pass for OwnershipSolverPass {
                         );
                     }
                     Effect::ReturnsOwned { .. } => {
+                        // Track pointer state for escaped resource.
+                        let pointer_slot = format!("{}_result_{}", edge.caller_name, edge.source);
+                        if let Some(PointerValueState::Owned { instance, .. }) =
+                            pointer_states.get(&pointer_slot)
+                        {
+                            pointer_states.insert(
+                                pointer_slot,
+                                PointerValueState::Escaped {
+                                    instance: *instance,
+                                },
+                            );
+                        }
+
                         apply_transition(
                             &mut instances,
                             &instance_map,
@@ -242,6 +334,16 @@ impl Pass for OwnershipSolverPass {
                         // into_raw: ownership escapes to raw pointer.
                         // The instance is still allocated but ownership is now
                         // tracked outside Rust's type system.
+
+                        // Track pointer state for escaped resource.
+                        let pointer_slot = format!("{}_raw_{}", edge.caller_name, result);
+                        pointer_states.insert(
+                            pointer_slot,
+                            PointerValueState::Escaped {
+                                instance: edge.source,
+                            },
+                        );
+
                         if let Some(&idx) = instance_map.get(&edge.source) {
                             apply_transition_at(
                                 &mut instances,
@@ -326,32 +428,85 @@ impl Pass for OwnershipSolverPass {
                             edge.function_name
                         );
                     }
-                    Effect::NullGuardedRelease { .. } => {
-                        // Null-guarded release: treat as a conditional release
-                        // since releasing NULL is safe but releasing non-NULL is unconditional.
-                        apply_transition(
-                            &mut instances,
-                            &instance_map,
-                            edge.source,
-                            OwnershipEvent::ConditionalRelease {
-                                function: edge.function,
-                            },
-                            &edge.function_name,
-                        );
+                    Effect::NullGuardedRelease { family: _, arg } => {
+                        // Null-guarded release: check if the argument is NULL.
+                        // If NULL, treat as safe no-op. If non-NULL, proceed with release.
+                        let pointer_slot = format!("{}_{}", edge.caller_name, arg);
+                        let current_state = pointer_states.get(&pointer_slot).cloned();
+
+                        match current_state {
+                            Some(PointerValueState::Null) => {
+                                // release(NULL) is safe - no-op.
+                                tracing::debug!(
+                                    "Null-guarded release of NULL pointer in {} - safe no-op",
+                                    edge.function_name
+                                );
+                            }
+                            Some(PointerValueState::Owned { instance, .. }) => {
+                                // Non-NULL release - transition to Released.
+                                pointer_states
+                                    .insert(pointer_slot, PointerValueState::Released { instance });
+                                // Apply conditional release transition.
+                                apply_transition(
+                                    &mut instances,
+                                    &instance_map,
+                                    edge.source,
+                                    OwnershipEvent::ConditionalRelease {
+                                        function: edge.function,
+                                    },
+                                    &edge.function_name,
+                                );
+                            }
+                            _ => {
+                                // Unknown state - treat as conditional release.
+                                apply_transition(
+                                    &mut instances,
+                                    &instance_map,
+                                    edge.source,
+                                    OwnershipEvent::ConditionalRelease {
+                                        function: edge.function,
+                                    },
+                                    &edge.function_name,
+                                );
+                            }
+                        }
                     }
-                    Effect::OutParamOwnedOnSuccess { .. } => {
+                    Effect::OutParamOwnedOnSuccess { family, arg } => {
                         // Out-param receives owned resource on success path.
-                        // Treat as an acquire for the out-parameter.
-                        apply_transition(
-                            &mut instances,
-                            &instance_map,
-                            edge.source,
-                            OwnershipEvent::Acquire,
-                            &edge.function_name,
+                        // Treat as an acquire edge: create a new ResourceInstance.
+                        let result = edge.target;
+
+                        // Track pointer state for out-param.
+                        let pointer_slot = format!("{}_{}", edge.caller_name, arg);
+                        pointer_states.insert(
+                            pointer_slot,
+                            PointerValueState::Owned {
+                                instance: result,
+                                family,
+                            },
                         );
+
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            instance_map.entry(result)
+                        {
+                            let mut instance =
+                                ResourceInstance::new(result, family, PointerContract::Owned);
+                            instance.function_name = edge.caller_name.clone();
+                            e.insert(instances.len());
+                            instances.push(instance);
+                        } else {
+                            tracing::warn!(
+                                instance_id = result,
+                                "duplicate instance_id in OutParamOwnedOnSuccess edge — \\\n                                 first instance kept"
+                            );
+                        }
                     }
-                    Effect::OutParamNullOnError { .. } => {
+                    Effect::OutParamNullOnError { arg } => {
                         // Out-param is set to NULL on error path.
+                        // Track pointer state for out-param.
+                        let pointer_slot = format!("{}_{}", edge.caller_name, arg);
+                        pointer_states.insert(pointer_slot, PointerValueState::Null);
+
                         // This is a conditional release on error path.
                         apply_transition(
                             &mut instances,
@@ -363,10 +518,12 @@ impl Pass for OwnershipSolverPass {
                             &edge.function_name,
                         );
                     }
-                    Effect::NullStoreAfterRelease { .. } => {
+                    Effect::NullStoreAfterRelease { arg } => {
                         // NULL store after release: slot becomes NULL after dealloc.
                         // This is a cleanup operation, not an ownership change.
-                        // No transition needed.
+                        // Track pointer state for the nulled slot.
+                        let pointer_slot = format!("{}_{}", edge.caller_name, arg);
+                        pointer_states.insert(pointer_slot, PointerValueState::Null);
                     }
                 }
             }
@@ -376,6 +533,9 @@ impl Pass for OwnershipSolverPass {
 
             // Store Drop tracker for downstream passes to consider RAII semantics.
             ctx.store("rust_drop_tracker", drop_tracker);
+
+            // Store pointer states for path-sensitive analysis.
+            ctx.store("pointer_states", pointer_states);
         }
 
         let instance_count = instances.len();

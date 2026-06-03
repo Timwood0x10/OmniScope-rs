@@ -350,6 +350,8 @@ impl IRModuleModel {
                     caller: caller_name,
                     is_external,
                     location: None,
+                    args: Vec::new(),
+                    result: None,
                 });
             }
         }

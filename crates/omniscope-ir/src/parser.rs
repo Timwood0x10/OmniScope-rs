@@ -37,6 +37,10 @@ pub struct CallInstruction {
     pub is_external: bool,
     /// Source location (if available)
     pub location: Option<SourceLocation>,
+    /// Arguments passed to the call (excluding the callee).
+    pub args: Vec<String>,
+    /// Destination register of the call result (if any).
+    pub result: Option<String>,
 }
 
 /// Data layout information extracted from IR
@@ -273,11 +277,16 @@ impl IRModule {
                                 .callee
                                 .clone()
                                 .unwrap_or_else(|| "indirect".to_string());
+                            // Parse arguments and result from the raw text
+                            let args = parse_call_args_from_raw(line);
+                            let result = parse_call_result_from_raw(line);
                             module.calls.push(CallInstruction {
                                 callee: callee_name,
                                 caller: current_function.clone(),
                                 is_external: false,
                                 location: extract_location(line, &module.debug_metadata),
+                                args,
+                                result,
                             });
                         }
                         _ => {}
@@ -523,11 +532,17 @@ fn parse_call(
             // Extract source location if present (!dbg !123)
             let location = extract_location(line, metadata);
 
+            // Parse arguments and result from the raw text
+            let args = parse_call_args_from_raw(line);
+            let result = parse_call_result_from_raw(line);
+
             return Some(CallInstruction {
                 callee,
                 caller: current_function.to_string(),
                 is_external: false,
                 location,
+                args,
+                result,
             });
         }
     }
@@ -566,6 +581,40 @@ fn extract_location(
                 std::path::PathBuf::from(format!("!{}", num_str)),
                 0,
             ));
+        }
+    }
+    None
+}
+
+/// Parse call arguments from raw text.
+///
+/// Extracts arguments between parentheses in a call instruction.
+/// Example: `call i32 @func(i32 %arg1, i32 %arg2)` → ["i32 %arg1", "i32 %arg2"]
+fn parse_call_args_from_raw(raw: &str) -> Vec<String> {
+    // Find the argument list between parentheses
+    if let Some(start) = raw.find('(') {
+        if let Some(end) = raw.rfind(')') {
+            let args_str = &raw[start + 1..end];
+            return args_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Parse call result from raw text.
+///
+/// Extracts destination register if present.
+/// Example: `%result = call i32 @func(...)` → Some("%result")
+fn parse_call_result_from_raw(raw: &str) -> Option<String> {
+    // Check if there's a destination register: "%result = call ..."
+    if let Some(eq_pos) = raw.find(" = ") {
+        let dest = raw[..eq_pos].trim();
+        if dest.starts_with('%') {
+            return Some(dest.to_string());
         }
     }
     None

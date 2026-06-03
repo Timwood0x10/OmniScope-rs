@@ -29,6 +29,8 @@ fn build_ir_module(n: usize) -> IRModule {
             caller,
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         // Add some free calls to balance
@@ -38,6 +40,8 @@ fn build_ir_module(n: usize) -> IRModule {
                 caller: format!("func_{}", i % 10),
                 is_external: true,
                 location: None,
+                args: Vec::new(),
+                result: None,
             });
         }
     }

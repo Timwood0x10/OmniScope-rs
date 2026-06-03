@@ -200,4 +200,95 @@ mod tests {
         summary.add_effect(Effect::ReturnsBorrowed);
         assert!(summary.is_bridge(), "as_ptr should be a bridge helper");
     }
+
+    #[test]
+    fn test_summary_store_find_by_name() {
+        let mut store = SummaryStore::new();
+
+        // Create summaries with different names
+        let mut summary1 = ResourceSummary::new(1, 100, "malloc");
+        summary1.add_effect(Effect::Acquire {
+            family: omniscope_types::FamilyId::C_HEAP,
+            result: 1,
+        });
+
+        let mut summary2 = ResourceSummary::new(2, 200, "free");
+        summary2.add_effect(Effect::Release {
+            family: omniscope_types::FamilyId::C_HEAP,
+            arg: 0,
+        });
+
+        let summary3 = ResourceSummary::new(3, 300, "calloc");
+
+        store.insert(summary1);
+        store.insert(summary2);
+        store.insert(summary3);
+
+        // Test finding by name
+        let found_malloc = store.find_by_name("malloc");
+        assert!(found_malloc.is_some(), "Should find malloc summary");
+        assert_eq!(
+            found_malloc.unwrap().function,
+            1,
+            "Found summary should have correct function ID"
+        );
+
+        let found_free = store.find_by_name("free");
+        assert!(found_free.is_some(), "Should find free summary");
+        assert_eq!(
+            found_free.unwrap().function,
+            2,
+            "Found summary should have correct function ID"
+        );
+
+        let found_calloc = store.find_by_name("calloc");
+        assert!(found_calloc.is_some(), "Should find calloc summary");
+        assert_eq!(
+            found_calloc.unwrap().function,
+            3,
+            "Found summary should have correct function ID"
+        );
+
+        // Test finding non-existent name
+        let not_found = store.find_by_name("nonexistent");
+        assert!(
+            not_found.is_none(),
+            "Should not find summary for non-existent name"
+        );
+    }
+
+    #[test]
+    fn test_summary_store_find_by_name_empty() {
+        let store = SummaryStore::new();
+        let not_found = store.find_by_name("malloc");
+        assert!(
+            not_found.is_none(),
+            "Should not find summary in empty store"
+        );
+    }
+
+    #[test]
+    fn test_summary_store_find_by_name_case_sensitive() {
+        let mut store = SummaryStore::new();
+
+        let summary = ResourceSummary::new(1, 100, "Malloc");
+        store.insert(summary);
+
+        // Should find exact match
+        let found = store.find_by_name("Malloc");
+        assert!(found.is_some(), "Should find exact match");
+
+        // Should not find case-insensitive match
+        let not_found = store.find_by_name("malloc");
+        assert!(
+            not_found.is_none(),
+            "Should not find case-insensitive match"
+        );
+
+        let not_found = store.find_by_name("MALLOC");
+        assert!(
+            not_found.is_none(),
+            "Should not find case-insensitive match"
+        );
+    }
 }

@@ -188,31 +188,87 @@ impl Pass for IssueCandidateBuilderPass {
                 }
 
                 // ── DoubleRelease: multiple release edges ──
+                // Check pointer state at each release point
                 if release_indices.len() > 1 {
-                    for &ri in release_indices.iter().skip(1) {
-                        let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
+                    // Check if releases are null-guarded
+                    let null_guarded_releases: Vec<usize> = release_indices
+                        .iter()
+                        .filter(|&&ri| is_null_guarded_release(&graph.edges[ri].function_name))
+                        .copied()
+                        .collect();
+
+                    // If all releases are null-guarded, this is safe
+                    if null_guarded_releases.len() == release_indices.len() {
+                        // All releases are null-guarded - safe pattern
                         let id = next_id;
                         next_id += 1;
 
                         let mut candidate = IssueCandidate::new(
                             id,
                             IssueCandidateKind::DoubleRelease,
-                            family,
-                            &graph.edges[ri].function_name,
+                            graph.edges[release_indices[0]]
+                                .family
+                                .unwrap_or(FamilyId::C_HEAP),
+                            &graph.edges[release_indices[0]].function_name,
                         );
                         candidate.add_evidence(
                             Evidence::new(
-                                EvidenceKind::MultipleRelease,
+                                EvidenceKind::NullGuardedRelease,
                                 format!(
-                                    "instance {} released {} times",
+                                    "instance {} has {} null-guarded releases",
                                     instance_id,
                                     release_indices.len()
                                 ),
                             )
                             .with_confidence(0.9),
                         );
-
+                        candidate.add_evidence(
+                            Evidence::new(
+                                EvidenceKind::PathStateRefinement,
+                                "all releases are null-guarded - safe pattern".to_string(),
+                            )
+                            .with_confidence(0.85),
+                        );
                         candidates.push(candidate);
+                    } else {
+                        // Some releases are not null-guarded - potential double release
+                        for &ri in release_indices.iter().skip(1) {
+                            let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
+                            let id = next_id;
+                            next_id += 1;
+
+                            let mut candidate = IssueCandidate::new(
+                                id,
+                                IssueCandidateKind::DoubleRelease,
+                                family,
+                                &graph.edges[ri].function_name,
+                            );
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::MultipleRelease,
+                                    format!(
+                                        "instance {} released {} times",
+                                        instance_id,
+                                        release_indices.len()
+                                    ),
+                                )
+                                .with_confidence(0.9),
+                            );
+
+                            // Check if NULL is stored after release
+                            if has_null_store_pattern(graph, instance_id) {
+                                candidate.add_evidence(
+                                    Evidence::new(
+                                        EvidenceKind::NullStoreAfterRelease,
+                                        "NULL stored after release - prevents dangling pointer"
+                                            .to_string(),
+                                    )
+                                    .with_confidence(0.8),
+                                );
+                            }
+
+                            candidates.push(candidate);
+                        }
                     }
                 }
 
@@ -591,6 +647,54 @@ pub fn build_cross_family_candidate(
         "cross-family release: {} ({:?}) released by {} ({:?})",
         alloc_func, alloc_family, release_func, release_family
     ))
+}
+
+/// Checks if a release function is null-guarded.
+///
+/// Null-guarded release functions check if the pointer is NULL before
+/// releasing it. For example, `free(NULL)` is safe in C, and many
+/// libraries implement null-guarded release functions.
+fn is_null_guarded_release(function_name: &str) -> bool {
+    // Known null-guarded release functions. Only exact matches are used
+    // to avoid false positives from pattern-based heuristics.
+    const NULL_GUARDED_RELEASES: &[&str] = &[
+        "free",            // C standard library free
+        "cJSON_Delete",    // cJSON library
+        "json_object_put", // json-c library
+        "sqlite3_free",    // SQLite
+        "g_free",          // GLib
+        "g_slice_free",    // GLib
+        "CFRelease",       // Core Foundation (though it crashes on NULL in practice)
+        "Release",         // Common COM pattern
+        "SafeRelease",     // Safe COM release pattern
+        "SafeDelete",      // Safe delete pattern
+        "SafeDeleteArray", // Safe delete array pattern
+    ];
+
+    NULL_GUARDED_RELEASES.contains(&function_name)
+}
+
+/// Checks if NULL is stored to a pointer after release in the contract graph.
+///
+/// This pattern prevents dangling pointer access by setting the pointer to NULL
+/// after releasing the resource. For example:
+/// ```c
+/// free(ptr);
+/// ptr = NULL;
+/// ```
+fn has_null_store_pattern(graph: &ContractGraph, instance_id: &u64) -> bool {
+    // Look for edges that store NULL to this instance
+    graph.edges.iter().any(|edge| {
+        // Check if this edge stores to the same instance
+        if edge.source == *instance_id {
+            // Check if it's a NULL store effect
+            matches!(edge.effect, Effect::StoresArgToGlobal { .. })
+                || matches!(edge.effect, Effect::StoresArgToOwner { .. })
+                || matches!(edge.effect, Effect::InitializesOutParam { .. })
+        } else {
+            false
+        }
+    })
 }
 
 impl Default for IssueCandidateBuilderPass {

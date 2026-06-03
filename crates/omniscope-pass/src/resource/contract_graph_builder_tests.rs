@@ -223,12 +223,16 @@ fn test_conditional_release_edge_present() {
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
+        args: Vec::new(),
+        result: None,
     });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "Py_DECREF".to_string(),
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
+        args: Vec::new(),
+        result: None,
     });
     ctx.store("ir_module", module);
 
@@ -277,6 +281,8 @@ fn test_escape_edge_creation_via_ir_module() {
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
+        args: Vec::new(),
+        result: None,
     });
     ctx.store("ir_module", module);
 
@@ -326,12 +332,16 @@ fn test_reclaim_edge_creation_via_ir_module() {
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
+        args: Vec::new(),
+        result: None,
     });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "Box::from_raw".to_string(),
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
+        args: Vec::new(),
+        result: None,
     });
     ctx.store("ir_module", module);
 
@@ -401,6 +411,8 @@ fn test_reclaim_from_raw_parts_without_escape() {
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
+        args: Vec::new(),
+        result: None,
     });
     ctx.store("ir_module", module);
 

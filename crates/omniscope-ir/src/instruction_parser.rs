@@ -551,7 +551,7 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             return Some(IRInstruction {
                 kind: IRInstructionKind::Conversion,
                 dest,
-                operands: Vec::new(),
+                operands: extract_operands(stripped, op),
                 callee: None,
                 atomic_op: None,
                 icmp_pred: None,

@@ -431,6 +431,16 @@ fn detect_pure_computation(body: &FunctionBody) -> bool {
         return !has_memory_ops && has_arithmetic;
     }
 
+    // If the function itself calls memory management functions (malloc, free, etc.),
+    // it manages memory and is NOT pure computation.
+    if calls.iter().any(|c| {
+        c.callee
+            .as_ref()
+            .is_some_and(|name| is_memory_management_callee(name))
+    }) {
+        return false;
+    }
+
     // Collect all call destination registers
     let call_dests: HashSet<String> = calls.iter().filter_map(|c| c.dest.clone()).collect();
 
@@ -470,7 +480,7 @@ fn detect_pure_computation(body: &FunctionBody) -> bool {
                     // For store instructions, operands[1] is the destination pointer
                     let is_local_store = alloca_dests
                         .iter()
-                        .any(|alloca| inst.operands.get(1).map_or(false, |dest| dest == alloca));
+                        .any(|alloca| inst.operands.get(1).is_some_and(|dest| dest == alloca));
 
                     if !is_local_store {
                         // Storing call result to non-local memory — not pure computation
@@ -697,7 +707,7 @@ fn detect_null_store_after_release(body: &FunctionBody) -> Option<BehaviorPatter
                 let stores_null = later
                     .operands
                     .first()
-                    .map_or(false, |v| v == "null" || v == "0");
+                    .is_some_and(|v| v == "null" || v == "0");
                 if stores_null {
                     return Some(BehaviorPattern::NullStoreAfterRelease { arg_index: 0 });
                 }
@@ -734,7 +744,7 @@ fn detect_fallible_out_param_init(body: &FunctionBody) -> Option<BehaviorPattern
         .filter(|i| {
             i.operands
                 .first()
-                .map_or(false, |v| v == "null" || v == "0")
+                .is_some_and(|v| v == "null" || v == "0")
         })
         .filter_map(|i| i.operands.get(1).cloned())
         .collect();
@@ -779,8 +789,8 @@ fn detect_fallible_out_param_init(body: &FunctionBody) -> Option<BehaviorPattern
             i.kind == IRInstructionKind::Store
                 && i.operands
                     .first()
-                    .map_or(false, |v| v == "null" || v == "0")
-                && i.operands.get(1).map_or(false, |t| *t == out_param)
+                    .is_some_and(|v| v == "null" || v == "0")
+                && i.operands.get(1).is_some_and(|t| *t == out_param)
         });
 
         if has_icmp_after && has_null_store_after {
@@ -824,7 +834,7 @@ fn detect_out_param_null_on_error(body: &FunctionBody) -> Option<BehaviorPattern
                 let stores_null = later
                     .operands
                     .first()
-                    .map_or(false, |v| v == "null" || v == "0");
+                    .is_some_and(|v| v == "null" || v == "0");
                 if stores_null {
                     return Some(BehaviorPattern::OutParamNullOnError { out_arg_index: 0 });
                 }

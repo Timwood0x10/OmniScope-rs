@@ -478,6 +478,7 @@ fn is_size_truncation(source: TypeWidth, target: TypeWidth) -> bool {
 /// Extract the register name being truncated.
 ///
 /// Example: "trunc i64 %size to i32" -> "%size"
+#[cfg(test)]
 pub(crate) fn extract_truncated_register(raw: &str) -> Option<String> {
     let trunc_pos = raw.find("trunc")?;
     let after_trunc = &raw[trunc_pos..];

@@ -404,12 +404,16 @@ mod tests {
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "free".to_string(),
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let mut pool = MemoryPool::new();
@@ -442,12 +446,16 @@ mod tests {
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "close".to_string(),
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         // Also test socket/accept/dup/pipe
         module.calls.push(omniscope_ir::CallInstruction {
@@ -455,24 +463,32 @@ mod tests {
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "accept".to_string(),
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "dup".to_string(),
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "pipe".to_string(),
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let mut pool = MemoryPool::new();
@@ -557,12 +573,16 @@ mod tests {
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "malloc".to_string(),
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let mut pool = MemoryPool::new();

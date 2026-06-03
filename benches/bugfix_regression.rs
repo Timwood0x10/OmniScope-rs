@@ -54,6 +54,8 @@ fn build_module_with_fcmp(n: usize) -> IRModule {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
         // FCmp instruction
         instructions.push(IRInstruction {
@@ -67,6 +69,8 @@ fn build_module_with_fcmp(n: usize) -> IRModule {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 

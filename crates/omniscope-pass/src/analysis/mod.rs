@@ -395,8 +395,13 @@ impl FFIBoundaryPass {
             assessment.safety_score()
         );
 
-        // Skip FFI boundaries that are semantically safe (derived from IR patterns)
-        if assessment.should_suppress_issue() {
+        // Skip FFI boundaries that are semantically safe (derived from IR patterns).
+        // Exception: never suppress C++ cross-language FFI boundaries with Unknown
+        // verdict — we can't verify their safety, so flag them as potentially unsafe.
+        let is_cpp_ffi_unknown = boundary.callee_name.starts_with("_Z")
+            && boundary.caller_lang == omniscope_types::config::Language::C
+            && assessment.verdict == omniscope_semantics::FFIVerdict::Unknown;
+        if assessment.should_suppress_issue() && !is_cpp_ffi_unknown {
             debug!(
                 "FFI skip: {} -> {} ({:?}): {}",
                 boundary.caller_name,
@@ -481,15 +486,30 @@ impl FFIBoundaryPass {
                         ),
                     )
                 }
-                // Unknown verdict with no family entry is low-signal noise.
-                // Suppress: these are FFI calls to unknown external functions
-                // with no evidence of ownership implications.
+                // Unknown verdict with no family entry is low-signal noise — suppress.
+                // Exception: C++ mangled callees are cross-language FFI boundaries
+                // where we can't verify safety, so flag them as potentially unsafe.
                 None => {
-                    debug!(
-                        "FFI suppressed: {} -> {} (Unknown verdict, no family entry)",
-                        boundary.caller_name, boundary.callee_name
-                    );
-                    return;
+                    if is_cpp_ffi_unknown {
+                        (
+                            IssueKind::FfiUnsafeCall,
+                            Severity::Note,
+                            Confidence::Low,
+                            format!(
+                                "FFI boundary: {} ({:?}) -> {} ({:?}) [verdict=Unknown, C++ cross-language]",
+                                boundary.caller_name,
+                                boundary.caller_lang,
+                                boundary.callee_name,
+                                boundary.callee_lang,
+                            ),
+                        )
+                    } else {
+                        debug!(
+                            "FFI suppressed: {} -> {} (Unknown verdict, no family entry)",
+                            boundary.caller_name, boundary.callee_name
+                        );
+                        return;
+                    }
                 }
             },
             // Safe patterns are already filtered out above

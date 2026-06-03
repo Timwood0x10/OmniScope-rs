@@ -262,11 +262,18 @@ fn walk_module_functions(module_ref: LLVMModuleRef, module: &mut IRModule) -> Re
                         .clone()
                         .unwrap_or_else(|| "indirect".to_string());
                     let is_external = module.declarations.contains_key(&callee_name);
+                    
+                    // Parse arguments and result from raw text
+                    let args = parse_call_args_from_raw(&inst.raw_text);
+                    let result = parse_call_result_from_raw(&inst.raw_text);
+                    
                     module.calls.push(crate::parser::CallInstruction {
                         callee: callee_name,
                         caller: name.clone(),
                         is_external,
                         location: None,
+                        args,
+                        result,
                     });
                 }
             }
@@ -732,4 +739,42 @@ fn calling_convention_name(cc_id: u32) -> Option<String> {
         // Unknown convention — still record with numeric ID
         n => Some(format!("cc_{}", n)),
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Call argument/result parsing helpers
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Parse call arguments from raw text.
+///
+/// Extracts arguments between parentheses in a call instruction.
+/// Example: `call i32 @func(i32 %arg1, i32 %arg2)` → ["i32 %arg1", "i32 %arg2"]
+fn parse_call_args_from_raw(raw: &str) -> Vec<String> {
+    // Find the argument list between parentheses
+    if let Some(start) = raw.find('(') {
+        if let Some(end) = raw.rfind(')') {
+            let args_str = &raw[start + 1..end];
+            return args_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Parse call result from raw text.
+///
+/// Extracts destination register if present.
+/// Example: `%result = call i32 @func(...)` → Some("%result")
+fn parse_call_result_from_raw(raw: &str) -> Option<String> {
+    // Check if there's a destination register: "%result = call ..."
+    if let Some(eq_pos) = raw.find(" = ") {
+        let dest = raw[..eq_pos].trim();
+        if dest.starts_with('%') {
+            return Some(dest.to_string());
+        }
+    }
+    None
 }

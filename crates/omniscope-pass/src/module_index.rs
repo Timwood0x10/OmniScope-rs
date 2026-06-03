@@ -595,12 +595,16 @@ mod tests {
             caller: "@test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(CallInstruction {
             callee: "@free".to_string(),
             caller: "@test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         module
@@ -697,6 +701,8 @@ mod tests {
             caller: "@test".to_string(),
             is_external: false,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let index = ModuleIndex::build(&module);
@@ -716,6 +722,8 @@ mod tests {
             caller: "@test".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let index = ModuleIndex::build(&module);
@@ -765,6 +773,8 @@ mod tests {
             caller: "@c_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let index = ModuleIndex::build(&module);
@@ -798,6 +808,8 @@ mod tests {
             caller: "@caller".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let index = ModuleIndex::build(&module);

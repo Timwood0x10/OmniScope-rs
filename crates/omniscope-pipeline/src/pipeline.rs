@@ -174,12 +174,16 @@ mod tests {
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "_ZdlPv".to_string(), // operator delete
             caller: "test_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let mut pipeline = Pipeline::new();
@@ -211,12 +215,16 @@ mod tests {
             caller: "safe_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
         module.calls.push(omniscope_ir::CallInstruction {
             callee: "free".to_string(),
             caller: "safe_func".to_string(),
             is_external: true,
             location: None,
+            args: Vec::new(),
+            result: None,
         });
 
         let mut pipeline = Pipeline::new();
