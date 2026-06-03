@@ -16,6 +16,7 @@ use omniscope_types::{Effect, FamilyId, FunctionId};
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
 use omniscope_semantics::ffi_contract::{ContractType, FFIContractDB};
+use omniscope_semantics::resource::summary::SummaryStore;
 
 /// FIFO queue entry: (instance_id, optional_alloc_family).
 type AcquireEntry = (u64, Option<FamilyId>);
@@ -114,6 +115,9 @@ impl Pass for ContractGraphBuilderPass {
         // Retrieve raw facts from the context
         let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
         let raw_facts = raw_facts.unwrap_or_default();
+
+        // Retrieve summary store for IR-derived summaries
+        let summary_store: SummaryStore = ctx.get("summary_store").unwrap_or_default();
 
         // Pre-allocate graph edges to reduce reallocations.
         graph.edges.reserve(raw_facts.len());
@@ -263,6 +267,22 @@ impl Pass for ContractGraphBuilderPass {
                 let mut func_reclaims: Vec<(u64, FamilyId, &str)> = Vec::with_capacity(cap);
 
                 for &callee in callees {
+                    // Try IR-derived summary first
+                    if let Some(summary) = summary_store.find_by_name(callee) {
+                        let context = CallContext {
+                            function_id: func_id,
+                            callee_name: callee.to_string(),
+                            caller_name: caller_name.to_string(),
+                            instance_id: None,
+                            family: None,
+                        };
+                        for effect in &summary.effects {
+                            let edge = effect_to_contract_edge(effect, &context, &mut graph);
+                            graph.add_edge(edge);
+                        }
+                        continue;
+                    }
+
                     if let Some(entry) = registry.lookup(callee) {
                         match entry.effect {
                             omniscope_semantics::SymbolEffect::Acquire => {
@@ -904,6 +924,214 @@ pub fn is_cross_language_mismatch(
                 || release_is_java
                 || release_is_csharp
                 || release_is_go))
+}
+
+/// Converts an Effect to a ContractEdge for a given call context.
+///
+/// This is used to create edges from IR-derived summaries. The effect
+/// is converted to an edge with the appropriate source and target IDs.
+fn effect_to_contract_edge(
+    effect: &Effect,
+    context: &CallContext,
+    graph: &mut ContractGraph,
+) -> ContractEdge {
+    match effect {
+        Effect::Acquire { family, .. } => {
+            let instance_id = graph.alloc_instance();
+            ContractEdge {
+                source: 0,
+                target: instance_id,
+                effect: Effect::Acquire {
+                    family: *family,
+                    result: instance_id,
+                },
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: Some(*family),
+            }
+        }
+        Effect::Release { family, arg } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::Release {
+                family: *family,
+                arg: *arg,
+            },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: Some(*family),
+        },
+        Effect::ConditionalRelease { family, arg } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::ConditionalRelease {
+                family: *family,
+                arg: *arg,
+            },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: Some(*family),
+        },
+        Effect::NullGuardedRelease { family, arg } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::NullGuardedRelease {
+                family: *family,
+                arg: *arg,
+            },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: Some(*family),
+        },
+        Effect::OutParamOwnedOnSuccess { family, arg } => {
+            let instance_id = graph.alloc_instance();
+            ContractEdge {
+                source: 0,
+                target: instance_id,
+                effect: Effect::OutParamOwnedOnSuccess {
+                    family: *family,
+                    arg: *arg,
+                },
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: Some(*family),
+            }
+        }
+        Effect::OutParamNullOnError { arg } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::OutParamNullOnError { arg: *arg },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: context.family,
+        },
+        Effect::OwnershipEscape { family, result } => {
+            let instance_id = graph.alloc_instance();
+            ContractEdge {
+                source: context.instance_id.unwrap_or(0),
+                target: 0,
+                effect: Effect::OwnershipEscape {
+                    family: *family,
+                    result: instance_id,
+                },
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: Some(*family),
+            }
+        }
+        Effect::OwnershipReclaim { family, result } => {
+            let instance_id = graph.alloc_instance();
+            ContractEdge {
+                source: context.instance_id.unwrap_or(instance_id),
+                target: instance_id,
+                effect: Effect::OwnershipReclaim {
+                    family: *family,
+                    result: instance_id,
+                },
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: Some(*family),
+            }
+        }
+        Effect::ReturnsBorrowed => {
+            // ReturnsBorrowed doesn't create a graph edge
+            ContractEdge {
+                source: 0,
+                target: 0,
+                effect: Effect::ReturnsBorrowed,
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: None,
+            }
+        }
+        Effect::ReturnsOwned { family } => {
+            let instance_id = graph.alloc_instance();
+            ContractEdge {
+                source: 0,
+                target: instance_id,
+                effect: Effect::ReturnsOwned { family: *family },
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: Some(*family),
+            }
+        }
+        Effect::ConsumesArg { arg, family } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::ConsumesArg {
+                arg: *arg,
+                family: *family,
+            },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: context.family,
+        },
+        Effect::CrossLanguageFree {
+            alloc_family,
+            release_family,
+            arg,
+        } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::CrossLanguageFree {
+                alloc_family: *alloc_family,
+                release_family: *release_family,
+                arg: *arg,
+            },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: Some(*release_family),
+        },
+        Effect::EscapesToCallback { arg } => ContractEdge {
+            source: context.instance_id.unwrap_or(0),
+            target: 0,
+            effect: Effect::EscapesToCallback { arg: *arg },
+            function: context.function_id,
+            function_name: context.callee_name.clone(),
+            caller_name: context.caller_name.clone(),
+            family: None,
+        },
+        // Handle other effect variants
+        _ => {
+            // For effects that don't create edges (e.g., Retain, StoresArgToOwner, etc.)
+            // or effects that need special handling, we create a dummy edge
+            ContractEdge {
+                source: 0,
+                target: 0,
+                effect: effect.clone(),
+                function: context.function_id,
+                function_name: context.callee_name.clone(),
+                caller_name: context.caller_name.clone(),
+                family: context.family,
+            }
+        }
+    }
+}
+
+/// Context for a function call used when converting effects to contract edges.
+struct CallContext {
+    /// The function ID of the caller.
+    function_id: FunctionId,
+    /// The name of the callee function.
+    callee_name: String,
+    /// The name of the caller function.
+    caller_name: String,
+    /// The instance ID if known (for releases).
+    instance_id: Option<u64>,
+    /// The family if known.
+    family: Option<FamilyId>,
 }
 
 #[cfg(test)]

@@ -507,7 +507,7 @@ impl FamilyRegistry {
     }
 
     /// Register file descriptor family symbols.
-    /// 
+    ///
     /// File descriptors are integer handles to OS resources. Unlike pointer-based
     /// resources, fd values are small integers that cannot be dereferenced directly.
     /// The acquire/release pairing model applies: open() returns an fd, close()
@@ -747,12 +747,15 @@ mod tests {
     fn test_file_descriptor_acquire_symbols() {
         let registry = FamilyRegistry::new();
         let acquire_symbols = [
-            "open", "openat", "creat", "socket", "accept", "accept4",
-            "dup", "dup2", "dup3", "pipe", "pipe2",
+            "open", "openat", "creat", "socket", "accept", "accept4", "dup", "dup2", "dup3",
+            "pipe", "pipe2",
         ];
         for sym in &acquire_symbols {
             let entry = registry.lookup(sym).unwrap_or_else(|| {
-                panic!("family_registry::test_file_descriptor_acquire_symbols: {} must be registered", sym)
+                panic!(
+                    "family_registry::test_file_descriptor_acquire_symbols: {} must be registered",
+                    sym
+                )
             });
             assert_eq!(
                 entry.family_id,

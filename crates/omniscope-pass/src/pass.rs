@@ -36,6 +36,20 @@ pub enum PassKind {
     Transformation,
 }
 
+/// Timing information for a single analysis pass.
+///
+/// Captures the pass name, execution duration, and number of issues found.
+/// Used to build per-pass performance reports in the pipeline output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PassTiming {
+    /// Name of the pass that was executed.
+    pub pass_name: String,
+    /// Execution duration in milliseconds.
+    pub duration_ms: u64,
+    /// Number of issues found by this pass.
+    pub issues_found: usize,
+}
+
 /// Outcome of emitting an issue through the SRT gate.
 ///
 /// Every call to `PassContext::emit_issue` returns this, so callers

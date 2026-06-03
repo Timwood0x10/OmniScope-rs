@@ -406,6 +406,75 @@ pub fn behavior_to_summary(
                 ));
                 summary.confidence = summary.confidence.max(0.85);
             }
+
+            BehaviorPattern::NullGuardedRelease { arg_index } => {
+                summary.add_effect(Effect::ConditionalRelease {
+                    family: FamilyId::C_HEAP,
+                    arg: *arg_index,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: icmp eq ptr → null + br → release call → NULL-guarded release (arg {})",
+                        arg_index
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.88);
+            }
+
+            BehaviorPattern::NullStoreAfterRelease { arg_index } => {
+                summary.add_effect(Effect::Release {
+                    family: FamilyId::C_HEAP,
+                    arg: *arg_index,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: release call → store null → defensive null-after-release (arg {})",
+                        arg_index
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.85);
+            }
+
+            BehaviorPattern::FallibleOutParamInit { out_arg_index } => {
+                summary.add_effect(Effect::ReturnsOwned {
+                    family: FamilyId::C_HEAP,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: store null → call → icmp → error null-store → fallible out-param init (arg {})",
+                        out_arg_index
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.82);
+            }
+
+            BehaviorPattern::OutParamNullOnError { out_arg_index } => {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: icmp → br → error block null-store → defensive out-param nulling (arg {})",
+                        out_arg_index
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.80);
+            }
+
+            BehaviorPattern::OutParamOwnedOnSuccess { out_arg_index } => {
+                summary.add_effect(Effect::ReturnsOwned {
+                    family: FamilyId::C_HEAP,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: icmp → br → success block allocation → out-param owned on success (arg {})",
+                        out_arg_index
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.85);
+            }
         }
     }
 

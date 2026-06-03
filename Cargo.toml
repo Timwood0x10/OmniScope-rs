@@ -140,17 +140,17 @@ opt-level = 3
 debug = false
 debug-assertions = false
 overflow-checks = false
-lto = "fat"
+lto = "thin"
 panic = "abort"
-incremental = false
-codegen-units = 1
-strip = true
+incremental = true
+codegen-units = 14
+strip = "symbols"
 
 [profile.test]
-opt-level = 2
+opt-level = 0
 debug = true
 debug-assertions = true
 overflow-checks = true
 lto = false
 incremental = true
-codegen-units = 16
+codegen-units = 256

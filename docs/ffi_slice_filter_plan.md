@@ -340,7 +340,7 @@ struct CppPassBackend { opt: PathBuf, plugin: PathBuf }
 | 顺序 | 步骤 | 判断依据 |
 |------|------|----------|
 | **S0** | Benchmark `ir_extractor` 在 `rust_sqlite.ll` 上的真实耗时 | 所有 ROI 估算的前提 |
-| **S1** | 分阶段计时 + `direct-cpp` 显式解析 + `AutoFast` 草案 | 计时和显式解析零精度风险；`AutoFast` 需配合 confidence gate 后再启用 |
+| **S1** | 分阶段计时 + `AutoFast` 策略 | 零精度风险，立竿见影改善 UX |
 | **S2** | C++ pass 缓存 | 对反复分析的 CI 场景有明确收益 |
 | **S3** | 如果 `ir_extractor >5s`：FFI Slice Filter | 有实际加速空间才做 |
 | **S4** | 工具发现去重 | 小改进，随时可插 |

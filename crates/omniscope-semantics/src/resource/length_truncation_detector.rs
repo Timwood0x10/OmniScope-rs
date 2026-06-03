@@ -159,10 +159,17 @@ pub struct TruncationAnalysis {
 ///
 /// A `TruncationAnalysis` containing all detected truncation patterns.
 pub fn extract_truncation_patterns(body: &FunctionBody) -> TruncationAnalysis {
+    // Note: We don't clone instructions here because check_ffi_proximity
+    // uses pointer comparison (std::ptr::eq) to find instruction indices.
+    // Instead, we ensure raw_text is populated in analyze_truncation.
+
     let truncation_insts: Vec<&IRInstruction> = body
         .instructions
         .iter()
-        .filter(|i| i.kind == IRInstructionKind::Conversion && i.raw_text.contains("trunc"))
+        .filter(|i| {
+            i.kind == IRInstructionKind::Conversion
+                && i.conversion_opcode.as_deref() == Some("trunc")
+        })
         .collect();
 
     let truncation_count = truncation_insts.len();
@@ -381,6 +388,9 @@ fn analyze_truncation(
     let raw = &inst.raw_text;
 
     // Parse truncation instruction: trunc i64 %size to i32
+    // Note: We still use raw_text here because the source type (i64) is not
+    // available in structured fields. The result_type field only contains the
+    // target type (i32), and the source type is not extracted into any field.
     let (source_width, target_width) = parse_truncation_widths(raw)?;
 
     // Check if this is a size/length type truncation
@@ -390,7 +400,8 @@ fn analyze_truncation(
     }
 
     // Extract the register being truncated
-    let truncated_register = extract_truncated_register(raw)?;
+    // Note: We can use the operands field instead of parsing raw_text
+    let truncated_register = inst.operands.first().cloned()?;
 
     // Check if this truncation is near an FFI call
     let (near_ffi_call, ffi_function) = check_ffi_proximity(inst, ffi_calls, body);
@@ -573,10 +584,12 @@ fn check_signed_unsigned_conversion(
     let search_range = std::cmp::min(trunc_idx + 6, body.instructions.len());
     for i in (trunc_idx + 1)..search_range {
         let next_inst = &body.instructions[i];
-        let next_raw = &next_inst.raw_text;
 
         // Check for sign extension or zero extension
-        if next_raw.contains("sext") || next_raw.contains("zext") {
+        if next_inst.kind == IRInstructionKind::Conversion
+            && (next_inst.conversion_opcode.as_deref() == Some("sext")
+                || next_inst.conversion_opcode.as_deref() == Some("zext"))
+        {
             return true;
         }
     }
@@ -600,21 +613,24 @@ fn check_missing_range_check(
 
     for i in search_start..trunc_idx {
         let prev_inst = &body.instructions[i];
-        let prev_raw = &prev_inst.raw_text;
 
         // Check for comparison instruction
-        if prev_raw.contains("icmp") {
+        if prev_inst.kind == IRInstructionKind::Icmp {
             // Check if it's a range check (comparing against target max value)
             if let Some(target_bits) = target_width.bits() {
                 let max_value = (1u64 << target_bits) - 1;
                 let max_value_str = max_value.to_string();
 
                 // Check if comparison is against max value or similar
-                if prev_raw.contains(&max_value_str)
-                    || prev_raw.contains("ult") // Unsigned less than
-                    || prev_raw.contains("ule")
-                // Unsigned less or equal
-                {
+                // We need to check operands for the max value and predicate
+                let has_max_value = prev_inst
+                    .operands
+                    .iter()
+                    .any(|op| op.contains(&max_value_str));
+                let has_ult_or_ule = prev_inst.icmp_pred.as_deref() == Some("ult")
+                    || prev_inst.icmp_pred.as_deref() == Some("ule");
+
+                if has_max_value || has_ult_or_ule {
                     found_range_check = true;
                     break;
                 }
@@ -635,10 +651,9 @@ fn check_boundary_condition(body: &FunctionBody, trunc_idx: usize) -> bool {
     let search_range = std::cmp::min(trunc_idx + 6, body.instructions.len());
     for i in (trunc_idx + 1)..search_range {
         let next_inst = &body.instructions[i];
-        let next_raw = &next_inst.raw_text;
 
         // Check for comparison instruction
-        if next_raw.contains("icmp") {
+        if next_inst.kind == IRInstructionKind::Icmp {
             return true;
         }
     }
@@ -665,13 +680,11 @@ fn check_potential_overflow(
 
             for i in search_start..trunc_idx {
                 let prev_inst = &body.instructions[i];
-                let prev_raw = &prev_inst.raw_text;
 
                 // Check for validation instructions
-                if prev_raw.contains("icmp") || 
-                   prev_raw.contains("br") || // Branch instruction
-                   prev_raw.contains("switch")
-                // Switch instruction
+                if prev_inst.kind == IRInstructionKind::Icmp
+                    || prev_inst.kind == IRInstructionKind::Branch
+                    || prev_inst.kind == IRInstructionKind::Other
                 {
                     found_validation = true;
                     break;

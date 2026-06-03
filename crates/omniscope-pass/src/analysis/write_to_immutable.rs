@@ -60,7 +60,8 @@ impl Pass for WriteToImmutablePass {
         let mut store_instructions = Vec::new();
         let mut runtime_internal_funcs = std::collections::HashSet::new();
         {
-            let module_index: Option<&crate::module_index::ModuleIndex> = ctx.get_ref("module_index");
+            let module_index: Option<&crate::module_index::ModuleIndex> =
+                ctx.get_ref("module_index");
 
             for (func_name, body) in &module.function_bodies {
                 // Use ModuleIndex to skip functions without store instructions
@@ -88,24 +89,18 @@ impl Pass for WriteToImmutablePass {
             nodes_analyzed += 1;
 
             // Build a target symbol from the function name and store operands.
-            // Store instructions don't have a callee; use the raw text for context.
-            // Find a byte boundary for ~80 chars to bound allocation without
-            // collecting an intermediate String.
-            let byte_end = inst
-                .raw_text
-                .char_indices()
-                .nth(80)
-                .map_or(inst.raw_text.len(), |(i, _)| i);
-            let raw_prefix = &inst.raw_text[..byte_end];
-            let target_symbol = format!("{}->store:{}", func_name, raw_prefix);
+            // Use structured fields instead of raw_text to avoid ensure_raw() overhead.
+            let operands_summary = inst.operands.join(" ");
+            let target_symbol = format!("{}->store:{}", func_name, operands_summary);
 
-            // Analyze the store target for semantic context
+            // Analyze the store target for semantic context.
+            // Pass operands_summary instead of raw_text for structured field access.
             self.analyze_store_target(
                 ctx,
                 &mut semantic_tree,
                 &target_symbol,
                 &func_name,
-                &inst.raw_text,
+                &operands_summary,
                 &runtime_internal_funcs,
                 &mut issues,
             );
@@ -274,11 +269,15 @@ impl WriteToImmutablePass {
     /// targets stack memory (alloca), a function parameter, or a heap
     /// pointer — all of which are mutable. Truly immutable stores target
     /// global constants (`@` prefixed with `constant`).
-    fn is_store_to_local_ssa(&self, raw_text: &str) -> bool {
-        // Parse "store ..., ptr %N, ..." pattern
+    ///
+    /// Uses structured operands field instead of raw text parsing to
+    /// enable --no-raw mode support.
+    fn is_store_to_local_ssa(&self, operands_summary: &str) -> bool {
+        // Parse "store ..., ptr %N, ..." pattern from operands summary
+        // The operands summary is space-separated operands from the instruction
         // Find "ptr " followed by the destination operand
-        if let Some(ptr_pos) = raw_text.find(" ptr ") {
-            let after_ptr = &raw_text[ptr_pos + 5..];
+        if let Some(ptr_pos) = operands_summary.find(" ptr ") {
+            let after_ptr = &operands_summary[ptr_pos + 5..];
             // The destination operand follows "ptr "
             // It starts with "%" for local SSA values or "@" for globals
             let trimmed = after_ptr.trim_start();

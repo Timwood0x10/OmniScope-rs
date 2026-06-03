@@ -11,12 +11,14 @@
 //! and gracefully falls back to the next.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use tracing::{debug, info, warn};
 
+use crate::ir_cache::{find_project_root, IrCache};
 use crate::parser::IRModule;
-use crate::ir_cache::{IrCache, find_project_root};
 
 /// Result of loading an IR module, including timing and strategy metadata.
 #[derive(Debug)]
@@ -38,6 +40,7 @@ pub struct LoadedIr {
 /// This avoids repeated filesystem scans when checking availability
 /// or loading IR modules multiple times.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct CppPassBackend {
     opt: PathBuf,
     plugin: PathBuf,
@@ -45,6 +48,7 @@ struct CppPassBackend {
 
 /// Cached paths for direct C++ IR extractor.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct DirectCppBackend {
     extractor: PathBuf,
 }
@@ -53,11 +57,13 @@ struct DirectCppBackend {
 ///
 /// Uses `OnceLock` for thread-safe lazy initialization.
 /// The cache is populated on first access and reused for subsequent calls.
+#[allow(dead_code)]
 struct BackendCache {
     cpp_pass: OnceLock<Option<CppPassBackend>>,
     direct_cpp: OnceLock<Option<DirectCppBackend>>,
 }
 
+#[allow(dead_code)]
 impl BackendCache {
     const fn new() -> Self {
         Self {
@@ -96,6 +102,7 @@ impl BackendCache {
 ///
 /// This is safe to use from multiple threads because `OnceLock` provides
 /// thread-safe initialization guarantees.
+#[allow(dead_code)]
 static BACKEND_CACHE: BackendCache = BackendCache::new();
 
 // ---------------------------------------------------------------------------
@@ -124,6 +131,11 @@ pub enum LoadStrategy {
     ///
     /// Always available but lacks rich type information.
     TextParser,
+    /// Use MessagePack format for faster deserialization.
+    ///
+    /// Supports .msgpack files with binary encoding.
+    /// 5-10x faster to parse and 70-80% smaller than JSON.
+    MsgPack,
     /// Auto-detect the best available strategy.
     ///
     /// Priority: DirectCppFfi > DirectCpp > llvm-sys > cpp pass > text parser.
@@ -144,6 +156,7 @@ impl std::fmt::Display for LoadStrategy {
             LoadStrategy::DirectCpp => write!(f, "direct-cpp"),
             LoadStrategy::LlvmSys => write!(f, "llvm-sys"),
             LoadStrategy::TextParser => write!(f, "text-parser"),
+            LoadStrategy::MsgPack => write!(f, "msgpack"),
             LoadStrategy::Auto => write!(f, "auto"),
             LoadStrategy::AutoFast => write!(f, "auto-fast"),
         }
@@ -176,26 +189,38 @@ pub fn load_ir(path: &Path, strategy: LoadStrategy) -> Result<LoadedIr> {
     );
 
     let start = Instant::now();
-    
-    let (module, actual_strategy) = match strategy {
-        LoadStrategy::Auto => load_auto(path)?,
-        LoadStrategy::AutoFast => load_auto_fast(path)?,
-        LoadStrategy::DirectCppFfi => (load_via_direct_cpp_ffi(path)?, LoadStrategy::DirectCppFfi),
-        LoadStrategy::CppPass => (load_via_cpp_pass(path)?, LoadStrategy::CppPass),
-        LoadStrategy::DirectCpp => (load_via_direct_cpp(path)?, LoadStrategy::DirectCpp),
-        LoadStrategy::LlvmSys => (load_via_llvm_sys(path)?, LoadStrategy::LlvmSys),
-        LoadStrategy::TextParser => (load_via_text(path)?, LoadStrategy::TextParser),
+
+    // Check for .msgpack extension first (unless strategy is explicitly set)
+    let is_msgpack = path.extension().is_some_and(|ext| ext == "msgpack");
+
+    let (module, actual_strategy) = if is_msgpack && strategy == LoadStrategy::Auto {
+        // Auto-detect: use msgpack for .msgpack files
+        debug!("Detected .msgpack file, using msgpack loader");
+        (load_via_msgpack(path)?, LoadStrategy::MsgPack)
+    } else {
+        match strategy {
+            LoadStrategy::Auto => load_auto(path)?,
+            LoadStrategy::AutoFast => load_auto_fast(path)?,
+            LoadStrategy::DirectCppFfi => {
+                (load_via_direct_cpp_ffi(path)?, LoadStrategy::DirectCppFfi)
+            }
+            LoadStrategy::CppPass => (load_via_cpp_pass(path)?, LoadStrategy::CppPass),
+            LoadStrategy::DirectCpp => (load_via_direct_cpp(path)?, LoadStrategy::DirectCpp),
+            LoadStrategy::LlvmSys => (load_via_llvm_sys(path)?, LoadStrategy::LlvmSys),
+            LoadStrategy::TextParser => (load_via_text(path)?, LoadStrategy::TextParser),
+            LoadStrategy::MsgPack => (load_via_msgpack(path)?, LoadStrategy::MsgPack),
+        }
     };
-    
+
     let load_ms = start.elapsed().as_millis() as u64;
-    
+
     info!(
         path = %path.display(),
         strategy = %actual_strategy,
         load_ms = load_ms,
         "IR module loaded successfully"
     );
-    
+
     Ok(LoadedIr {
         module,
         strategy: actual_strategy,
@@ -210,14 +235,21 @@ pub fn load_ir(path: &Path, strategy: LoadStrategy) -> Result<LoadedIr> {
 /// Probe backends in priority order and fall back gracefully.
 ///
 /// Priority: **DirectCppFfi** > **DirectCpp** > **llvm-sys** > **cpp pass** > **text parser**.
+///
+/// When a backend succeeds but returns an empty module (e.g. FFI slice
+/// filtering removed all functions), we treat it as a soft failure and
+/// continue probing lower-priority backends.
 fn load_auto(path: &Path) -> Result<(IRModule, LoadStrategy)> {
     // 1. Try DirectCppFfi
     if can_use_direct_cpp_ffi() {
         debug!("Attempting DirectCppFfi backend");
         match load_via_direct_cpp_ffi(path) {
-            Ok(module) => {
+            Ok(module) if !module.functions.is_empty() => {
                 info!("Loaded via DirectCppFfi");
                 return Ok((module, LoadStrategy::DirectCppFfi));
+            }
+            Ok(_) => {
+                warn!("DirectCppFfi returned empty module, falling back");
             }
             Err(e) => {
                 warn!(error = %e, "DirectCppFfi backend failed, falling back");
@@ -231,9 +263,12 @@ fn load_auto(path: &Path) -> Result<(IRModule, LoadStrategy)> {
     if can_use_direct_cpp() {
         debug!("Attempting DirectCpp backend");
         match load_via_direct_cpp(path) {
-            Ok(module) => {
+            Ok(module) if !module.functions.is_empty() => {
                 info!("Loaded via DirectCpp");
                 return Ok((module, LoadStrategy::DirectCpp));
+            }
+            Ok(_) => {
+                warn!("DirectCpp returned empty module, falling back");
             }
             Err(e) => {
                 warn!(error = %e, "DirectCpp backend failed, falling back");
@@ -279,6 +314,55 @@ fn load_auto(path: &Path) -> Result<(IRModule, LoadStrategy)> {
     debug!("Falling back to text parser");
     let module = load_via_text(path)?;
     Ok((module, LoadStrategy::TextParser))
+}
+
+/// Auto-detect with fast preference for .ll files.
+///
+/// For .ll files, prefer text parser first (faster for large files).
+/// For .bc files, use normal auto-detection.
+/// Includes confidence gate for large files (>10MB).
+fn load_auto_fast(path: &Path) -> Result<(IRModule, LoadStrategy)> {
+    let is_ll = path.extension().is_some_and(|ext| ext == "ll");
+    let file_size = std::fs::metadata(path)?.len();
+    let is_large_file = file_size > 10 * 1024 * 1024; // 10MB threshold
+
+    // For .ll files, especially large ones, prefer text parser first
+    if is_ll && is_large_file {
+        debug!(
+            path = %path.display(),
+            size_mb = file_size / (1024 * 1024),
+            "Large .ll file detected, using text parser first for speed"
+        );
+
+        // Try text parser first for large .ll files
+        match load_via_text(path) {
+            Ok(module) => {
+                info!("Loaded large .ll via text parser (fast path)");
+                return Ok((module, LoadStrategy::TextParser));
+            }
+            Err(e) => {
+                warn!(error = %e, "Text parser failed for large .ll, falling back to auto");
+            }
+        }
+    }
+
+    // For .ll files (not large) or if text parser failed, try text parser first
+    if is_ll {
+        debug!("Attempting text parser for .ll file");
+        match load_via_text(path) {
+            Ok(module) => {
+                info!("Loaded .ll via text parser");
+                return Ok((module, LoadStrategy::TextParser));
+            }
+            Err(e) => {
+                warn!(error = %e, "Text parser failed for .ll, falling back to auto");
+            }
+        }
+    }
+
+    // For .bc files or if text parser failed, use normal auto-detection
+    debug!("Using standard auto-detection");
+    load_auto(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,9 +419,33 @@ fn can_use_cpp_pass() -> bool {
     find_opt().is_some() && find_pass_plugin().is_some()
 }
 
+/// Get IR cache instance
+fn get_ir_cache() -> Option<IrCache> {
+    find_project_root().map(|root| IrCache::new(&root))
+}
+
 /// Load IR by running `opt -load-pass-plugin SafetyExportPass.so` and
 /// deserializing the resulting JSON.
+///
+/// This function implements caching: if the file hasn't changed, it returns
+/// cached JSON output instead of re-running the expensive C++ pass.
 fn load_via_cpp_pass(path: &Path) -> Result<IRModule> {
+    // Check cache first
+    if let Some(cache) = get_ir_cache() {
+        if let Some(entry) = cache.check_cache(path) {
+            debug!(path = %path.display(), "Cache hit for C++ pass");
+            let json_str = cache
+                .load_cached_json(&entry)
+                .context("Failed to load cached JSON")?;
+
+            let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
+                .context("failed to deserialize cached C++ pass JSON output")?;
+
+            return Ok(model.to_ir_module());
+        }
+    }
+
+    // Cache miss, run the actual C++ pass
     let opt = find_opt().context("`opt` binary not found for C++ pass backend")?;
     let plugin =
         find_pass_plugin().context("SafetyExportPass.so plugin not found for C++ pass backend")?;
@@ -370,6 +478,13 @@ fn load_via_cpp_pass(path: &Path) -> Result<IRModule> {
 
     let json_str = String::from_utf8(output.stdout).context("opt output is not valid UTF-8")?;
 
+    // Save to cache
+    if let Some(cache) = get_ir_cache() {
+        if let Err(e) = cache.save_to_cache(path, &json_str) {
+            warn!(error = %e, "Failed to save C++ pass output to cache");
+        }
+    }
+
     // Delegate deserialization to the ir_model module (Plan A).
     let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
         .context("failed to deserialize C++ pass JSON output")?;
@@ -386,9 +501,28 @@ fn load_via_cpp_pass(path: &Path) -> Result<IRModule> {
 /// This backend runs the `ir_extractor` binary with `--slice=ffi` to focus
 /// on FFI boundary code, reducing noise and improving precision for
 /// cross-language analysis.
+///
+/// This function implements caching: if the file hasn't changed, it returns
+/// cached JSON output instead of re-running the expensive C++ extractor.
 fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
-    let extractor = find_ir_extractor()
-        .context("ir_extractor binary not found for DirectCppFfi backend")?;
+    // Check cache first
+    if let Some(cache) = get_ir_cache() {
+        if let Some(entry) = cache.check_cache(path) {
+            debug!(path = %path.display(), "Cache hit for direct C++ FFI extractor");
+            let json_str = cache
+                .load_cached_json(&entry)
+                .context("Failed to load cached JSON")?;
+
+            let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
+                .context("failed to deserialize cached direct C++ FFI JSON output")?;
+
+            return Ok(model.to_ir_module());
+        }
+    }
+
+    // Cache miss, run the actual C++ extractor
+    let extractor =
+        find_ir_extractor().context("ir_extractor binary not found for DirectCppFfi backend")?;
 
     debug!(
         extractor = %extractor.display(),
@@ -400,6 +534,7 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
         .arg("--slice=ffi")
         .arg("--slice-hops=2")
         .arg("--slice-stats")
+        .arg("--no-raw")
         .arg(path)
         .output()
         .with_context(|| format!("failed to execute ir_extractor at {}", extractor.display()))?;
@@ -418,13 +553,25 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
         );
     }
 
-    let json_str = String::from_utf8(output.stdout)
-        .context("ir_extractor output is not valid UTF-8")?;
+    let json_str =
+        String::from_utf8(output.stdout).context("ir_extractor output is not valid UTF-8")?;
 
     let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
         .context("failed to deserialize ir_extractor JSON output")?;
 
-    Ok(model.to_ir_module())
+    let module = model.to_ir_module();
+
+    // Only cache non-empty results — empty modules indicate the FFI slice
+    // filter removed all functions, and we don't want to cache that.
+    if !module.functions.is_empty() {
+        if let Some(cache) = get_ir_cache() {
+            if let Err(e) = cache.save_to_cache(path, &json_str) {
+                warn!(error = %e, "Failed to save direct C++ FFI extractor output to cache");
+            }
+        }
+    }
+
+    Ok(module)
 }
 
 // ---------------------------------------------------------------------------
@@ -436,9 +583,28 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
 /// This backend runs the `ir_extractor` binary which parses LLVM IR directly
 /// and outputs JSON. Unlike the C++ pass backend, it does not require `opt`
 /// or the SafetyExportPass plugin.
+///
+/// This function implements caching: if the file hasn't changed, it returns
+/// cached JSON output instead of re-running the expensive C++ extractor.
 fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
-    let extractor = find_ir_extractor()
-        .context("ir_extractor binary not found for DirectCpp backend")?;
+    // Check cache first
+    if let Some(cache) = get_ir_cache() {
+        if let Some(entry) = cache.check_cache(path) {
+            debug!(path = %path.display(), "Cache hit for direct C++ extractor");
+            let json_str = cache
+                .load_cached_json(&entry)
+                .context("Failed to load cached JSON")?;
+
+            let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
+                .context("failed to deserialize cached direct C++ JSON output")?;
+
+            return Ok(model.to_ir_module());
+        }
+    }
+
+    // Cache miss, run the actual C++ extractor
+    let extractor =
+        find_ir_extractor().context("ir_extractor binary not found for DirectCpp backend")?;
 
     debug!(
         extractor = %extractor.display(),
@@ -460,13 +626,24 @@ fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
         );
     }
 
-    let json_str = String::from_utf8(output.stdout)
-        .context("ir_extractor output is not valid UTF-8")?;
+    let json_str =
+        String::from_utf8(output.stdout).context("ir_extractor output is not valid UTF-8")?;
 
     let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
         .context("failed to deserialize ir_extractor JSON output")?;
 
-    Ok(model.to_ir_module())
+    let module = model.to_ir_module();
+
+    // Only cache non-empty results to avoid poisoning the cache.
+    if !module.functions.is_empty() {
+        if let Some(cache) = get_ir_cache() {
+            if let Err(e) = cache.save_to_cache(path, &json_str) {
+                warn!(error = %e, "Failed to save direct C++ extractor output to cache");
+            }
+        }
+    }
+
+    Ok(module)
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +656,19 @@ fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
 /// is already a `.ll` file.
 fn load_via_text(path: &Path) -> Result<IRModule> {
     IRModule::load_from_file(path).map_err(|e| anyhow::anyhow!(e))
+}
+
+// ---------------------------------------------------------------------------
+// Backend: MessagePack
+// ---------------------------------------------------------------------------
+
+/// Load IR using MessagePack format.
+///
+/// This backend loads `.msgpack` files which are binary encoded and
+/// significantly faster to parse than JSON (5-10x) and smaller (70-80%).
+fn load_via_msgpack(path: &Path) -> Result<IRModule> {
+    crate::ir_model::load_from_msgpack(path)
+        .context("failed to load IR module from MessagePack file")
 }
 
 // ---------------------------------------------------------------------------
@@ -716,21 +906,6 @@ fn homebrew_llvm_bin_dirs() -> Vec<PathBuf> {
     .collect()
 }
 
-/// Walk up from the current directory looking for `Cargo.toml` to locate
-/// the project root.
-fn find_project_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        if dir.join("Cargo.toml").is_file() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -771,6 +946,11 @@ mod tests {
             "text-parser",
             "TextParser strategy should display as 'text-parser'"
         );
+        assert_eq!(
+            LoadStrategy::MsgPack.to_string(),
+            "msgpack",
+            "MsgPack strategy should display as 'msgpack'"
+        );
     }
 
     #[test]
@@ -805,6 +985,16 @@ mod tests {
             LoadStrategy::TextParser,
             "AutoFast should not equal TextParser"
         );
+        assert_ne!(
+            LoadStrategy::MsgPack,
+            LoadStrategy::TextParser,
+            "MsgPack should not equal TextParser"
+        );
+        assert_ne!(
+            LoadStrategy::MsgPack,
+            LoadStrategy::Auto,
+            "MsgPack should not equal Auto"
+        );
     }
 
     #[test]
@@ -825,9 +1015,9 @@ mod tests {
         let tmp = tempfile::NamedTempFile::with_suffix(".ll").unwrap();
         std::fs::write(tmp.path(), "").unwrap();
 
-        let module = load_ir(tmp.path(), LoadStrategy::TextParser).unwrap();
+        let loaded = load_ir(tmp.path(), LoadStrategy::TextParser).unwrap();
         assert!(
-            module.functions.is_empty(),
+            loaded.module.functions.is_empty(),
             "empty file should produce an empty module"
         );
     }

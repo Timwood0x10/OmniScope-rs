@@ -106,6 +106,8 @@ fn test_virtual_destructor_concern() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -118,6 +120,8 @@ fn test_virtual_destructor_concern() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -159,6 +163,8 @@ fn test_exception_unsafe_concern() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -171,6 +177,8 @@ fn test_exception_unsafe_concern() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };

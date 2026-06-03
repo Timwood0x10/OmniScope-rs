@@ -53,6 +53,34 @@ pub enum IRInstructionKind {
     Other,
 }
 
+impl IRInstructionKind {
+    /// Convert the instruction kind to its LLVM IR opcode string.
+    ///
+    /// Returns the canonical opcode string that would appear in LLVM IR text.
+    /// For `BinaryOp` and `Other`, returns a generic placeholder since
+    /// these categories don't have a single opcode.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IRInstructionKind::Alloca => "alloca",
+            IRInstructionKind::Load => "load",
+            IRInstructionKind::Store => "store",
+            IRInstructionKind::AtomicRmw => "atomicrmw",
+            IRInstructionKind::GetElementPtr => "getelementptr",
+            IRInstructionKind::Icmp => "icmp",
+            IRInstructionKind::Fcmp => "fcmp",
+            IRInstructionKind::Branch => "br",
+            IRInstructionKind::Call => "call",
+            IRInstructionKind::IndirectCall => "call",
+            IRInstructionKind::Ret => "ret",
+            IRInstructionKind::Phi => "phi",
+            IRInstructionKind::BinaryOp => "op",
+            IRInstructionKind::Conversion => "conv",
+            IRInstructionKind::Select => "select",
+            IRInstructionKind::Other => "other",
+        }
+    }
+}
+
 /// A single LLVM IR instruction with extracted metadata.
 ///
 /// This is a simplified representation that captures enough information
@@ -89,6 +117,67 @@ pub struct IRInstruction {
     /// Function signature for call instructions (e.g., "i32 (ptr, i32)").
     /// Populated by the llvm-sys adapter; `None` for the text parser.
     pub function_signature: Option<String>,
+    /// For Conversion kind: the specific conversion opcode (e.g., "sext", "zext",
+    /// "trunc", "inttoptr", "ptrtoint", "bitcast", "fptoui", "fptosi", "uitofp",
+    /// "sitofp", "fpext", "fptrunc").
+    /// Populated by both the text parser and the llvm-sys adapter.
+    /// Enables structured field access instead of raw_text.contains().
+    pub conversion_opcode: Option<String>,
+    /// For BinaryOp kind: the specific binary opcode (e.g., "add", "sub", "mul",
+    /// "udiv", "sdiv", "urem", "srem", "and", "or", "xor", "shl", "lshr", "ashr").
+    /// Populated by both the text parser and the llvm-sys adapter.
+    /// Enables structured field access instead of raw_text.contains().
+    pub binary_opcode: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// IRInstruction methods
+// ---------------------------------------------------------------------------
+
+impl IRInstruction {
+    /// Ensure the raw_text field is populated.
+    ///
+    /// If `raw_text` is empty (e.g., because the C++ extractor used `--no-raw`),
+    /// this method generates a representation from the structured fields.
+    ///
+    /// This is called by analysis passes before accessing `raw_text` to ensure
+    /// they always have a usable representation.
+    pub fn ensure_raw(&mut self) {
+        if !self.raw_text.is_empty() {
+            return;
+        }
+
+        // Generate from structured fields
+        let mut raw = String::new();
+
+        // Add destination register if present
+        if let Some(dest) = &self.dest {
+            raw.push_str(dest);
+            raw.push_str(" = ");
+        }
+
+        // Add opcode
+        if let Some(ref conv_op) = self.conversion_opcode {
+            raw.push_str(conv_op);
+        } else {
+            raw.push_str(self.kind.as_str());
+        }
+
+        // Add operands
+        for op in &self.operands {
+            raw.push(' ');
+            raw.push_str(op);
+        }
+
+        self.raw_text = raw;
+    }
+
+    /// Check if the raw_text field has content.
+    ///
+    /// Returns `true` if `raw_text` is non-empty.
+    pub fn has_raw(&self) -> bool {
+        !self.raw_text.is_empty()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -154,6 +243,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -170,6 +261,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -186,6 +279,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -203,6 +298,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -219,6 +316,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -235,6 +334,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -252,6 +353,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -269,6 +372,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -285,6 +390,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -306,6 +413,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                 result_type: None,
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             });
         }
         // Check for indirect call: pattern like "call ... %reg(...)"
@@ -323,6 +432,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                 result_type: None,
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             });
         }
         // Unknown call format — still emit as Call to avoid silently dropping
@@ -337,6 +448,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -353,6 +466,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -369,6 +484,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -385,6 +502,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
             result_type: None,
             element_type: None,
             function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
         });
     }
 
@@ -415,6 +534,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                     result_type: None,
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: Some(op.to_string()),
                 });
             }
         }
@@ -438,6 +559,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
                 result_type: None,
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: Some(op.to_string()),
+                binary_opcode: None,
             });
         }
     }
@@ -455,6 +578,8 @@ pub fn parse_instruction(line: &str) -> Option<IRInstruction> {
         result_type: None,
         element_type: None,
         function_signature: None,
+        conversion_opcode: None,
+        binary_opcode: None,
     })
 }
 

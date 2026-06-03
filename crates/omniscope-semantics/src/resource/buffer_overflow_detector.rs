@@ -275,26 +275,24 @@ impl BufferOverflowDetector {
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
-        let raw = &inst.raw_text;
-
         match inst.kind {
             IRInstructionKind::GetElementPtr => {
                 if self.check_out_of_bounds {
-                    self.check_gep_overflow(raw, ffi_calls, body)
+                    self.check_gep_overflow(inst, ffi_calls, body)
                 } else {
                     None
                 }
             }
             IRInstructionKind::Load => {
                 if self.check_null_deref {
-                    self.check_load_null_deref(raw, ffi_calls, body)
+                    self.check_load_null_deref(inst, ffi_calls, body)
                 } else {
                     None
                 }
             }
             IRInstructionKind::Store => {
                 if self.check_null_deref {
-                    self.check_store_null_deref(raw, ffi_calls, body)
+                    self.check_store_null_deref(inst, ffi_calls, body)
                 } else {
                     None
                 }
@@ -302,9 +300,9 @@ impl BufferOverflowDetector {
             _ => {
                 // Check for buffer size mismatch if enabled
                 if self.check_size_mismatch {
-                    self.check_buffer_size_mismatch(raw, ffi_calls, body)
+                    self.check_buffer_size_mismatch(inst, ffi_calls, body)
                 } else if self.check_missing_bounds {
-                    self.check_missing_bounds_check(raw, ffi_calls, body)
+                    self.check_missing_bounds_check(inst, ffi_calls, body)
                 } else {
                     None
                 }
@@ -319,10 +317,8 @@ impl BufferOverflowDetector {
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
-        let raw = &inst.raw_text;
-
         if self.check_integer_overflow {
-            self.check_alloca_integer_overflow(raw, ffi_calls, body)
+            self.check_alloca_integer_overflow(inst, ffi_calls, body)
         } else {
             None
         }
@@ -331,15 +327,22 @@ impl BufferOverflowDetector {
     /// Checks for GEP instruction overflow.
     fn check_gep_overflow(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
         // Pattern: getelementptr [N x T], [N x T]* %buf, i32 0, i32 M
         // If M > N, then overflow
-        if !raw.contains("getelementptr") {
+        if inst.kind != IRInstructionKind::GetElementPtr {
             return None;
         }
+
+        // Note: We still use raw_text here because the GEP instruction parsing
+        // requires access to the full instruction text to extract array size and index.
+        // The structured fields don't contain this information in a easily parseable format.
+        let mut inst_clone = inst.clone();
+        inst_clone.ensure_raw();
+        let raw = &inst_clone.raw_text;
 
         // Parse array type and index
         let (array_size, index) = parse_gep_array_access(raw)?;
@@ -377,15 +380,21 @@ impl BufferOverflowDetector {
     /// Checks for null pointer dereference in load instruction.
     fn check_load_null_deref(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
         // Look for load from null pointer or undefined register
-        // Check both raw text and operands for null/undef
-        let has_null = raw.contains("null") || raw.contains("undef");
-        let has_null_in_operands = raw.contains(" null") || raw.contains(" undef");
-        if raw.contains("load") && (has_null || has_null_in_operands) {
+        // Check operands for null/undef
+        let has_null = inst.operands.iter().any(|op| op == "null" || op == "undef");
+        if has_null {
+            // Note: We still use raw_text here because we need to extract the pointer
+            // register name from the instruction text. The structured fields don't
+            // contain this information in a easily parseable format.
+            let mut inst_clone = inst.clone();
+            inst_clone.ensure_raw();
+            let raw = &inst_clone.raw_text;
+
             let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
 
             Some(BufferOverflowPattern {
@@ -407,15 +416,21 @@ impl BufferOverflowDetector {
     /// Checks for null pointer dereference in store instruction.
     fn check_store_null_deref(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
         // Look for store to null pointer or undefined register
-        // Check both raw text and operands for null/undef
-        let has_null = raw.contains("null") || raw.contains("undef");
-        let has_null_in_operands = raw.contains(" null") || raw.contains(" undef");
-        if raw.contains("store") && (has_null || has_null_in_operands) {
+        // Check operands for null/undef
+        let has_null = inst.operands.iter().any(|op| op == "null" || op == "undef");
+        if has_null {
+            // Note: We still use raw_text here because we need to extract the pointer
+            // register name from the instruction text. The structured fields don't
+            // contain this information in a easily parseable format.
+            let mut inst_clone = inst.clone();
+            inst_clone.ensure_raw();
+            let raw = &inst_clone.raw_text;
+
             let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
 
             Some(BufferOverflowPattern {
@@ -437,7 +452,7 @@ impl BufferOverflowDetector {
     /// Checks for buffer size mismatch between allocation and usage.
     fn check_buffer_size_mismatch(
         &self,
-        _raw: &str,
+        _inst: &IRInstruction,
         _ffi_calls: &[(String, usize)],
         _body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
@@ -450,7 +465,7 @@ impl BufferOverflowDetector {
     /// Checks for missing bounds checks before memory access.
     fn check_missing_bounds_check(
         &self,
-        _raw: &str,
+        _inst: &IRInstruction,
         _ffi_calls: &[(String, usize)],
         _body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
@@ -463,12 +478,19 @@ impl BufferOverflowDetector {
     /// Checks for integer overflow in alloca instruction.
     fn check_alloca_integer_overflow(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<BufferOverflowPattern> {
         // Look for alloca with multiplication that could overflow
-        if raw.contains("alloca") {
+        if inst.kind == IRInstructionKind::Alloca {
+            // Note: We still use raw_text here because we need to parse the alloca
+            // instruction to extract size calculations. The structured fields don't
+            // contain this information in a easily parseable format.
+            let mut inst_clone = inst.clone();
+            inst_clone.ensure_raw();
+            let raw = &inst_clone.raw_text;
+
             // Check for patterns like: alloca i8, i64 %size * %count
             if let Some(calculation) = extract_size_calculation(raw) {
                 if calculation.contains("*") {
@@ -491,17 +513,23 @@ impl BufferOverflowDetector {
             // Check if alloca uses a register that was computed with multiplication
             if let Some(register) = extract_size_register(raw) {
                 // Look for mul instruction that defines this register
-                for inst in &body.instructions {
-                    if inst.kind == IRInstructionKind::BinaryOp
-                        && inst.raw_text.contains("mul")
-                        && inst.dest.as_deref() == Some(&register)
+                for body_inst in &body.instructions {
+                    if body_inst.kind == IRInstructionKind::BinaryOp
+                        && body_inst.binary_opcode.as_deref() == Some("mul")
+                        && body_inst.dest.as_deref() == Some(&register)
                     {
+                        // Note: We still use raw_text here because we need to get the
+                        // expression text for the multiplication instruction. The structured
+                        // fields don't contain this information in a easily parseable format.
+                        let mut body_inst_clone = body_inst.clone();
+                        body_inst_clone.ensure_raw();
+
                         let (near_ffi_call, ffi_function) =
                             check_ffi_proximity(raw, ffi_calls, body);
 
                         return Some(BufferOverflowPattern {
                             kind: BufferOverflowKind::IntegerOverflow {
-                                expression: inst.raw_text.clone(),
+                                expression: body_inst_clone.raw_text.clone(),
                                 operation: "multiplication".to_string(),
                             },
                             instruction: raw.to_string(),

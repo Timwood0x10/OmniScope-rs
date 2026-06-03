@@ -414,7 +414,11 @@ mod tests {
     fn test_rich_formatter_sections() {
         let formatter = RichFormatter::with_color(false);
         let pass_results = vec![omniscope_pass::PassResult::new("test")];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+        let result = PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(10),
+            Vec::new(), // No pass timings in test
+        );
 
         let output = formatter.format(&result);
         assert!(output.contains("OmniScope"), "Must contain header");
@@ -436,8 +440,11 @@ mod tests {
         let mut pass_result = omniscope_pass::PassResult::new("FFIBoundary").with_nodes(5);
         pass_result.add_issue(issue);
 
-        let result =
-            PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(16));
+        let result = PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(16),
+            Vec::new(), // No pass timings in test
+        );
         let output = formatter.format(&result);
 
         assert!(output.contains("HIGH"), "Must show HIGH severity label");
@@ -450,7 +457,11 @@ mod tests {
     #[test]
     fn test_rich_formatter_no_issues() {
         let formatter = RichFormatter::with_color(false);
-        let result = PipelineResult::from_pass_results(vec![], Duration::from_millis(1));
+        let result = PipelineResult::from_pass_results(
+            vec![],
+            Duration::from_millis(1),
+            Vec::new(), // No pass timings in test
+        );
         let output = formatter.format(&result);
         assert!(
             output.contains("No issues detected"),

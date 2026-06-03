@@ -61,7 +61,11 @@ mod tests {
     fn test_json_formatter_valid_json() {
         let formatter = JsonFormatter::new();
         let pass_results = vec![PassResult::new("test").with_nodes(10)];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(5));
+        let result = PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(5),
+            Vec::new(), // No pass timings in test
+        );
 
         let output = formatter.format(&result);
         let parsed: serde_json::Value =
@@ -82,7 +86,11 @@ mod tests {
     fn test_json_formatter_compact() {
         let formatter = JsonFormatter::compact();
         let pass_results = vec![PassResult::new("test")];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(1));
+        let result = PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(1),
+            Vec::new(), // No pass timings in test
+        );
 
         let output = formatter.format(&result);
         // Compact JSON should have fewer newlines than pretty

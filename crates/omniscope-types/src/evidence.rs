@@ -81,6 +81,22 @@ pub enum EvidenceKind {
     /// but freed in another language family (e.g., Rust alloc + C free).
     /// This is a subset of CrossFamilyMismatch for language boundaries.
     CrossLanguageFree,
+    /// Release function has NULL guard (release(NULL) is safe).
+    /// Common in C libraries: free(NULL), cJSON_Delete(NULL).
+    NullGuardedRelease,
+    /// NULL is stored to pointer after release.
+    /// Pattern: `free(p); p = NULL;` - prevents dangling pointer.
+    NullStoreAfterRelease,
+    /// Out-param receives owned resource on success.
+    /// Pattern: `if (success) *out = new_resource;`
+    OutParamOwnedOnSuccess,
+    /// Out-param is set to NULL on error path.
+    /// Pattern: `if (error) *out = NULL;`
+    OutParamNullOnError,
+    /// Path state refined by analysis.
+    /// Indicates conditional branches were analyzed to determine
+    /// resource ownership state on specific paths.
+    PathStateRefinement,
     /// Unknown or insufficient evidence.
     Insufficient,
 }

@@ -1,21 +1,17 @@
 # Cargo configuration for faster compilation
-# Uses faster linkers: zld (macOS) and mold (Linux)
-# Note: Install zld with `brew install zld` on macOS, or comment out these lines
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-L", "/usr/local/lib", 
+    "-L", "/usr/lib/x86_64-linux-gnu"
+]
 
-# [target.x86_64-apple-darwin]
-# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-
-# [target.x86_64-unknown-linux-gnu]
-# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
-
-# Use sccache for caching if available (disabled — not installed on CI runners)
-# To enable locally: install sccache and uncomment the line below
-# [build]
-# rustc-wrapper = "sccache"
+[build]
+rustc-wrapper = "sccache"
 
 # Parallel compilation
 [env]
-CARGO_BUILD_JOBS = "8"
+CARGO_BUILD_JOBS = "14"
 LLVM_SYS_221_PREFIX = "/opt/homebrew/opt/llvm@22"
 
 # Library search paths for macOS (homebrew)
@@ -27,7 +23,3 @@ rustdocflags = ["-L", "/opt/homebrew/lib"]
 [target.x86_64-apple-darwin]
 rustflags = ["-L", "/opt/homebrew/lib"]
 rustdocflags = ["-L", "/opt/homebrew/lib"]
-
-# Library search paths for Linux
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-L", "/usr/local/lib", "-L", "/usr/lib/x86_64-linux-gnu"]

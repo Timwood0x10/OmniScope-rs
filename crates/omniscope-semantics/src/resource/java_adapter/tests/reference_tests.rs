@@ -155,6 +155,8 @@ fn test_reference_management_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -167,6 +169,8 @@ fn test_reference_management_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -179,6 +183,8 @@ fn test_reference_management_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };

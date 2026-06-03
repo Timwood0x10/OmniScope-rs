@@ -130,6 +130,47 @@ pub enum BehaviorPattern {
         /// Category: file, network, process, or other non-mem operation.
         category: PosixOpCategory,
     },
+
+    /// Release function has NULL guard — release(NULL) is safe no-op.
+    /// Pattern: `icmp eq ptr %p, null` → `br` → release call on non-null path.
+    /// This is the standard defensive pattern: `if (p) free(p);`
+    NullGuardedRelease {
+        /// Index of the argument that is NULL-checked before release.
+        arg_index: u32,
+    },
+
+    /// NULL is stored to pointer slot after release.
+    /// Pattern: `call @release(ptr %p)` → `store ptr null, ptr %slot`.
+    /// This is the "release-then-null" idiom: `free(p); p = NULL;`
+    NullStoreAfterRelease {
+        /// Index of the argument whose slot is NULLed after release.
+        arg_index: u32,
+    },
+
+    /// Function initializes out-param for fallible operation.
+    /// Pattern: `store ptr null, ptr %out` → `call @init(ptr %out)` →
+    /// `icmp %ret` → `br` → on error: `store ptr null, ptr %out`.
+    /// This is the fallible-initialization idiom: `*out = NULL; if (!init(out)) { *out = NULL; }`
+    FallibleOutParamInit {
+        /// Index of the out-param argument.
+        out_arg_index: u32,
+    },
+
+    /// Out-param is set to NULL on error path.
+    /// Pattern: `icmp %ret` → `br` → error block: `store ptr null, ptr %out`.
+    /// This detects defensive NULLing of out-params on failure paths.
+    OutParamNullOnError {
+        /// Index of the out-param argument.
+        out_arg_index: u32,
+    },
+
+    /// Out-param receives owned resource on success path.
+    /// Pattern: `icmp %ret` → `br` → success block: out-param holds allocation.
+    /// This indicates the caller is responsible for releasing the out-param value.
+    OutParamOwnedOnSuccess {
+        /// Index of the out-param argument.
+        out_arg_index: u32,
+    },
 }
 
 /// Category for POSIX non-memory operations (R-4).
@@ -221,17 +262,50 @@ pub fn extract_behavior(body: &FunctionBody) -> FunctionBehavior {
         patterns.push(cr_pattern);
     }
 
-    // 2. Detect OwnershipTransfer: call returns ptr → passed to free/dealloc
-    //    This must come BEFORE PureComputation — if a function calls malloc/free,
-    //    it's NOT pure computation regardless of other instructions.
-    let has_ownership_transfer = if let Some(ot_pattern) = detect_ownership_transfer(body) {
-        patterns.push(ot_pattern);
+    // 2. Detect NullGuardedRelease: icmp eq ptr → null, br → release call
+    //    Must come BEFORE OwnershipTransfer — a null-guarded release is more
+    //    specific than a bare release call.
+    let has_null_guarded_release = if let Some(ngr) = detect_null_guarded_release(body) {
+        patterns.push(ngr);
         true
     } else {
         false
     };
 
-    // 3. Detect PureComputation: call returns value → only used in arithmetic
+    // 3. Detect NullStoreAfterRelease: release call → store null
+    if let Some(nsar) = detect_null_store_after_release(body) {
+        patterns.push(nsar);
+    }
+
+    // 4. Detect FallibleOutParamInit: null-store → call → icmp → error null-store
+    if let Some(foi) = detect_fallible_out_param_init(body) {
+        patterns.push(foi);
+    }
+
+    // 5. Detect OutParamNullOnError: icmp → br → error block null-store
+    if let Some(opno) = detect_out_param_null_on_error(body) {
+        patterns.push(opno);
+    }
+
+    // 6. Detect OutParamOwnedOnSuccess: icmp → br → success block allocation
+    if let Some(opos) = detect_out_param_owned_on_success(body) {
+        patterns.push(opos);
+    }
+
+    // 7. Detect OwnershipTransfer: call returns ptr → passed to free/dealloc
+    //    Skip if already detected as NullGuardedRelease (more specific).
+    let has_ownership_transfer = if !has_null_guarded_release {
+        if let Some(ot_pattern) = detect_ownership_transfer(body) {
+            patterns.push(ot_pattern);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // 8. Detect PureComputation: call returns value → only used in arithmetic
     //    Only if no ownership transfer or conditional release detected
     let has_conditional_release = patterns
         .iter()
@@ -240,18 +314,18 @@ pub fn extract_behavior(body: &FunctionBody) -> FunctionBehavior {
         patterns.push(BehaviorPattern::PureComputation);
     }
 
-    // 4. Detect PointerProjection: only gep + bitcast + ret
+    // 9. Detect PointerProjection: only gep + bitcast + ret
     //    Only if no other patterns detected (mutually exclusive with above)
     if patterns.is_empty() && detect_pointer_projection(body) {
         patterns.push(BehaviorPattern::PointerProjection);
     }
 
-    // 5. Detect Initialization: stores to struct fields + ret void
+    // 10. Detect Initialization: stores to struct fields + ret void
     if patterns.is_empty() && detect_initialization(body) {
         patterns.push(BehaviorPattern::Initialization);
     }
 
-    // 6. Detect InternalBridge: all calls are to defined functions
+    // 11. Detect InternalBridge: all calls are to defined functions
     if detect_internal_bridge(body) {
         patterns.push(BehaviorPattern::InternalBridge);
     }
@@ -318,10 +392,10 @@ fn detect_conditional_release(body: &FunctionBody) -> Option<BehaviorPattern> {
                 }
 
                 // Check if the atomicrmw destination register is used in the icmp
-                if icmp.operands.contains(dest) || icmp.raw_text.contains(dest.as_str()) {
+                if icmp.operands.contains(dest) {
                     // Found the pattern: atomicrmw sub + icmp eq
-                    // The threshold is the value compared against
-                    let threshold = extract_icmp_threshold(&icmp.raw_text);
+                    // The threshold is the last operand of the icmp (the comparison value)
+                    let threshold = icmp.operands.last().cloned();
                     return Some(BehaviorPattern::ConditionalRelease {
                         atomic_op: "sub".to_string(),
                         threshold: threshold.unwrap_or_else(|| "unknown".to_string()),
@@ -363,13 +437,11 @@ fn detect_pure_computation(body: &FunctionBody) -> bool {
     // Check if any call result is passed to a function that could free memory
     for inst in &body.instructions {
         if inst.kind == IRInstructionKind::Call {
-            // Check operands and raw text for any call destination register
+            // Check operands for any call destination register
             for call_dest in &call_dests {
                 // If a call result is passed as argument to another call,
                 // check if that call is a memory management function
-                if inst.raw_text.contains(call_dest.as_str())
-                    && inst.dest != Some(call_dest.clone())
-                {
+                if inst.operands.contains(call_dest) && inst.dest != Some(call_dest.clone()) {
                     if let Some(ref callee) = inst.callee {
                         if is_memory_management_callee(callee) {
                             return false;
@@ -393,11 +465,12 @@ fn detect_pure_computation(body: &FunctionBody) -> bool {
         if inst.kind == IRInstructionKind::Store {
             // Check if storing a call result to non-local memory
             for call_dest in &call_dests {
-                if inst.raw_text.contains(call_dest.as_str()) {
+                if inst.operands.contains(call_dest) {
                     // Check if the store target is a local alloca
+                    // For store instructions, operands[1] is the destination pointer
                     let is_local_store = alloca_dests
                         .iter()
-                        .any(|alloca| inst.raw_text.contains(alloca.as_str()));
+                        .any(|alloca| inst.operands.get(1).map_or(false, |dest| dest == alloca));
 
                     if !is_local_store {
                         // Storing call result to non-local memory — not pure computation
@@ -477,10 +550,9 @@ fn detect_initialization(body: &FunctionBody) -> bool {
     // Return source should be void or unknown
     let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
     if let Some(ret) = ret_insts.first() {
-        if ret.raw_text.contains("void") {
+        // Check if this is a void return: no operands, or result_type is void
+        if ret.result_type.as_deref() == Some("void") || ret.operands.is_empty() {
             // Good — returns void
-        } else if ret.operands.is_empty() {
-            // ret void (no operands)
         } else {
             // Returns a non-void value — might not be just initialization
             return false;
@@ -548,31 +620,289 @@ fn detect_internal_bridge(body: &FunctionBody) -> bool {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Helper functions
+// New pattern detectors — NULL-guarded release and out-param patterns
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Extract the comparison threshold from an icmp instruction.
-///
-/// Example: `icmp eq i32 %22, 2` → "2"
-fn extract_icmp_threshold(raw: &str) -> Option<String> {
-    // Find the last operand after the comma
-    if let Some(comma_pos) = raw.rfind(',') {
-        let after_comma = raw[comma_pos + 1..].trim();
-        // Remove any trailing metadata (!dbg, etc.)
-        let threshold = after_comma.split('!').next().unwrap_or(after_comma).trim();
-        if !threshold.is_empty() {
-            return Some(threshold.to_string());
+/// Detect NullGuardedRelease: `icmp eq ptr %p, null` → `br` → release call
+/// on non-null path. The defensive idiom: `if (p != NULL) { free(p); }`
+fn detect_null_guarded_release(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Need at least one icmp and one call to a release function
+    if body.count_kind(IRInstructionKind::Icmp) == 0
+        || body.count_kind(IRInstructionKind::Call) == 0
+    {
+        return None;
+    }
+
+    let icmp_insts = body.instructions_of_kind(IRInstructionKind::Icmp);
+    let call_insts: Vec<&IRInstruction> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Call)
+        .collect();
+
+    // Find icmp eq comparing a pointer to null
+    for icmp in &icmp_insts {
+        if icmp.icmp_pred.as_deref() != Some("eq") {
+            continue;
+        }
+        // Check if comparing to null/0
+        let has_null = icmp
+            .operands
+            .iter()
+            .any(|op| op == "null" || op == "0" || op == "zeroinitializer");
+        if !has_null {
+            continue;
+        }
+
+        // The first operand is typically the pointer being checked
+        let checked_ptr = match icmp.operands.first() {
+            Some(op) if op != "null" && op != "0" && op != "zeroinitializer" => op.clone(),
+            _ => continue,
+        };
+
+        // Check if any release/dealloc call uses this pointer
+        // Note: For direct calls, operands are empty — we check raw_text instead
+        for call in &call_insts {
+            if let Some(ref callee) = call.callee {
+                if is_release_callee(callee) && call.raw_text.contains(&checked_ptr) {
+                    return Some(BehaviorPattern::NullGuardedRelease { arg_index: 0 });
+                }
+            }
         }
     }
+
     None
 }
+
+/// Detect NullStoreAfterRelease: `call @release(ptr %p)` → `store ptr null, ptr %slot`
+/// The "release-then-null" idiom: `free(p); p = NULL;`
+fn detect_null_store_after_release(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Find release calls followed by a store of null
+    for (idx, inst) in body.instructions.iter().enumerate() {
+        if inst.kind != IRInstructionKind::Call {
+            continue;
+        }
+        let callee = match &inst.callee {
+            Some(c) => c,
+            None => continue,
+        };
+        if !is_release_callee(callee) {
+            continue;
+        }
+
+        // Check if a subsequent instruction stores null
+        for later in body.instructions.iter().skip(idx + 1) {
+            if later.kind == IRInstructionKind::Store {
+                // Store of null: first operand is "null" or "0"
+                let stores_null = later
+                    .operands
+                    .first()
+                    .map_or(false, |v| v == "null" || v == "0");
+                if stores_null {
+                    return Some(BehaviorPattern::NullStoreAfterRelease { arg_index: 0 });
+                }
+            }
+            // Stop if we hit another call or branch (different basic block)
+            if later.kind == IRInstructionKind::Call
+                || later.kind == IRInstructionKind::Branch
+                || later.kind == IRInstructionKind::Ret
+            {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect FallibleOutParamInit: `store null` → `call` → `icmp` → `br` → error `store null`
+/// The fallible initialization idiom: `*out = NULL; if (!init(out)) { *out = NULL; }`
+fn detect_fallible_out_param_init(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Need stores (initialization + error null), a call, and an icmp+branch
+    if body.count_kind(IRInstructionKind::Store) < 2
+        || body.count_kind(IRInstructionKind::Call) == 0
+        || body.count_kind(IRInstructionKind::Icmp) == 0
+    {
+        return None;
+    }
+
+    // Find stores of null to a pointer slot
+    let null_store_targets: Vec<String> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Store)
+        .filter(|i| {
+            i.operands
+                .first()
+                .map_or(false, |v| v == "null" || v == "0")
+        })
+        .filter_map(|i| i.operands.get(1).cloned())
+        .collect();
+
+    if null_store_targets.is_empty() {
+        return None;
+    }
+
+    // Check if a call instruction writes to one of those targets (out-param)
+    // and there's a subsequent icmp + branch + null store to the same target
+    let call_insts: Vec<&IRInstruction> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Call)
+        .collect();
+
+    for call in &call_insts {
+        // Check if the call references a null-store target (out-param)
+        // Note: For direct calls, operands are empty — we check raw_text instead
+        let out_param = match null_store_targets
+            .iter()
+            .find(|t| call.raw_text.contains(t.as_str()))
+        {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        // Verify there's an icmp + branch after this call
+        let call_pos = body
+            .instructions
+            .iter()
+            .position(|i| i.raw_text == call.raw_text && i.kind == call.kind)
+            .unwrap_or(0);
+
+        let has_icmp_after = body
+            .instructions
+            .iter()
+            .skip(call_pos + 1)
+            .any(|i| i.kind == IRInstructionKind::Icmp);
+
+        let has_null_store_after = body.instructions.iter().skip(call_pos + 1).any(|i| {
+            i.kind == IRInstructionKind::Store
+                && i.operands
+                    .first()
+                    .map_or(false, |v| v == "null" || v == "0")
+                && i.operands.get(1).map_or(false, |t| *t == out_param)
+        });
+
+        if has_icmp_after && has_null_store_after {
+            return Some(BehaviorPattern::FallibleOutParamInit { out_arg_index: 0 });
+        }
+    }
+
+    None
+}
+
+/// Detect OutParamNullOnError: `icmp` → `br` → error block: `store null, ptr %out`
+/// Defensive NULLing of out-params on failure paths.
+fn detect_out_param_null_on_error(body: &FunctionBody) -> Option<BehaviorPattern> {
+    if body.count_kind(IRInstructionKind::Icmp) == 0
+        || body.count_kind(IRInstructionKind::Store) == 0
+        || body.count_kind(IRInstructionKind::Branch) == 0
+    {
+        return None;
+    }
+
+    // Find icmp instructions followed by branches
+    for (idx, inst) in body.instructions.iter().enumerate() {
+        if inst.kind != IRInstructionKind::Icmp {
+            continue;
+        }
+
+        // Check if there's a branch after this icmp
+        let has_branch_after = body
+            .instructions
+            .iter()
+            .skip(idx + 1)
+            .take(3)
+            .any(|i| i.kind == IRInstructionKind::Branch);
+        if !has_branch_after {
+            continue;
+        }
+
+        // Check if there's a store of null to a pointer after this branch
+        for later in body.instructions.iter().skip(idx + 2) {
+            if later.kind == IRInstructionKind::Store {
+                let stores_null = later
+                    .operands
+                    .first()
+                    .map_or(false, |v| v == "null" || v == "0");
+                if stores_null {
+                    return Some(BehaviorPattern::OutParamNullOnError { out_arg_index: 0 });
+                }
+            }
+            // Stop at ret or another icmp (different path)
+            if later.kind == IRInstructionKind::Ret || later.kind == IRInstructionKind::Icmp {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect OutParamOwnedOnSuccess: `icmp` → `br` → success block: out-param holds allocation.
+/// Combined with OutParamNullOnError: success = owned, error = NULL.
+fn detect_out_param_owned_on_success(body: &FunctionBody) -> Option<BehaviorPattern> {
+    if body.count_kind(IRInstructionKind::Icmp) == 0
+        || body.count_kind(IRInstructionKind::Branch) == 0
+    {
+        return None;
+    }
+
+    // Find icmp + branch patterns
+    for (idx, inst) in body.instructions.iter().enumerate() {
+        if inst.kind != IRInstructionKind::Icmp {
+            continue;
+        }
+
+        // Look for a success path after this icmp
+        let has_branch = body
+            .instructions
+            .iter()
+            .skip(idx + 1)
+            .take(3)
+            .any(|i| i.kind == IRInstructionKind::Branch);
+
+        if !has_branch {
+            continue;
+        }
+
+        // In the success path, check if a store writes a call result
+        // or an allocation to a pointer (indicating ownership transfer)
+        for later in body.instructions.iter().skip(idx + 2) {
+            if later.kind == IRInstructionKind::Store {
+                // Check if the stored value comes from a call or allocation
+                let stored_value = later.operands.first();
+                if let Some(val) = stored_value {
+                    // Check if this value was produced by a call or alloca
+                    let comes_from_alloc = body.instructions.iter().any(|i| {
+                        (i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::Alloca)
+                            && i.dest.as_deref() == Some(val.as_str())
+                    });
+                    if comes_from_alloc {
+                        return Some(BehaviorPattern::OutParamOwnedOnSuccess { out_arg_index: 0 });
+                    }
+                }
+            }
+            // Stop at ret or another icmp
+            if later.kind == IRInstructionKind::Ret || later.kind == IRInstructionKind::Icmp {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Helper functions
+// ──────────────────────────────────────────────────────────────────────────
 
 /// Determine the return source of a function.
 fn extract_return_source(body: &FunctionBody) -> ReturnSource {
     let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
     if let Some(ret) = ret_insts.first() {
-        // Check if ret has no operands (ret void)
-        if ret.raw_text.contains("void") || ret.operands.is_empty() {
+        // Check if ret has no operands (ret void) or result_type is void
+        if ret.result_type.as_deref() == Some("void") || ret.operands.is_empty() {
             return ReturnSource::Void;
         }
 
@@ -601,22 +931,19 @@ fn extract_return_source(body: &FunctionBody) -> ReturnSource {
                     return ReturnSource::Computed;
                 }
             }
-        }
 
-        // Check for constant return
-        if ret.raw_text.contains("ret i32 0") || ret.raw_text.contains("ret i64 0") {
-            return ReturnSource::Constant;
+            // Check for constant zero return (e.g., ret i32 0, ret i64 0)
+            if ret_val == "0" || ret_val == "null" {
+                return ReturnSource::Constant;
+            }
         }
     }
 
     ReturnSource::Unknown
 }
 
-/// Check if a callee name is a memory management function (alloc/free).
-///
-/// Note: This is a focused check on the CALLEE of a specific call
-/// instruction, not a general classification system. It's used to
-/// detect OwnershipTransfer patterns, not to classify all FFI calls.
+/// Check if a callee is a memory management function (alloc/free).
+/// Used to detect OwnershipTransfer patterns.
 fn is_memory_management_callee(name: &str) -> bool {
     matches!(
         name,
@@ -639,7 +966,7 @@ fn is_memory_management_callee(name: &str) -> bool {
       || name.starts_with("_Zna") // operator new[]
 }
 
-/// Check if a callee name is an allocation function (not free).
+/// Check if a callee is an allocation function (not free).
 fn is_alloc_callee(name: &str) -> bool {
     matches!(
         name,
@@ -658,307 +985,26 @@ fn is_alloc_callee(name: &str) -> bool {
       || name.starts_with("_Zna") // operator new[]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use omniscope_ir::IRModule;
-
-    fn parse_body(ir: &str) -> FunctionBody {
-        let module = IRModule::parse_from_text(ir);
-        module
-            .function_bodies
-            .values()
-            .next()
-            .expect("ir_pattern::parse_body: no function body found")
-            .clone()
-    }
-
-    #[test]
-    fn test_conditional_release_detection() {
-        let ir = r#"
-            define void @release_string(ptr %s) {
-            entry:
-                %22 = atomicrmw sub ptr %s, i32 2 monotonic
-                %23 = icmp eq i32 %22, 2
-                br i1 %23, label %destroy, label %exit
-            destroy:
-                tail call void @Bun__WTFStringImpl__destroy(ptr %s)
-                ret void
-            exit:
-                ret void
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior
-                .patterns
-                .contains(&BehaviorPattern::ConditionalRelease {
-                    atomic_op: "sub".to_string(),
-                    threshold: "2".to_string(),
-                }),
-            "Should detect ConditionalRelease pattern, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    #[test]
-    fn test_pure_computation_detection() {
-        let ir = r#"
-            define i64 @my_strlen(ptr %s) {
-            entry:
-                %len = call i32 @strlen(ptr %s)
-                %result = zext i32 %len to i64
-                ret i64 %result
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior
-                .patterns
-                .contains(&BehaviorPattern::PureComputation),
-            "Should detect PureComputation pattern, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    #[test]
-    fn test_ownership_transfer_detection() {
-        let ir = r#"
-            define ptr @alloc_buffer(i64 %size) {
-            entry:
-                %buf = call ptr @malloc(i64 %size)
-                ret ptr %buf
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior
-                .patterns
-                .contains(&BehaviorPattern::OwnershipTransfer { is_acquire: true }),
-            "Should detect OwnershipTransfer pattern, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    #[test]
-    fn test_pointer_projection_detection() {
-        let ir = r#"
-            define ptr @get_data_ptr(ptr %obj) {
-            entry:
-                %data = getelementptr i8, ptr %obj, i64 16
-                ret ptr %data
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior
-                .patterns
-                .contains(&BehaviorPattern::PointerProjection),
-            "Should detect PointerProjection pattern, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    #[test]
-    fn test_no_false_conditional_release() {
-        // A simple function without atomicrmw should NOT trigger ConditionalRelease
-        let ir = r#"
-            define void @simple_func(ptr %p) {
-            entry:
-                store i32 42, ptr %p
-                ret void
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            !behavior
-                .patterns
-                .iter()
-                .any(|p| matches!(p, BehaviorPattern::ConditionalRelease { .. })),
-            "Should NOT detect ConditionalRelease in simple store function, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    #[test]
-    fn test_return_source_call_result() {
-        let ir = r#"
-            define i32 @wrapper(ptr %s) {
-            entry:
-                %result = call i32 @strlen(ptr %s)
-                ret i32 %result
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert_eq!(
-            behavior.return_source,
-            ReturnSource::CallResult("strlen".to_string()),
-            "Return from strlen call must be classified as CallResult"
-        );
-    }
-
-    #[test]
-    fn test_return_source_void() {
-        let ir = r#"
-            define void @init(ptr %p) {
-            entry:
-                store i32 0, ptr %p
-                ret void
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert_eq!(
-            behavior.return_source,
-            ReturnSource::Void,
-            "Void function must have Void return source"
-        );
-    }
-
-    // ── Golden Tests : Unknown function names with recognizable IR patterns ──
-
-    /// golden test: An unknown function with malloc+free IR pattern
-    /// should be detected as OwnershipTransfer, even though the function
-    /// name "custom_buffer_alloc" is not in any whitelist.
-    #[test]
-    fn test_golden_unknown_alloc_function() {
-        let ir = r#"
-            define ptr @custom_buffer_alloc(i64 %size) {
-            entry:
-                %buf = call ptr @malloc(i64 %size)
-                ret ptr %buf
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior.patterns.contains(&BehaviorPattern::OwnershipTransfer { is_acquire: true }),
-            "Unknown function 'custom_buffer_alloc' with malloc call should be OwnershipTransfer, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    /// An unknown function with atomicrmw sub + icmp eq
-    /// should be detected as ConditionalRelease, even though the function
-    /// name "mystery_refcount_release" is not in any whitelist.
-    #[test]
-    fn test_golden_unknown_refcount_release() {
-        let ir = r#"
-            define void @mystery_refcount_release(ptr %obj) {
-            entry:
-                %old = atomicrmw sub ptr %obj, i32 1 monotonic
-                %cmp = icmp eq i32 %old, 1
-                br i1 %cmp, label %drop, label %done
-            drop:
-                call void @some_destructor(ptr %obj)
-                ret void
-            done:
-                ret void
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior.patterns.iter().any(|p| matches!(p, BehaviorPattern::ConditionalRelease { .. })),
-            "Unknown function 'mystery_refcount_release' with atomicrmw sub + icmp eq should be ConditionalRelease, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    /// An unknown function with only GEP + ret
-    /// should be detected as PointerProjection, even though the function
-    /// name "weird_accessor" is not in any whitelist.
-    #[test]
-    fn test_golden_unknown_pointer_projection() {
-        let ir = r#"
-            define ptr @weird_accessor(ptr %obj) {
-            entry:
-                %field = getelementptr i8, ptr %obj, i64 24
-                ret ptr %field
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior.patterns.contains(&BehaviorPattern::PointerProjection),
-            "Unknown function 'weird_accessor' with GEP + ret should be PointerProjection, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    /// An unknown function that only does arithmetic
-    /// should be detected as PureComputation, even though the function
-    /// name "obscure_math_helper" is not in any whitelist.
-    #[test]
-    fn test_golden_unknown_pure_computation() {
-        let ir = r#"
-            define i32 @obscure_math_helper(i32 %x, i32 %y) {
-            entry:
-                %sum = add i32 %x, %y
-                %result = mul i32 %sum, 2
-                ret i32 %result
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior.patterns.contains(&BehaviorPattern::PureComputation),
-            "Unknown function 'obscure_math_helper' with only arithmetic should be PureComputation, got: {:?}",
-            behavior.patterns
-        );
-    }
-
-    /// An unknown function with stores to struct fields + ret void
-    /// should be detected as Initialization, even though the function
-    /// name "custom_init" is not in any whitelist.
-    #[test]
-    fn test_golden_unknown_initialization() {
-        let ir = r#"
-            define void @custom_init(ptr %obj, i32 %val) {
-            entry:
-                %f1 = getelementptr i8, ptr %obj, i64 0
-                store i32 %val, ptr %f1
-                %f2 = getelementptr i8, ptr %obj, i64 4
-                store i32 0, ptr %f2
-                ret void
-            }
-        "#;
-
-        let body = parse_body(ir);
-        let behavior = extract_behavior(&body);
-
-        assert!(
-            behavior.patterns.contains(&BehaviorPattern::Initialization),
-            "Unknown function 'custom_init' with stores + ret void should be Initialization, got: {:?}",
-            behavior.patterns
-        );
-    }
+/// Check if a callee is a release/dealloc function (for NULL-guarded release detection).
+fn is_release_callee(name: &str) -> bool {
+    matches!(
+        name,
+        "free"
+        | "cfree"
+        | "__rust_dealloc"
+        | "munmap"
+        | "VirtualFree"
+        | "HeapFree"
+        | "LocalFree"
+        | "GlobalFree"
+    ) || name.starts_with("_Zdl") // operator delete
+      || name.starts_with("_Zda") // operator delete[]
+      || name.contains("free")
+        || name.contains("dealloc")
+        || name.contains("release")
+        || name.contains("destroy")
 }
+
+#[cfg(test)]
+#[path = "ir_pattern_tests.rs"]
+mod tests;

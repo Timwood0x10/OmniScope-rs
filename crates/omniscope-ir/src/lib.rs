@@ -17,6 +17,7 @@
 //! ```
 
 pub mod instruction_parser;
+pub mod ir_cache;
 pub mod ir_model;
 #[cfg(feature = "llvm-backend")]
 pub mod llvm_sys_adapter;
@@ -26,8 +27,9 @@ pub mod parser;
 
 // Re-exports
 pub use ir_model::{
-    load_from_json, parse_from_json, IRBasicBlock, IRDeclaration, IRFunction, IRGepDetails,
-    IRGepIndex, IRGlobalVariable, IRInstructionModel, IRModuleModel,
+    load_from_json, load_from_msgpack, parse_from_json, parse_from_msgpack, IRBasicBlock,
+    IRDeclaration, IRFunction, IRGepDetails, IRGepIndex, IRGlobalVariable, IRInstructionModel,
+    IRModuleModel,
 };
 pub use loader_v2::{load_ir, LoadStrategy};
 pub use location::{LocationManager, SourceLocation};

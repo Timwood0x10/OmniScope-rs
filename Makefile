@@ -14,9 +14,9 @@ VERSION      := 0.1.0
 
 # Cargo commands
 CARGO        := cargo
+CARGO_NEXTEST := cargo nextest run
 CARGO_FMT    := cargo fmt
 CARGO_CLIPPY := cargo clippy
-CARGO_TEST   := cargo test
 CARGO_BUILD  := cargo build
 
 # C++ pass configuration
@@ -65,19 +65,19 @@ build:
 .PHONY: test
 test:
 	@echo "$(BLUE)Running tests...$(NC)"
-	$(CARGO) test --workspace --all-features
+	$(CARGO_NEXTEST)  --workspace --all-features
 
 ## test-verbose: Run tests with verbose output
 .PHONY: test-verbose
 test-verbose:
 	@echo "$(BLUE)Running tests with verbose output...$(NC)"
-	$(CARGO) test --workspace --all-features -- --nocapture
+	$(CARGO_NEXTEST) run --workspace --all-features --no-fail-fast
 
 ## test-release: Run tests in release mode
 .PHONY: test-release
 test-release:
 	@echo "$(BLUE)Running tests in release mode...$(NC)"
-	$(CARGO) test --workspace --release --all-features
+	$(CARGO_NEXTEST) run --workspace --release --all-features
 
 ## check: Run clippy + C++ lint checks
 .PHONY: check

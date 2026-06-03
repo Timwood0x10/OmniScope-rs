@@ -76,6 +76,10 @@ struct AnalyzeCommand {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Enable detailed timing report (pass-level breakdown)
+    #[arg(long)]
+    timing: bool,
+
     /// Enable debug-level logging (full trace)
     #[arg(long)]
     debug: bool,
@@ -167,31 +171,33 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
         cmd.input,
         strategy
     );
-    let module = load_ir(&cmd.input, strategy)?;
-    let func_count = module.functions.len();
-    let decl_count = module.declarations.len();
+    let loaded = load_ir(&cmd.input, strategy)?;
+    let func_count = loaded.module.functions.len();
+    let decl_count = loaded.module.declarations.len();
     tracing::info!(
         "IR parsed: {} functions, {} declarations, {} calls",
         func_count,
         decl_count,
-        module.calls.len()
+        loaded.module.calls.len()
     );
 
     // Create and configure pipeline
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();
     pipeline.set_parallel(cmd.parallel);
-    pipeline.set_ir_module(module);
+    pipeline.set_ir_module(loaded.module);
     tracing::debug!("Pipeline configured with {} passes", pipeline.pass_count());
 
     // Run the full analysis pipeline
     tracing::info!("Running analysis pipeline");
+    let pipeline_start = Instant::now();
     let result = pipeline.run()?;
+    let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
     tracing::info!(
         "Pipeline completed: {} issues, {} nodes, {}ms",
         result.total_issues,
         result.total_nodes,
-        result.duration_ms()
+        pipeline_ms
     );
 
     // Apply boundary-only filter if requested
@@ -202,6 +208,7 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     };
 
     // Format output according to selected format
+    let format_start = Instant::now();
     let fmt = OutputFormat::from_str_ignore_case(&cmd.format);
     let output = match fmt {
         OutputFormat::Rich => RichFormatter::new().format(&result),
@@ -216,6 +223,7 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
         }
         OutputFormat::Sarif => SarifFormatter::new().format(&result),
     };
+    let format_ms = format_start.elapsed().as_millis() as u64;
 
     // Write output to file or stdout
     if let Some(ref out_path) = cmd.output {
@@ -223,6 +231,24 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
         std::fs::write(out_path, &output)?;
     } else {
         println!("{}", output);
+    }
+
+    // Create timing breakdown
+    let total_ms = start.elapsed().as_millis() as u64;
+    let timing = CliTiming {
+        load_ms: loaded.load_ms,
+        pipeline_ms,
+        format_ms,
+        total_ms,
+        load_strategy: strategy_to_static_str(loaded.strategy),
+    };
+
+    // Print detailed timing report if --timing flag is set
+    if cmd.timing {
+        print_detailed_timing_report(&timing, &result, loaded.strategy);
+    } else {
+        // Print simple timing breakdown
+        print_timing_breakdown(&timing);
     }
 
     // Verbose: print pipeline metrics
@@ -236,14 +262,11 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
         }
         eprintln!(
             "  {:30} {} total issues, {}ms",
-            "TOTAL",
-            result.total_issues,
-            result.duration_ms()
+            "TOTAL", result.total_issues, pipeline_ms
         );
     }
 
-    let duration = start.elapsed();
-    tracing::info!("Analysis completed in {:?}", duration);
+    tracing::info!("Analysis completed in {:?}", start.elapsed());
 
     Ok(())
 }
@@ -281,6 +304,18 @@ fn filter_boundary_issues(
 
     let total_nodes = filtered_pass_results.iter().map(|r| r.nodes_analyzed).sum();
 
+    // Update pass_timings to reflect filtered issue counts
+    let mut filtered_pass_timings = result.pass_timings;
+    for pt in &mut filtered_pass_timings {
+        // Find corresponding pass result to get filtered issue count
+        if let Some(pr) = filtered_pass_results
+            .iter()
+            .find(|pr| pr.name == pt.pass_name)
+        {
+            pt.issues_found = pr.issues_found;
+        }
+    }
+
     omniscope_pipeline::PipelineResult {
         pass_results: filtered_pass_results,
         total_issues: boundary_issues.len(),
@@ -288,6 +323,7 @@ fn filter_boundary_issues(
         duration: result.duration,
         stats: result.stats,
         issues: boundary_issues,
+        pass_timings: filtered_pass_timings,
     }
 }
 
@@ -315,20 +351,33 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
         cmd.input,
         strategy
     );
-    let module = load_ir(&cmd.input, strategy)?;
+    let loaded = load_ir(&cmd.input, strategy)?;
 
     // Create pipeline and load IR
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();
-    pipeline.set_ir_module(module);
+    pipeline.set_ir_module(loaded.module);
 
     // Run analysis
+    let pipeline_start = Instant::now();
     let result = pipeline.run()?;
-    let duration = start.elapsed();
+    let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
+    let total_ms = start.elapsed().as_millis() as u64;
+
+    // Create timing breakdown
+    let timing = CliTiming {
+        load_ms: loaded.load_ms,
+        pipeline_ms,
+        format_ms: 0, // No formatting for audit
+        total_ms,
+        load_strategy: strategy_to_static_str(loaded.strategy),
+    };
 
     println!("{}", "═".repeat(50).dimmed());
     println!("Audit completed: {} issues found", result.issue_count());
-    println!("Completed in {:?}", duration);
+
+    // Print timing breakdown
+    print_timing_breakdown(&timing);
 
     Ok(())
 }
@@ -336,15 +385,184 @@ fn run_audit(cmd: AuditCommand, start: Instant) -> anyhow::Result<()> {
 /// Parses a strategy string into a [`LoadStrategy`].
 fn parse_strategy(s: &str) -> LoadStrategy {
     match s.to_lowercase().as_str() {
-        "direct-cpp-ffi" | "direct_cpp_ffi" | "directcppffi" | "ffi" => {
-            LoadStrategy::DirectCppFfi
-        }
+        "direct-cpp-ffi" | "direct_cpp_ffi" | "directcppffi" | "ffi" => LoadStrategy::DirectCppFfi,
         "direct-cpp" | "direct_cpp" | "directcpp" => LoadStrategy::DirectCpp,
         "llvm-sys" | "llvm_sys" | "llvmsys" => LoadStrategy::LlvmSys,
         "cpp-pass" | "cpp_pass" | "cpppass" => LoadStrategy::CppPass,
         "text-parser" | "text_parser" | "textparser" | "text" => LoadStrategy::TextParser,
+        "msgpack" | "msg-pack" | "msg_pack" => LoadStrategy::MsgPack,
+        "auto-fast" | "auto_fast" | "autofast" => LoadStrategy::AutoFast,
         _ => LoadStrategy::Auto,
     }
+}
+
+/// Converts a LoadStrategy to a static string for display.
+fn strategy_to_static_str(strategy: LoadStrategy) -> &'static str {
+    match strategy {
+        LoadStrategy::DirectCppFfi => "direct-cpp-ffi",
+        LoadStrategy::DirectCpp => "direct-cpp",
+        LoadStrategy::LlvmSys => "llvm-sys",
+        LoadStrategy::CppPass => "cpp-pass",
+        LoadStrategy::TextParser => "text-parser",
+        LoadStrategy::MsgPack => "msgpack",
+        LoadStrategy::Auto => "auto",
+        LoadStrategy::AutoFast => "auto-fast",
+    }
+}
+
+/// Prints the timing breakdown for CLI phases.
+fn print_timing_breakdown(timing: &CliTiming) {
+    eprintln!("\n--- Timing Breakdown ---");
+    eprintln!("  {:<20} {:>6}ms", "Loaded via:", timing.load_ms);
+    eprintln!("  {:<20} {:>6}ms", "Pipeline:", timing.pipeline_ms);
+    if timing.format_ms > 0 {
+        eprintln!("  {:<20} {:>6}ms", "Format:", timing.format_ms);
+    }
+    eprintln!("  {:<20} {:>6}ms", "Total:", timing.total_ms);
+    eprintln!("  {:<20} {}", "Strategy:", timing.load_strategy);
+}
+
+/// Prints a detailed timing report with pass-level breakdown.
+///
+/// This function outputs a comprehensive timing report that includes:
+/// - IR loading time and strategy
+/// - Individual pass timings with issue counts
+/// - Pipeline total time
+/// - Output formatting time
+/// - Percentage breakdown of each phase
+fn print_detailed_timing_report(
+    timing: &CliTiming,
+    result: &omniscope_pipeline::PipelineResult,
+    strategy: LoadStrategy,
+) {
+    use colored::Colorize;
+
+    // Header
+    eprintln!();
+    eprintln!("{}", "═".repeat(60).cyan().bold());
+    eprintln!("{}", "  Timing Breakdown".cyan().bold());
+    eprintln!("{}", "═".repeat(60).cyan().bold());
+    eprintln!();
+
+    // IR Loading section
+    eprintln!("{}", "IR Loading".yellow().bold());
+    eprintln!("{}", "─".repeat(60).dimmed());
+    eprintln!(
+        "  {:<20} {} ({})",
+        "Strategy:".white(),
+        strategy_to_static_str(strategy).green(),
+        "ir_extractor".dimmed()
+    );
+    eprintln!(
+        "  {:<20} {:>8}ms",
+        "Load time:".white(),
+        timing.load_ms.to_string().green()
+    );
+    eprintln!();
+
+    // Pipeline Passes section
+    eprintln!("{}", "Pipeline Passes".yellow().bold());
+    eprintln!("{}", "─".repeat(60).dimmed());
+
+    let mut total_pipeline_ms = 0u64;
+    let mut total_issues = 0usize;
+
+    // Print each pass with timing and issue count from pass_timings
+    for pt in &result.pass_timings {
+        let issue_text = if pt.issues_found == 1 {
+            "1 issue".to_string()
+        } else {
+            format!("{} issues", pt.issues_found)
+        };
+
+        eprintln!(
+            "  {:<30} {:>6}ms    ({})",
+            pt.pass_name.white(),
+            pt.duration_ms.to_string().green(),
+            issue_text.dimmed()
+        );
+
+        total_pipeline_ms += pt.duration_ms;
+        total_issues += pt.issues_found;
+    }
+
+    // Pipeline total line
+    eprintln!("  {}", "─".repeat(56).dimmed());
+    let total_issue_text = if total_issues == 1 {
+        "1 issue".to_string()
+    } else {
+        format!("{} issues", total_issues)
+    };
+    eprintln!(
+        "  {:<30} {:>6}ms    ({})",
+        "Pipeline Total:".white().bold(),
+        total_pipeline_ms.to_string().green().bold(),
+        total_issue_text.dimmed().bold()
+    );
+    eprintln!();
+
+    // Output Formatting section
+    if timing.format_ms > 0 {
+        eprintln!("{}", "Output Formatting".yellow().bold());
+        eprintln!("{}", "─".repeat(60).dimmed());
+        eprintln!(
+            "  {:<20} {:>8}ms",
+            "Format time:".white(),
+            timing.format_ms.to_string().green()
+        );
+        eprintln!();
+    }
+
+    // Summary section
+    eprintln!("{}", "Summary".yellow().bold());
+    eprintln!("{}", "─".repeat(60).dimmed());
+
+    let total_ms = timing.total_ms;
+    let load_percent = if total_ms > 0 {
+        (timing.load_ms as f64 / total_ms as f64) * 100.0
+    } else {
+        0.0
+    };
+    let pipeline_percent = if total_ms > 0 {
+        (timing.pipeline_ms as f64 / total_ms as f64) * 100.0
+    } else {
+        0.0
+    };
+    let format_percent = if total_ms > 0 {
+        (timing.format_ms as f64 / total_ms as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    eprintln!(
+        "  {:<20} {:>8}ms  ({:>5.1}%)",
+        "IR Loading:".white(),
+        timing.load_ms.to_string().green(),
+        load_percent
+    );
+    eprintln!(
+        "  {:<20} {:>8}ms  ({:>5.1}%)",
+        "Pipeline:".white(),
+        timing.pipeline_ms.to_string().green(),
+        pipeline_percent
+    );
+    if timing.format_ms > 0 {
+        eprintln!(
+            "  {:<20} {:>8}ms  ({:>5.1}%)",
+            "Formatting:".white(),
+            timing.format_ms.to_string().green(),
+            format_percent
+        );
+    }
+    eprintln!("  {}", "─".repeat(56).dimmed());
+    eprintln!(
+        "  {:<20} {:>8}ms",
+        "Total:".white().bold(),
+        total_ms.to_string().green().bold()
+    );
+
+    eprintln!();
+    eprintln!("{}", "═".repeat(60).cyan().bold());
 }
 
 /// Runs the info command — display configuration and pass info.
@@ -441,6 +659,7 @@ mod tests {
         let result = omniscope_pipeline::PipelineResult::from_pass_results(
             pass_results,
             Duration::from_millis(100),
+            Vec::new(), // No pass timings in test
         );
 
         // Apply the filter
@@ -493,6 +712,7 @@ mod tests {
         let result = omniscope_pipeline::PipelineResult::from_pass_results(
             vec![pass_result],
             Duration::from_millis(50),
+            Vec::new(),
         );
 
         let filtered = filter_boundary_issues(result);
@@ -540,6 +760,7 @@ mod tests {
         let result = omniscope_pipeline::PipelineResult::from_pass_results(
             vec![pass_result],
             Duration::from_millis(75),
+            Vec::new(),
         );
 
         let filtered = filter_boundary_issues(result);
@@ -575,6 +796,7 @@ mod tests {
         let result = omniscope_pipeline::PipelineResult::from_pass_results(
             vec![pass_result],
             Duration::from_millis(200),
+            Vec::new(),
         );
 
         let filtered = filter_boundary_issues(result);

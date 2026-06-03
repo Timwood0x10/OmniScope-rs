@@ -462,6 +462,8 @@ fn convert_instruction(inst: LLVMValueRef, _func_name: &str) -> Option<IRInstruc
         result_type,
         element_type,
         function_signature,
+        conversion_opcode: None, // Will be populated by caller if needed
+        binary_opcode: None,     // Will be populated by caller if needed
     })
 }
 

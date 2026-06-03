@@ -495,9 +495,7 @@ fn test_accuracy_regression() {
         .map(|(_, result)| result.issue_count())
         .sum();
     let fp_count = total_detected_issues.saturating_sub(tp_count);
-    eprintln!(
-        "\n--- False Positives (Noise) ---"
-    );
+    eprintln!("\n--- False Positives (Noise) ---");
     eprintln!(
         "  Total detected issues: {}, TP: {}, FP: {}",
         total_detected_issues, tp_count, fp_count
@@ -541,9 +539,7 @@ fn test_accuracy_regression() {
     };
 
     // ── Print results ───────────────────────────────────────────────
-    eprintln!(
-        "\n=== Accuracy Results ==="
-    );
+    eprintln!("\n=== Accuracy Results ===");
     eprintln!("  True Positives:  {tp_count}/{total_bugs}");
     eprintln!("  False Positives: {fp_count} (total detected: {total_detected_issues})");
     eprintln!("  False Negatives: {fn_count}/{total_bugs}");
@@ -551,9 +547,7 @@ fn test_accuracy_regression() {
     eprintln!("  Recall:          {:.1}%", recall * 100.0);
     eprintln!("  F1 Score:        {:.1}%", f1 * 100.0);
 
-    eprintln!(
-        "\n=== Baseline Comparison ==="
-    );
+    eprintln!("\n=== Baseline Comparison ===");
     eprintln!("  Baseline TP:  {BASELINE_TP}");
     eprintln!("  Baseline FP:  {BASELINE_FP}");
     eprintln!("  Baseline FN:  {BASELINE_FN}");
@@ -659,17 +653,11 @@ fn test_ffi_demo_dump_all_issues() {
         .map(|entry| entry.path())
         .collect();
 
-    eprintln!(
-        "\n=== ffi-demo Issue Audit ==="
-    );
+    eprintln!("\n=== ffi-demo Issue Audit ===");
     for ll_file in &ll_files {
         let file_name = ll_file.file_name().unwrap().to_string_lossy().to_string();
         let result = run_pipeline_on_ffi_demo(&file_name);
-        eprintln!(
-            "\n--- {} ({} issues) ---",
-            file_name,
-            result.issue_count()
-        );
+        eprintln!("\n--- {} ({} issues) ---", file_name, result.issue_count());
         for (idx, issue) in result.issues().iter().enumerate() {
             let func = issue
                 .location
@@ -690,9 +678,7 @@ fn test_ffi_demo_dump_all_issues() {
             );
         }
     }
-    eprintln!(
-        "\n=== ffi-demo Issue Audit Complete ==="
-    );
+    eprintln!("\n=== ffi-demo Issue Audit Complete ===");
 }
 
 /// Objective: Verify pipeline runs without errors on all ffi-demo files.

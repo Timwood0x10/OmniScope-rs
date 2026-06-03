@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Cache entry metadata
 #[derive(Debug, Clone)]
@@ -53,8 +53,12 @@ impl IrCache {
     /// Ensure cache directory exists
     pub fn ensure_cache_dir(&self) -> Result<()> {
         if !self.cache_dir.exists() {
-            fs::create_dir_all(&self.cache_dir)
-                .with_context(|| format!("Failed to create cache directory: {}", self.cache_dir.display()))?;
+            fs::create_dir_all(&self.cache_dir).with_context(|| {
+                format!(
+                    "Failed to create cache directory: {}",
+                    self.cache_dir.display()
+                )
+            })?;
             debug!("Created cache directory: {}", self.cache_dir.display());
         }
         Ok(())
@@ -80,7 +84,8 @@ impl IrCache {
             .with_context(|| format!("Failed to get file metadata: {}", path.display()))?;
 
         let size = metadata.len();
-        let mtime = metadata.modified()
+        let mtime = metadata
+            .modified()
             .with_context(|| format!("Failed to get modification time: {}", path.display()))?
             .duration_since(SystemTime::UNIX_EPOCH)
             .with_context(|| "Failed to convert SystemTime to duration")?
@@ -145,8 +150,9 @@ impl IrCache {
     /// # Returns
     /// Cached JSON string
     pub fn load_cached_json(&self, entry: &CacheEntry) -> Result<String> {
-        let content = fs::read_to_string(&entry.json_path)
-            .with_context(|| format!("Failed to read cached JSON: {}", entry.json_path.display()))?;
+        let content = fs::read_to_string(&entry.json_path).with_context(|| {
+            format!("Failed to read cached JSON: {}", entry.json_path.display())
+        })?;
 
         debug!(
             path = %entry.json_path.display(),
@@ -200,9 +206,12 @@ impl IrCache {
         let mut total_entries = 0;
         let mut total_size = 0;
 
-        for entry in fs::read_dir(&self.cache_dir)
-            .with_context(|| format!("Failed to read cache directory: {}", self.cache_dir.display()))?
-        {
+        for entry in fs::read_dir(&self.cache_dir).with_context(|| {
+            format!(
+                "Failed to read cache directory: {}",
+                self.cache_dir.display()
+            )
+        })? {
             let entry = entry?;
             let metadata = entry.metadata()?;
             if metadata.is_file() {
@@ -220,9 +229,12 @@ impl IrCache {
             return Ok(());
         }
 
-        for entry in fs::read_dir(&self.cache_dir)
-            .with_context(|| format!("Failed to read cache directory: {}", self.cache_dir.display()))?
-        {
+        for entry in fs::read_dir(&self.cache_dir).with_context(|| {
+            format!(
+                "Failed to read cache directory: {}",
+                self.cache_dir.display()
+            )
+        })? {
             let entry = entry?;
             if entry.metadata()?.is_file() {
                 fs::remove_file(entry.path())?;
@@ -248,16 +260,17 @@ impl IrCache {
         let now = SystemTime::now();
         let mut cleared = 0;
 
-        for entry in fs::read_dir(&self.cache_dir)
-            .with_context(|| format!("Failed to read cache directory: {}", self.cache_dir.display()))?
-        {
+        for entry in fs::read_dir(&self.cache_dir).with_context(|| {
+            format!(
+                "Failed to read cache directory: {}",
+                self.cache_dir.display()
+            )
+        })? {
             let entry = entry?;
             let metadata = entry.metadata()?;
             if metadata.is_file() {
                 let modified = metadata.modified()?;
-                let age = now.duration_since(modified)
-                    .unwrap_or_default()
-                    .as_secs();
+                let age = now.duration_since(modified).unwrap_or_default().as_secs();
 
                 if age > max_age {
                     fs::remove_file(entry.path())?;
@@ -316,7 +329,10 @@ mod tests {
         fs::write(&test_file, "test content").unwrap();
 
         let result = cache.check_cache(&test_file);
-        assert!(result.is_none(), "Should be cache miss for non-existent cache");
+        assert!(
+            result.is_none(),
+            "Should be cache miss for non-existent cache"
+        );
     }
 
     #[test]
@@ -344,10 +360,7 @@ mod tests {
 
         // Load cached content
         let loaded = cache.load_cached_json(&result_entry).unwrap();
-        assert_eq!(
-            loaded, json_content,
-            "Loaded content should match original"
-        );
+        assert_eq!(loaded, json_content, "Loaded content should match original");
     }
 
     #[test]
@@ -369,7 +382,10 @@ mod tests {
 
         // Check cache miss
         let result = cache.check_cache(&test_file);
-        assert!(result.is_none(), "Should be cache miss after file modification");
+        assert!(
+            result.is_none(),
+            "Should be cache miss after file modification"
+        );
     }
 
     #[test]
@@ -419,6 +435,43 @@ mod tests {
         assert!(
             root.unwrap().join("Cargo.toml").is_file(),
             "Project root should contain Cargo.toml"
+        );
+    }
+
+    #[test]
+    fn test_cache_performance() {
+        let tmp = TempDir::new().unwrap();
+        let cache = IrCache::new(tmp.path());
+
+        // Create a test file
+        let test_file = tmp.path().join("test.ll");
+        fs::write(&test_file, "test content").unwrap();
+
+        // First load (cache miss)
+        let start = std::time::Instant::now();
+        let entry1 = cache.check_cache(&test_file);
+        let miss_duration = start.elapsed();
+        assert!(entry1.is_none(), "First load should be cache miss");
+
+        // Save to cache
+        let json_content = r#"{"functions": [], "global_variables": []}"#;
+        cache.save_to_cache(&test_file, json_content).unwrap();
+
+        // Second load (cache hit)
+        let start = std::time::Instant::now();
+        let entry2 = cache.check_cache(&test_file);
+        let hit_duration = start.elapsed();
+        assert!(entry2.is_some(), "Second load should be cache hit");
+
+        // Verify cache hit is faster (should be sub-second)
+        println!("Cache miss took: {:?}", miss_duration);
+        println!("Cache hit took: {:?}", hit_duration);
+
+        // Cache hit should be very fast (sub-millisecond typically)
+        assert!(
+            hit_duration.as_millis() < 100,
+            "Cache hit should be fast, took: {:?}",
+            hit_duration
         );
     }
 }

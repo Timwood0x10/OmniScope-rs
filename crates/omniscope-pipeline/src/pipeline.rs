@@ -96,11 +96,12 @@ impl Pipeline {
         let start = Instant::now();
 
         // Run all passes with shared context, injecting IR module if available
-        let (pass_results, issues) = self.pass_manager.run_all_with_ir(self.ir_module.take())?;
+        let (pass_results, pass_timings, issues) =
+            self.pass_manager.run_all_with_ir(self.ir_module.take())?;
 
         // Aggregate results
         let duration = start.elapsed();
-        let result = PipelineResult::with_issues(pass_results, duration, issues);
+        let result = PipelineResult::with_issues(pass_results, duration, issues, pass_timings);
 
         Ok(result)
     }

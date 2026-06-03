@@ -40,4 +40,4 @@ pub use resource::summary_builder::SummaryBuilderPass;
 // Re-exports — Infrastructure
 pub use manager::PassManager;
 pub use module_index::ModuleIndex;
-pub use pass::{Pass, PassContext, PassKind, PassResult};
+pub use pass::{Pass, PassContext, PassKind, PassResult, PassTiming};

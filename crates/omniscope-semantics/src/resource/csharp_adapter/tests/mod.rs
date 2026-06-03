@@ -270,6 +270,8 @@ fn test_pinvoke_call_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -282,6 +284,8 @@ fn test_pinvoke_call_semantics_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -294,6 +298,8 @@ fn test_pinvoke_call_semantics_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -337,6 +343,8 @@ fn test_marshal_allocation_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -349,6 +357,8 @@ fn test_marshal_allocation_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -361,6 +371,8 @@ fn test_marshal_allocation_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -422,6 +434,8 @@ fn test_safe_handle_detection_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -434,6 +448,8 @@ fn test_safe_handle_detection_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -477,6 +493,8 @@ fn test_mixed_csharp_pinvoke_patterns() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -489,6 +507,8 @@ fn test_mixed_csharp_pinvoke_patterns() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -501,6 +521,8 @@ fn test_mixed_csharp_pinvoke_patterns() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -513,6 +535,8 @@ fn test_mixed_csharp_pinvoke_patterns() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };

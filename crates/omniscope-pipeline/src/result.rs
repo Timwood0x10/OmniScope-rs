@@ -3,7 +3,7 @@
 //! This module provides result aggregation for the analysis pipeline.
 
 use omniscope_core::Issue;
-use omniscope_pass::PassResult;
+use omniscope_pass::{PassResult, PassTiming};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -23,11 +23,18 @@ pub struct PipelineResult {
     /// All concrete issues collected across passes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<Issue>,
+    /// Per-pass timing information for performance reporting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_timings: Vec<PassTiming>,
 }
 
 impl PipelineResult {
     /// Creates a pipeline result from pass results
-    pub fn from_pass_results(pass_results: Vec<PassResult>, duration: Duration) -> Self {
+    pub fn from_pass_results(
+        pass_results: Vec<PassResult>,
+        duration: Duration,
+        pass_timings: Vec<PassTiming>,
+    ) -> Self {
         let total_issues = pass_results.iter().map(|r| r.issues_found).sum();
         let total_nodes = pass_results.iter().map(|r| r.nodes_analyzed).sum();
 
@@ -43,6 +50,7 @@ impl PipelineResult {
             duration,
             stats,
             issues,
+            pass_timings,
         }
     }
 
@@ -55,6 +63,7 @@ impl PipelineResult {
         pass_results: Vec<PassResult>,
         duration: Duration,
         issues: Vec<Issue>,
+        pass_timings: Vec<PassTiming>,
     ) -> Self {
         let total_nodes = pass_results.iter().map(|r| r.nodes_analyzed).sum();
 
@@ -79,6 +88,7 @@ impl PipelineResult {
             duration,
             stats,
             issues: deduped,
+            pass_timings,
         }
     }
 
@@ -226,7 +236,11 @@ mod tests {
             PassResult::new("DFG").with_issues(2).with_nodes(150),
         ];
 
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(50));
+        let result = PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(50),
+            Vec::new(), // No pass timings in test
+        );
 
         assert_eq!(
             result.pass_count(),
@@ -252,7 +266,11 @@ mod tests {
     fn test_pipeline_result_summary() {
         let pass_results = vec![PassResult::new("CFG").with_issues(0).with_nodes(100)];
 
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+        let result = PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(10),
+            Vec::new(), // No pass timings in test
+        );
 
         let summary = result.summary();
         assert!(
@@ -325,7 +343,11 @@ mod tests {
             "null deref",
         ));
 
-        let result = PipelineResult::from_pass_results(vec![pr1, pr2], Duration::from_millis(20));
+        let result = PipelineResult::from_pass_results(
+            vec![pr1, pr2],
+            Duration::from_millis(20),
+            Vec::new(), // No pass timings in test
+        );
 
         assert_eq!(
             result.total_issues, 3,
@@ -368,7 +390,11 @@ mod tests {
                 .with_confidence(Confidence::Medium),
         );
 
-        let result = PipelineResult::from_pass_results(vec![pr], Duration::from_millis(5));
+        let result = PipelineResult::from_pass_results(
+            vec![pr],
+            Duration::from_millis(5),
+            Vec::new(), // No pass timings in test
+        );
 
         assert_eq!(
             result.high_issues().len(),
@@ -398,7 +424,12 @@ mod tests {
             Issue::new(2, IssueKind::MemoryLeak, Severity::Note, "leak"),
         ];
         let pr = PassResult::new("test").with_nodes(10);
-        let result = PipelineResult::with_issues(vec![pr], Duration::from_millis(10), issues);
+        let result = PipelineResult::with_issues(
+            vec![pr],
+            Duration::from_millis(10),
+            issues,
+            Vec::new(), // No pass timings in test
+        );
 
         assert_eq!(
             result.total_issues, 2,
@@ -415,7 +446,7 @@ mod tests {
     /// Invariants: pass_count=0, issue_count=0, has_issues()=false.
     #[test]
     fn test_empty_pass_results() {
-        let result = PipelineResult::from_pass_results(vec![], Duration::ZERO);
+        let result = PipelineResult::from_pass_results(vec![], Duration::ZERO, Vec::new());
         assert_eq!(
             result.pass_count(),
             0,
@@ -440,7 +471,8 @@ mod tests {
             PassResult::new("CFG").with_nodes(50),
             PassResult::new("DFG").with_nodes(75),
         ];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+        let result =
+            PipelineResult::from_pass_results(pass_results, Duration::from_millis(10), Vec::new());
 
         let cfg = result.get_pass_result("CFG");
         assert!(cfg.is_some(), "get_pass_result must find 'CFG'");
@@ -452,7 +484,8 @@ mod tests {
     #[test]
     fn test_get_pass_result_miss() {
         let pass_results = vec![PassResult::new("CFG").with_nodes(50)];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+        let result =
+            PipelineResult::from_pass_results(pass_results, Duration::from_millis(10), Vec::new());
 
         assert!(
             result.get_pass_result("nonexistent").is_none(),
@@ -464,7 +497,8 @@ mod tests {
     /// Invariants: Duration::from_millis(42) yields duration_ms() == 42.
     #[test]
     fn test_duration_ms_accuracy() {
-        let result = PipelineResult::from_pass_results(vec![], Duration::from_millis(42));
+        let result =
+            PipelineResult::from_pass_results(vec![], Duration::from_millis(42), Vec::new());
         assert_eq!(
             result.duration_ms(),
             42,
@@ -534,7 +568,8 @@ mod tests {
     #[test]
     fn test_high_low_issues_empty() {
         let pass_results = vec![PassResult::new("CFG").with_nodes(100)];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(10));
+        let result =
+            PipelineResult::from_pass_results(pass_results, Duration::from_millis(10), Vec::new());
 
         assert!(
             result.high_issues().is_empty(),

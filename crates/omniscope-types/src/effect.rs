@@ -89,6 +89,34 @@ pub enum Effect {
         /// Argument index that holds the resource to release.
         arg: ArgIndex,
     },
+    /// Release function has NULL guard - release(NULL) is safe no-op.
+    /// Common pattern in C libraries (e.g., free(NULL), cJSON_Delete(NULL)).
+    NullGuardedRelease {
+        /// Resource family that this release belongs to.
+        family: FamilyId,
+        /// Argument index that holds the resource to release.
+        arg: ArgIndex,
+    },
+    /// Out-param receives owned resource on success path.
+    /// Pattern: `if (success) *out = new_resource;`
+    OutParamOwnedOnSuccess {
+        /// Resource family being transferred.
+        family: FamilyId,
+        /// Argument index of the out-parameter.
+        arg: ArgIndex,
+    },
+    /// Out-param is set to NULL on error path.
+    /// Pattern: `if (error) *out = NULL;`
+    OutParamNullOnError {
+        /// Argument index of the out-parameter.
+        arg: ArgIndex,
+    },
+    /// NULL store after release - slot becomes NULL after dealloc.
+    /// Pattern: `free(p); p = NULL;`
+    NullStoreAfterRelease {
+        /// Argument index of the pointer being nulled.
+        arg: ArgIndex,
+    },
 }
 
 impl Effect {
@@ -105,10 +133,14 @@ impl Effect {
             Effect::OwnershipEscape { family, .. } => Some(*family),
             Effect::OwnershipReclaim { family, .. } => Some(*family),
             Effect::CrossLanguageFree { release_family, .. } => Some(*release_family),
+            Effect::NullGuardedRelease { family, .. } => Some(*family),
+            Effect::OutParamOwnedOnSuccess { family, .. } => Some(*family),
             Effect::ReturnsBorrowed
             | Effect::StoresArgToOwner { .. }
             | Effect::StoresArgToGlobal { .. }
-            | Effect::EscapesToCallback { .. } => None,
+            | Effect::EscapesToCallback { .. }
+            | Effect::OutParamNullOnError { .. }
+            | Effect::NullStoreAfterRelease { .. } => None,
         }
     }
 
@@ -127,6 +159,7 @@ impl Effect {
             Effect::Release { .. }
                 | Effect::ConditionalRelease { .. }
                 | Effect::CrossLanguageFree { .. }
+                | Effect::NullGuardedRelease { .. }
         )
     }
 
@@ -157,6 +190,10 @@ impl Effect {
             Effect::OwnershipEscape { .. } => "ownership_escape",
             Effect::OwnershipReclaim { .. } => "ownership_reclaim",
             Effect::CrossLanguageFree { .. } => "cross_language_free",
+            Effect::NullGuardedRelease { .. } => "null_guarded_release",
+            Effect::OutParamOwnedOnSuccess { .. } => "out_param_owned_on_success",
+            Effect::OutParamNullOnError { .. } => "out_param_null_on_error",
+            Effect::NullStoreAfterRelease { .. } => "null_store_after_release",
         }
     }
 }

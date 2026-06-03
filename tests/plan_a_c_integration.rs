@@ -973,9 +973,9 @@ mod plan_c_without_feature {
             result.is_ok(),
             "Auto strategy should succeed by falling back to text parser"
         );
-        let module = result.expect("auto load must succeed");
+        let loaded = result.expect("auto load must succeed");
         assert!(
-            !module.functions.is_empty(),
+            !loaded.module.functions.is_empty(),
             "Auto-loaded module should have at least 1 function"
         );
     }
@@ -1150,7 +1150,7 @@ mod plan_c_with_feature {
         match result {
             Ok(module) => {
                 assert!(
-                    !module.functions.is_empty(),
+                    !module.module.functions.is_empty(),
                     "LlvmSys-loaded module should have functions"
                 );
             }
@@ -1174,7 +1174,7 @@ mod plan_c_with_feature {
         );
         let module = result.expect("auto load must succeed");
         assert!(
-            !module.functions.is_empty(),
+            !module.module.functions.is_empty(),
             "Auto-loaded module should have functions"
         );
     }

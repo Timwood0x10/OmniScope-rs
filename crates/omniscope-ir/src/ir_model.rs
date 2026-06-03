@@ -202,6 +202,21 @@ pub struct IRInstructionModel {
 }
 
 // ---------------------------------------------------------------------------
+// IRInstructionModel methods
+// ---------------------------------------------------------------------------
+
+impl IRInstructionModel {
+    /// Check if the raw field has content.
+    ///
+    /// Returns `true` if the `raw` field is non-empty, meaning the instruction
+    /// has its full LLVM IR text representation. Returns `false` when the
+    /// C++ extractor used `--no-raw` to skip generating the raw field.
+    pub fn has_raw(&self) -> bool {
+        !self.raw.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Declarations and globals
 // ---------------------------------------------------------------------------
 
@@ -381,6 +396,13 @@ impl IRInstructionModel {
             .clone()
             .or_else(|| self.gep_details.as_ref().map(|g| g.source_type.clone()));
 
+        // Extract conversion opcode for Conversion instructions
+        let conversion_opcode = if kind == IRInstructionKind::Conversion {
+            Some(self.opcode.clone())
+        } else {
+            None
+        };
+
         IRInstruction {
             kind,
             dest,
@@ -392,6 +414,8 @@ impl IRInstructionModel {
             result_type: self.result_type.clone(),
             element_type,
             function_signature: None,
+            conversion_opcode,
+            binary_opcode: None, // Will be populated by caller if needed
         }
     }
 }
@@ -496,6 +520,29 @@ pub fn load_from_json(path: &std::path::Path) -> anyhow::Result<IRModule> {
 /// Returns an error if the JSON is malformed.
 pub fn parse_from_json(json: &str) -> anyhow::Result<IRModule> {
     let model: IRModuleModel = serde_json::from_str(json)?;
+    Ok(model.to_ir_module())
+}
+
+// ===========================================================================
+// MessagePack loading helpers
+// ===========================================================================
+
+/// Load an IR module from a MessagePack file.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or the MessagePack is malformed.
+pub fn load_from_msgpack(path: &std::path::Path) -> anyhow::Result<IRModule> {
+    let content = std::fs::read(path)?;
+    parse_from_msgpack(&content)
+}
+
+/// Parse IR module from MessagePack bytes.
+///
+/// # Errors
+/// Returns an error if the MessagePack is malformed.
+pub fn parse_from_msgpack(bytes: &[u8]) -> anyhow::Result<IRModule> {
+    let model: IRModuleModel = rmp_serde::from_slice(bytes)
+        .map_err(|e| anyhow::anyhow!("MessagePack parse error: {}", e))?;
     Ok(model.to_ir_module())
 }
 

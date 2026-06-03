@@ -20,6 +20,7 @@ omniscope-types = { path = "../omniscope-types" }
 
 anyhow = { workspace = true }
 llvm-sys = { version = "221", optional = true }
+rmp-serde = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

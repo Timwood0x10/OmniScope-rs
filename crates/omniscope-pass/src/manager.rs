@@ -1,6 +1,6 @@
 //! Pass manager for orchestrating analysis passes
 
-use crate::pass::{Pass, PassContext, PassResult};
+use crate::pass::{Pass, PassContext, PassResult, PassTiming};
 use omniscope_core::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -105,23 +105,25 @@ impl PassManager {
     }
 
     /// Runs all passes
-    pub fn run_all(&mut self) -> Result<Vec<PassResult>> {
+    pub fn run_all(&mut self) -> Result<(Vec<PassResult>, Vec<PassTiming>)> {
         self.compute_order()?;
         let mut ctx = PassContext::new();
         self.run_with_context(&mut ctx)
     }
 
-    /// Runs all passes and returns (pass_results, collected_issues).
+    /// Runs all passes and returns (pass_results, pass_timings, collected_issues).
     ///
     /// Issues are collected from both PassResult.issues and
     /// PassContext.issues(), providing a unified view of all
     /// detected problems.
-    pub fn run_all_with_issues(&mut self) -> Result<(Vec<PassResult>, Vec<omniscope_core::Issue>)> {
+    pub fn run_all_with_issues(
+        &mut self,
+    ) -> Result<(Vec<PassResult>, Vec<PassTiming>, Vec<omniscope_core::Issue>)> {
         self.compute_order()?;
         let mut ctx = PassContext::new();
-        let results = self.run_with_context(&mut ctx)?;
+        let (results, timings) = self.run_with_context(&mut ctx)?;
         let issues = ctx.issues().to_vec();
-        Ok((results, issues))
+        Ok((results, timings, issues))
     }
 
     /// Runs all passes with an optional IR module injected into the context.
@@ -137,7 +139,7 @@ impl PassManager {
     pub fn run_all_with_ir(
         &mut self,
         ir_module: Option<omniscope_ir::IRModule>,
-    ) -> Result<(Vec<PassResult>, Vec<omniscope_core::Issue>)> {
+    ) -> Result<(Vec<PassResult>, Vec<PassTiming>, Vec<omniscope_core::Issue>)> {
         self.compute_order()?;
         let mut ctx = PassContext::new();
         if let Some(module) = ir_module {
@@ -149,14 +151,21 @@ impl PassManager {
             ctx.store("module_index", index);
             ctx.store("ir_module", module);
         }
-        let results = self.run_with_context(&mut ctx)?;
+        let (results, timings) = self.run_with_context(&mut ctx)?;
         let issues = ctx.issues().to_vec();
-        Ok((results, issues))
+        Ok((results, timings, issues))
     }
 
     /// Runs all passes with a shared context
-    pub fn run_with_context(&self, ctx: &mut PassContext) -> Result<Vec<PassResult>> {
+    ///
+    /// Returns a tuple of (pass_results, pass_timings) where pass_timings
+    /// contains per-pass timing information for performance reporting.
+    pub fn run_with_context(
+        &self,
+        ctx: &mut PassContext,
+    ) -> Result<(Vec<PassResult>, Vec<PassTiming>)> {
         let mut results = Vec::new();
+        let mut timings = Vec::new();
 
         if self.parallel {
             // Group passes by dependency level for parallel execution.
@@ -203,6 +212,11 @@ impl PassManager {
                 // Merge each local_ctx back into the shared main context
                 for (_idx, local_ctx, result) in level_results {
                     ctx.merge(local_ctx);
+                    timings.push(PassTiming {
+                        pass_name: result.name.clone(),
+                        duration_ms: result.duration_ms,
+                        issues_found: result.issues_found,
+                    });
                     results.push(result);
                 }
             }
@@ -214,11 +228,16 @@ impl PassManager {
 
                 let mut result = pass.run(ctx)?;
                 result.duration_ms = start.elapsed().as_millis() as u64;
+                timings.push(PassTiming {
+                    pass_name: result.name.clone(),
+                    duration_ms: result.duration_ms,
+                    issues_found: result.issues_found,
+                });
                 results.push(result);
             }
         }
 
-        Ok(results)
+        Ok((results, timings))
     }
 
     /// Computes dependency levels for parallel execution
@@ -368,15 +387,19 @@ mod tests {
         );
     }
 
-    /// Objective: Verify that run_all on an empty manager succeeds with no results.
+    /// Objective: Verify that an empty PassManager produces an empty result without error.
     /// Invariants: An empty PassManager produces an empty result vec without error.
     #[test]
     fn test_empty_pass_manager_run_all() {
         let mut manager = PassManager::new();
-        let results = manager.run_all().expect("empty manager must not fail");
+        let (pass_results, pass_timings) = manager.run_all().expect("empty manager must not fail");
         assert!(
-            results.is_empty(),
-            "run_all on empty manager must return empty vec"
+            pass_results.is_empty(),
+            "run_all on empty manager must return empty pass_results vec"
+        );
+        assert!(
+            pass_timings.is_empty(),
+            "run_all on empty manager must return empty pass_timings vec"
         );
     }
 

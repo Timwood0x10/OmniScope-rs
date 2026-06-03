@@ -326,6 +326,48 @@ impl Pass for OwnershipSolverPass {
                             edge.function_name
                         );
                     }
+                    Effect::NullGuardedRelease { .. } => {
+                        // Null-guarded release: treat as a conditional release
+                        // since releasing NULL is safe but releasing non-NULL is unconditional.
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::ConditionalRelease {
+                                function: edge.function,
+                            },
+                            &edge.function_name,
+                        );
+                    }
+                    Effect::OutParamOwnedOnSuccess { .. } => {
+                        // Out-param receives owned resource on success path.
+                        // Treat as an acquire for the out-parameter.
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::Acquire,
+                            &edge.function_name,
+                        );
+                    }
+                    Effect::OutParamNullOnError { .. } => {
+                        // Out-param is set to NULL on error path.
+                        // This is a conditional release on error path.
+                        apply_transition(
+                            &mut instances,
+                            &instance_map,
+                            edge.source,
+                            OwnershipEvent::ConditionalRelease {
+                                function: edge.function,
+                            },
+                            &edge.function_name,
+                        );
+                    }
+                    Effect::NullStoreAfterRelease { .. } => {
+                        // NULL store after release: slot becomes NULL after dealloc.
+                        // This is a cleanup operation, not an ownership change.
+                        // No transition needed.
+                    }
                 }
             }
             // Store cycle detector for downstream passes to efficiently

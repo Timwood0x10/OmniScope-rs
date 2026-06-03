@@ -284,6 +284,8 @@ fn test_jni_call_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -301,6 +303,8 @@ fn test_jni_call_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -313,6 +317,8 @@ fn test_jni_call_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -325,6 +331,8 @@ fn test_jni_call_semantics_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -337,6 +345,8 @@ fn test_jni_call_semantics_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+            conversion_opcode: None,
+            binary_opcode: None,
             },
         ],
     };
@@ -412,6 +422,8 @@ fn test_jni_object_creation_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -424,6 +436,8 @@ fn test_jni_object_creation_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -436,6 +450,8 @@ fn test_jni_object_creation_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -448,6 +464,8 @@ fn test_jni_object_creation_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -510,6 +528,8 @@ fn test_jni_exception_handling_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -522,6 +542,8 @@ fn test_jni_exception_handling_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -534,6 +556,8 @@ fn test_jni_exception_handling_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -577,6 +601,8 @@ fn test_mixed_java_jni_patterns() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -590,6 +616,8 @@ fn test_mixed_java_jni_patterns() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -602,6 +630,8 @@ fn test_mixed_java_jni_patterns() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -614,6 +644,8 @@ fn test_mixed_java_jni_patterns() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -626,6 +658,8 @@ fn test_mixed_java_jni_patterns() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };

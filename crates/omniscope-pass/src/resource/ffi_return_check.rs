@@ -73,12 +73,14 @@ impl Pass for FfiReturnCheckPass {
                     if !ffi_set.contains(trimmed_name) {
                         continue;
                     }
-                    functions_to_scan.push((func_name.clone(), body.instructions.clone()));
+                    let instructions = body.instructions.clone();
+                    functions_to_scan.push((func_name.clone(), instructions));
                 }
             } else {
                 // Fallback: scan all function bodies
                 for (func_name, body) in &module.function_bodies {
-                    functions_to_scan.push((func_name.clone(), body.instructions.clone()));
+                    let instructions = body.instructions.clone();
+                    functions_to_scan.push((func_name.clone(), instructions));
                 }
             }
 
@@ -136,7 +138,7 @@ fn scan_function_body(
                     let is_ffi = is_likely_ffi_by_name(callee_name);
                     if is_declared || is_ffi {
                         // Only track pointer-returning calls — non-pointer returns can't be null
-                        if returns_pointer(&inst.raw_text) {
+                        if returns_pointer(inst) {
                             // Skip known non-null APIs and system allocators
                             // System allocators (malloc, calloc, etc.) generate excessive
                             // noise when flagged for unchecked returns because OOM handling
@@ -153,9 +155,12 @@ fn scan_function_body(
                         // as an argument to a null-sink function.
                         // This check applies regardless of return type.
                         if is_null_sink(callee_name) {
-                            // Call operands are not populated by the parser,
+                            // Call operands are not populated by the text parser,
                             // so we extract registers from raw_text instead.
-                            for word in inst.raw_text.split(|c: char| {
+                            // Ensure raw_text is populated (handles --no-raw mode from C++ extractor).
+                            let mut inst_clone = inst.clone();
+                            inst_clone.ensure_raw();
+                            for word in inst_clone.raw_text.split(|c: char| {
                                 c.is_whitespace() || c == ',' || c == '(' || c == ')'
                             }) {
                                 let op = word.trim();
@@ -249,10 +254,26 @@ fn scan_function_body(
 
 /// Returns true if the call instruction returns a pointer type.
 ///
-/// Checks the raw_text for `call ptr @` pattern, which indicates
-/// a pointer return type. Non-pointer returns (i32, i64, void, etc.)
-/// cannot be null and should not be tracked.
-fn returns_pointer(raw_text: &str) -> bool {
+/// Uses the structured `result_type` field when available (from C++ extractor),
+/// otherwise falls back to parsing the raw text for the `call ptr @` pattern.
+/// Non-pointer returns (i32, i64, void, etc.) cannot be null and should not
+/// be tracked.
+fn returns_pointer(inst: &IRInstruction) -> bool {
+    // Fast path: use structured result_type field when available
+    if let Some(ref result_type) = inst.result_type {
+        return result_type == "ptr";
+    }
+
+    // Fallback: parse raw text for pointer return pattern
+    returns_pointer_from_raw(&inst.raw_text)
+}
+
+/// Returns true if the raw text of a call instruction indicates a pointer
+/// return type.
+///
+/// This is the raw-text parsing fallback used when the structured
+/// `result_type` field is not available (text parser path).
+fn returns_pointer_from_raw(raw_text: &str) -> bool {
     let text = raw_text.trim();
 
     // Strip "tail " / "musttail " / "notail " prefix
@@ -535,36 +556,38 @@ mod tests {
     #[test]
     fn test_returns_pointer() {
         assert!(
-            returns_pointer("  %p = call ptr @ffi_get()"),
+            returns_pointer_from_raw("  %p = call ptr @ffi_get()"),
             "call ptr @ffi_get() should be recognized as returning pointer"
         );
         assert!(
-            returns_pointer("  %p = tail call ptr @malloc(i64 %n)"),
+            returns_pointer_from_raw("  %p = tail call ptr @malloc(i64 %n)"),
             "tail call ptr @malloc should be recognized as returning pointer"
         );
         assert!(
-            returns_pointer("  %p = call noundef ptr @fopen(ptr %s, ptr %m)"),
+            returns_pointer_from_raw("  %p = call noundef ptr @fopen(ptr %s, ptr %m)"),
             "call noundef ptr @fopen should be recognized as returning pointer"
         );
         assert!(
-            !returns_pointer("  %r = call i32 @c_hash(ptr %p, i64 %n)"),
+            !returns_pointer_from_raw("  %r = call i32 @c_hash(ptr %p, i64 %n)"),
             "call i32 should NOT be recognized as returning pointer"
         );
         assert!(
-            !returns_pointer("  %t = call i64 @time(ptr null)"),
+            !returns_pointer_from_raw("  %t = call i64 @time(ptr null)"),
             "call i64 should NOT be recognized as returning pointer"
         );
         assert!(
-            !returns_pointer("  call void @free(ptr %p)"),
+            !returns_pointer_from_raw("  call void @free(ptr %p)"),
             "call void should NOT be recognized as returning pointer"
         );
         // Variadic: return type is i32, not ptr
         assert!(
-            !returns_pointer("  %16 = tail call i32 (ptr, ptr, ...) @fprintf(ptr %f, ptr %s)"),
+            !returns_pointer_from_raw(
+                "  %16 = tail call i32 (ptr, ptr, ...) @fprintf(ptr %f, ptr %s)"
+            ),
             "variadic call returning i32 should NOT be recognized as returning pointer"
         );
         assert!(
-            !returns_pointer(
+            !returns_pointer_from_raw(
                 "  %112 = tail call i32 (ptr, i64, ptr, ...) @snprintf(ptr %b, i64 %n, ptr %f)"
             ),
             "variadic call returning i32 should NOT be recognized as returning pointer"

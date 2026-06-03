@@ -572,3 +572,188 @@ fn test_conversion_classify_all_opcodes() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// MessagePack tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_msgpack_roundtrip() {
+    // Create a simple IR module model
+    let model = IRModuleModel {
+        target_triple: Some("x86_64-apple-darwin".to_string()),
+        data_layout: Some("e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128".to_string()),
+        functions: vec![IRFunction {
+            name: "main".to_string(),
+            demangled: None,
+            return_type: "i32".to_string(),
+            param_types: vec![],
+            calling_convention: "ccc".to_string(),
+            blocks: vec![IRBasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![IRInstructionModel {
+                    id: Some(0),
+                    opcode: "ret".to_string(),
+                    result_type: Some("i32".to_string()),
+                    operand_types: vec![],
+                    operands: vec!["0".to_string()],
+                    callee: None,
+                    is_indirect: false,
+                    debug_loc: None,
+                    raw: "ret i32 0".to_string(),
+                    source_type: None,
+                    gep_details: None,
+                }],
+                successors: vec![],
+            }],
+            linkage: Some("external".to_string()),
+        }],
+        declarations: vec![],
+        named_struct_types: HashMap::new(),
+        global_variables: vec![],
+    };
+
+    // Serialize to MessagePack
+    let msgpack_bytes = rmp_serde::to_vec(&model).expect("Failed to serialize to MessagePack");
+
+    // Deserialize from MessagePack
+    let deserialized: IRModuleModel =
+        rmp_serde::from_slice(&msgpack_bytes).expect("Failed to deserialize from MessagePack");
+
+    // Verify the deserialized model matches the original
+    assert_eq!(model.target_triple, deserialized.target_triple);
+    assert_eq!(model.data_layout, deserialized.data_layout);
+    assert_eq!(model.functions.len(), deserialized.functions.len());
+    assert_eq!(model.functions[0].name, deserialized.functions[0].name);
+    assert_eq!(
+        model.functions[0].return_type,
+        deserialized.functions[0].return_type
+    );
+    assert_eq!(
+        model.functions[0].blocks.len(),
+        deserialized.functions[0].blocks.len()
+    );
+    assert_eq!(
+        model.functions[0].blocks[0].instructions.len(),
+        deserialized.functions[0].blocks[0].instructions.len()
+    );
+    assert_eq!(
+        model.functions[0].blocks[0].instructions[0].opcode,
+        deserialized.functions[0].blocks[0].instructions[0].opcode
+    );
+}
+
+#[test]
+fn test_msgpack_json_equivalence() {
+    // Create a simple IR module model
+    let model = IRModuleModel {
+        target_triple: Some("x86_64-apple-darwin".to_string()),
+        data_layout: Some("e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128".to_string()),
+        functions: vec![IRFunction {
+            name: "test_func".to_string(),
+            demangled: None,
+            return_type: "void".to_string(),
+            param_types: vec!["i32".to_string()],
+            calling_convention: "ccc".to_string(),
+            blocks: vec![IRBasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![],
+                successors: vec![],
+            }],
+            linkage: None,
+        }],
+        declarations: vec![],
+        named_struct_types: HashMap::new(),
+        global_variables: vec![],
+    };
+
+    // Serialize to JSON
+    let json_str = serde_json::to_string(&model).expect("Failed to serialize to JSON");
+
+    // Serialize to MessagePack
+    let msgpack_bytes = rmp_serde::to_vec(&model).expect("Failed to serialize to MessagePack");
+
+    // Deserialize from both formats
+    let from_json: IRModuleModel =
+        serde_json::from_str(&json_str).expect("Failed to deserialize from JSON");
+    let from_msgpack: IRModuleModel =
+        rmp_serde::from_slice(&msgpack_bytes).expect("Failed to deserialize from MessagePack");
+
+    // Verify both produce the same result
+    assert_eq!(from_json.target_triple, from_msgpack.target_triple);
+    assert_eq!(from_json.functions.len(), from_msgpack.functions.len());
+    assert_eq!(from_json.functions[0].name, from_msgpack.functions[0].name);
+    assert_eq!(
+        from_json.functions[0].param_types,
+        from_msgpack.functions[0].param_types
+    );
+}
+
+#[test]
+fn test_parse_from_msgpack() {
+    // Create a simple IR module model
+    let model = IRModuleModel {
+        target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+        data_layout: Some("e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128".to_string()),
+        functions: vec![IRFunction {
+            name: "add".to_string(),
+            demangled: None,
+            return_type: "i32".to_string(),
+            param_types: vec!["i32".to_string(), "i32".to_string()],
+            calling_convention: "ccc".to_string(),
+            blocks: vec![IRBasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    IRInstructionModel {
+                        id: Some(0),
+                        opcode: "add".to_string(),
+                        result_type: Some("i32".to_string()),
+                        operand_types: vec!["i32".to_string(), "i32".to_string()],
+                        operands: vec!["%a".to_string(), "%b".to_string()],
+                        callee: None,
+                        is_indirect: false,
+                        debug_loc: None,
+                        raw: "%result = add i32 %a, %b".to_string(),
+                        source_type: None,
+                        gep_details: None,
+                    },
+                    IRInstructionModel {
+                        id: Some(1),
+                        opcode: "ret".to_string(),
+                        result_type: Some("i32".to_string()),
+                        operand_types: vec![],
+                        operands: vec!["%result".to_string()],
+                        callee: None,
+                        is_indirect: false,
+                        debug_loc: None,
+                        raw: "ret i32 %result".to_string(),
+                        source_type: None,
+                        gep_details: None,
+                    },
+                ],
+                successors: vec![],
+            }],
+            linkage: Some("external".to_string()),
+        }],
+        declarations: vec![],
+        named_struct_types: HashMap::new(),
+        global_variables: vec![],
+    };
+
+    // Serialize to MessagePack
+    let msgpack_bytes = rmp_serde::to_vec(&model).expect("Failed to serialize to MessagePack");
+
+    // Parse using our new function
+    let ir_module = parse_from_msgpack(&msgpack_bytes).expect("Failed to parse MessagePack");
+
+    // Verify the parsed module
+    assert_eq!(ir_module.functions.len(), 1);
+    let func = ir_module
+        .functions
+        .get("add")
+        .expect("Function 'add' not found");
+    assert_eq!(func.name, "add");
+    assert_eq!(func.return_type, "i32");
+    assert_eq!(func.params, vec!["i32", "i32"]);
+    assert!(!func.is_declaration);
+}

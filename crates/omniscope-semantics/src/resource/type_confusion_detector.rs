@@ -249,35 +249,33 @@ impl TypeConfusionDetector {
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<TypeConfusionPattern> {
-        let raw = &inst.raw_text;
-
-        // Check for different types of conversions
+        // Check for different types of conversions using structured fields
         if self.check_signed_unsigned {
-            if let Some(pattern) = self.check_signed_unsigned_confusion(raw, ffi_calls, body) {
+            if let Some(pattern) = self.check_signed_unsigned_confusion(inst, ffi_calls, body) {
                 return Some(pattern);
             }
         }
 
         if self.check_pointer_integer {
-            if let Some(pattern) = self.check_pointer_integer_confusion(raw, ffi_calls, body) {
+            if let Some(pattern) = self.check_pointer_integer_confusion(inst, ffi_calls, body) {
                 return Some(pattern);
             }
         }
 
         if self.check_float_integer {
-            if let Some(pattern) = self.check_float_integer_confusion(raw, ffi_calls, body) {
+            if let Some(pattern) = self.check_float_integer_confusion(inst, ffi_calls, body) {
                 return Some(pattern);
             }
         }
 
         if self.check_width_mismatch {
-            if let Some(pattern) = self.check_type_width_mismatch(raw, ffi_calls, body) {
+            if let Some(pattern) = self.check_type_width_mismatch(inst, ffi_calls, body) {
                 return Some(pattern);
             }
         }
 
         if self.check_unsafe_bitcast {
-            if let Some(pattern) = self.check_unsafe_bitcast(raw, ffi_calls, body) {
+            if let Some(pattern) = self.check_unsafe_bitcast(inst, ffi_calls, body) {
                 return Some(pattern);
             }
         }
@@ -288,23 +286,27 @@ impl TypeConfusionDetector {
     /// Checks for signed/unsigned confusion.
     fn check_signed_unsigned_confusion(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<TypeConfusionPattern> {
-        // Look for sext (sign extension) or zext (zero extension)
-        let is_sext = raw.contains("sext");
-        let is_zext = raw.contains("zext");
+        // Use structured conversion_opcode instead of raw_text.contains()
+        let conv_op = inst.conversion_opcode.as_deref();
+        let is_sext = conv_op == Some("sext");
+        let is_zext = conv_op == Some("zext");
 
         if !is_sext && !is_zext {
             return None;
         }
 
-        // Parse source and target types
+        // Parse source and target types from raw text
+        let mut inst_clone = inst.clone();
+        inst_clone.ensure_raw();
+        let raw = &inst_clone.raw_text;
         let (source_type, target_type) = parse_extension_types(raw)?;
 
         // Check if this is near an FFI call
-        let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
+        let (near_ffi_call, ffi_function) = check_ffi_proximity(inst, ffi_calls, body);
 
         // Only flag if near FFI call or if there are FFI calls in the function
         if !near_ffi_call && ffi_calls.is_empty() {
@@ -337,12 +339,14 @@ impl TypeConfusionDetector {
     /// Checks for pointer/integer confusion.
     fn check_pointer_integer_confusion(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<TypeConfusionPattern> {
-        let is_inttoptr = raw.contains("inttoptr");
-        let is_ptrtoint = raw.contains("ptrtoint");
+        // Use structured conversion_opcode instead of raw_text.contains()
+        let conv_op = inst.conversion_opcode.as_deref();
+        let is_inttoptr = conv_op == Some("inttoptr");
+        let is_ptrtoint = conv_op == Some("ptrtoint");
 
         if !is_inttoptr && !is_ptrtoint {
             return None;
@@ -354,11 +358,14 @@ impl TypeConfusionDetector {
             "ptrtoint".to_string()
         };
 
-        // Parse types
+        // Parse types from raw text
+        let mut inst_clone = inst.clone();
+        inst_clone.ensure_raw();
+        let raw = &inst_clone.raw_text;
         let (integer_type, pointer_type) = parse_intptr_types(raw, is_inttoptr)?;
 
         // Check if this is near an FFI call
-        let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
+        let (near_ffi_call, ffi_function) = check_ffi_proximity(inst, ffi_calls, body);
 
         let confidence = if near_ffi_call {
             ConfusionConfidence::High
@@ -385,14 +392,16 @@ impl TypeConfusionDetector {
     /// Checks for float/integer confusion.
     fn check_float_integer_confusion(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<TypeConfusionPattern> {
-        let is_sitofp = raw.contains("sitofp");
-        let is_uitofp = raw.contains("uitofp");
-        let is_fptosi = raw.contains("fptosi");
-        let is_fptoui = raw.contains("fptoui");
+        // Use structured conversion_opcode instead of raw_text.contains()
+        let conv_op = inst.conversion_opcode.as_deref();
+        let is_sitofp = conv_op == Some("sitofp");
+        let is_uitofp = conv_op == Some("uitofp");
+        let is_fptosi = conv_op == Some("fptosi");
+        let is_fptoui = conv_op == Some("fptoui");
 
         if !is_sitofp && !is_uitofp && !is_fptosi && !is_fptoui {
             return None;
@@ -404,11 +413,14 @@ impl TypeConfusionDetector {
             "float_to_int".to_string()
         };
 
-        // Parse types
+        // Parse types from raw text
+        let mut inst_clone = inst.clone();
+        inst_clone.ensure_raw();
+        let raw = &inst_clone.raw_text;
         let (float_type, integer_type) = parse_float_int_types(raw)?;
 
         // Check if this is near an FFI call
-        let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
+        let (near_ffi_call, ffi_function) = check_ffi_proximity(inst, ffi_calls, body);
 
         let confidence = if near_ffi_call {
             ConfusionConfidence::High
@@ -435,20 +447,24 @@ impl TypeConfusionDetector {
     /// Checks for type width mismatches.
     fn check_type_width_mismatch(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<TypeConfusionPattern> {
-        // Look for trunc or zext/sext that changes width significantly
-        let is_trunc = raw.contains("trunc");
-        let is_zext = raw.contains("zext");
-        let is_sext = raw.contains("sext");
+        // Use structured conversion_opcode instead of raw_text.contains()
+        let conv_op = inst.conversion_opcode.as_deref();
+        let is_trunc = conv_op == Some("trunc");
+        let is_zext = conv_op == Some("zext");
+        let is_sext = conv_op == Some("sext");
 
         if !is_trunc && !is_zext && !is_sext {
             return None;
         }
 
-        // Parse source and target types
+        // Parse source and target types from raw text
+        let mut inst_clone = inst.clone();
+        inst_clone.ensure_raw();
+        let raw = &inst_clone.raw_text;
         let (source_type, target_type) = parse_extension_types(raw)?;
 
         // Get bit widths
@@ -463,7 +479,7 @@ impl TypeConfusionDetector {
         }
 
         // Check if this is near an FFI call
-        let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
+        let (near_ffi_call, ffi_function) = check_ffi_proximity(inst, ffi_calls, body);
 
         // Only flag if near FFI call or if there are FFI calls in the function
         if !near_ffi_call && ffi_calls.is_empty() {
@@ -496,15 +512,19 @@ impl TypeConfusionDetector {
     /// Checks for unsafe bitcasts.
     fn check_unsafe_bitcast(
         &self,
-        raw: &str,
+        inst: &IRInstruction,
         ffi_calls: &[(String, usize)],
         body: &FunctionBody,
     ) -> Option<TypeConfusionPattern> {
-        if !raw.contains("bitcast") {
+        // Use structured conversion_opcode instead of raw_text.contains()
+        if inst.conversion_opcode.as_deref() != Some("bitcast") {
             return None;
         }
 
-        // Parse source and target types
+        // Parse source and target types from raw text
+        let mut inst_clone = inst.clone();
+        inst_clone.ensure_raw();
+        let raw = &inst_clone.raw_text;
         let (source_type, target_type) = parse_bitcast_types(raw)?;
 
         // Check if this is a potentially unsafe bitcast
@@ -513,7 +533,7 @@ impl TypeConfusionDetector {
         }
 
         // Check if this is near an FFI call
-        let (near_ffi_call, ffi_function) = check_ffi_proximity(raw, ffi_calls, body);
+        let (near_ffi_call, ffi_function) = check_ffi_proximity(inst, ffi_calls, body);
 
         let confidence = if near_ffi_call {
             ConfusionConfidence::High
@@ -721,13 +741,16 @@ fn is_external_function(name: &str) -> bool {
 }
 
 /// Check if a conversion instruction is near an FFI call.
+///
+/// Uses pointer comparison to find the instruction index instead of
+/// comparing raw_text strings, avoiding the need for ensure_raw().
 fn check_ffi_proximity(
-    raw: &str,
+    inst: &IRInstruction,
     ffi_calls: &[(String, usize)],
     body: &FunctionBody,
 ) -> (bool, Option<String>) {
-    // Find the index of the conversion instruction
-    let conv_idx = body.instructions.iter().position(|i| i.raw_text == raw);
+    // Find the index of the conversion instruction by pointer comparison
+    let conv_idx = body.instructions.iter().position(|i| std::ptr::eq(i, inst));
 
     if let Some(conv_idx) = conv_idx {
         // Check if any FFI call is within 5 instructions
@@ -1087,14 +1110,14 @@ mod tests {
 
             // Check proximity
             for inst in &conv_insts {
-                let (near_ffi, ffi_func) = check_ffi_proximity(&inst.raw_text, &ffi_calls, body);
+                let (near_ffi, ffi_func) = check_ffi_proximity(inst, &ffi_calls, body);
                 debug!(
                     "Instruction '{}' near FFI: {} (function: {:?})",
                     inst.raw_text, near_ffi, ffi_func
                 );
 
-                // Test type parsing
-                let is_inttoptr = inst.raw_text.contains("inttoptr");
+                // Test type parsing - use conversion_opcode for structured check
+                let is_inttoptr = inst.conversion_opcode.as_deref() == Some("inttoptr");
                 debug!("Is inttoptr: {}", is_inttoptr);
 
                 if is_inttoptr {

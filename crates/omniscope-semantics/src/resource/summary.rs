@@ -150,6 +150,14 @@ impl SummaryStore {
     pub fn iter(&self) -> impl Iterator<Item = (&FunctionId, &ResourceSummary)> {
         self.summaries.iter()
     }
+
+    /// Find a summary by function name.
+    ///
+    /// This is used to look up IR-derived summaries before falling back
+    /// to registry or name-pattern matching.
+    pub fn find_by_name(&self, name: &str) -> Option<&ResourceSummary> {
+        self.summaries.values().find(|summary| summary.name == name)
+    }
 }
 
 #[cfg(test)]

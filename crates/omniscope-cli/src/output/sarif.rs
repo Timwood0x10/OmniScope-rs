@@ -296,7 +296,11 @@ mod tests {
     fn test_sarif_structure() {
         let formatter = SarifFormatter::new();
         let pass_results = vec![PassResult::new("test")];
-        let result = PipelineResult::from_pass_results(pass_results, Duration::from_millis(5));
+        let result = PipelineResult::from_pass_results(
+            pass_results,
+            Duration::from_millis(5),
+            Vec::new(), // No pass timings in test
+        );
 
         let output = formatter.format(&result);
         let parsed: serde_json::Value =
@@ -335,8 +339,11 @@ mod tests {
         let mut pass_result = PassResult::new("FFIBoundary");
         pass_result.add_issue(issue);
 
-        let result =
-            PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(10));
+        let result = PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(10),
+            Vec::new(), // No pass timings in test
+        );
         let output = formatter.format(&result);
         let parsed: serde_json::Value =
             serde_json::from_str(&output).expect("SARIF with issues must be valid JSON");
@@ -369,7 +376,11 @@ mod tests {
         let mut pass_result = PassResult::new("FFIBoundary");
         pass_result.add_issue(issue);
 
-        let result = PipelineResult::from_pass_results(vec![pass_result], Duration::from_millis(5));
+        let result = PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(5),
+            Vec::new(), // No pass timings in test
+        );
         let output = formatter.format(&result);
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
 

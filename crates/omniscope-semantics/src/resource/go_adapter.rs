@@ -557,6 +557,8 @@ mod tests {
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Call,
@@ -569,6 +571,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
@@ -581,6 +585,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
             ],
         };
@@ -640,6 +646,8 @@ mod tests {
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Call,
@@ -652,6 +660,8 @@ mod tests {
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Call,
@@ -664,6 +674,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
@@ -676,6 +688,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
             ],
         };
@@ -811,6 +825,8 @@ mod tests {
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Call,
@@ -823,6 +839,8 @@ mod tests {
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
@@ -835,6 +853,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
             ],
         };
@@ -882,6 +902,8 @@ mod tests {
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Call,
@@ -894,6 +916,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
@@ -906,6 +930,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
             ],
         };
@@ -950,6 +976,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
@@ -962,6 +990,8 @@ mod tests {
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
                 },
             ],
         };

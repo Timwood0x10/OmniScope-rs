@@ -136,6 +136,8 @@ fn test_raii_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -148,6 +150,8 @@ fn test_raii_semantics_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -160,6 +164,8 @@ fn test_raii_semantics_with_ir() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -211,6 +217,8 @@ fn test_smart_pointer_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -223,6 +231,8 @@ fn test_smart_pointer_semantics_with_ir() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
@@ -272,6 +282,8 @@ fn test_mixed_ownership_concern() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Call,
@@ -284,6 +296,8 @@ fn test_mixed_ownership_concern() {
                 result_type: Some("i8*".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
             IRInstruction {
                 kind: IRInstructionKind::Ret,
@@ -296,6 +310,8 @@ fn test_mixed_ownership_concern() {
                 result_type: Some("void".to_string()),
                 element_type: None,
                 function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
             },
         ],
     };
