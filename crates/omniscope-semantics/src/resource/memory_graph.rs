@@ -295,7 +295,10 @@ pub fn family_to_resource_class(family_id: FamilyId) -> ResourceClass {
         FamilyId::GO_GC | FamilyId::PYTHON_OBJECT => ResourceClass::RuntimeManaged,
 
         // Handle-based families
-        FamilyId::JAVA_LOCAL_REF | FamilyId::JAVA_GLOBAL_REF => ResourceClass::ProcessHandle,
+        // Note: JAVA_LOCAL_REF and JAVA_GLOBAL_REF are JVM-managed references,
+        // NOT OS handles. They require explicit release (DeleteLocalRef/DeleteGlobalRef)
+        // and can leak. Classify as RuntimeManaged so is_memory_resource() returns true.
+        FamilyId::JAVA_LOCAL_REF | FamilyId::JAVA_GLOBAL_REF => ResourceClass::RuntimeManaged,
 
         // File descriptor family
         FamilyId::FILE_DESCRIPTOR => ResourceClass::FileDescriptor,
@@ -576,11 +579,11 @@ mod tests {
             "PYTHON_OBJECT should map to RuntimeManaged"
         );
 
-        // Handle-based families
+        // JNI references are runtime-managed (JVM refs, not OS handles)
         assert_eq!(
             family_to_resource_class(FamilyId::JAVA_LOCAL_REF),
-            ResourceClass::ProcessHandle,
-            "JAVA_LOCAL_REF should map to ProcessHandle"
+            ResourceClass::RuntimeManaged,
+            "JAVA_LOCAL_REF should map to RuntimeManaged"
         );
 
         // File descriptor family

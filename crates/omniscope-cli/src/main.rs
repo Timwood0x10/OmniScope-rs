@@ -304,15 +304,33 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
 
     // Create and configure pipeline
     let mut pipeline = Pipeline::new();
-    pipeline.register_default_passes();
     pipeline.set_parallel(cmd.parallel);
     pipeline.set_ir_module(loaded.module);
+
+    // Set configuration before registering passes so that
+    // ContractGraphBuilderPass can pick up CLI --cross boundaries.
+    let use_auto_inference = cmd.cross.is_empty() && config.ffi_boundary.is_empty();
+    if use_auto_inference {
+        tracing::info!("No explicit cross boundaries, using auto-inference");
+    } else {
+        pipeline.set_config(config);
+    }
+
+    // Register passes AFTER config is set so they can read it.
+    pipeline.register_default_passes();
     tracing::debug!("Pipeline configured with {} passes", pipeline.pass_count());
 
     // Run the full analysis pipeline
     tracing::info!("Running analysis pipeline");
     let pipeline_start = Instant::now();
-    let result = pipeline.run()?;
+
+    // If no explicit configuration is specified, use automatic inference.
+    let result = if use_auto_inference {
+        pipeline.run_with_auto_inference()?
+    } else {
+        pipeline.run()?
+    };
+
     let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
     tracing::info!(
         "Pipeline completed: {} issues, {} nodes, {}ms",
@@ -433,6 +451,7 @@ fn load_config(cmd: &AnalyzeCommand) -> anyhow::Result<OmniScopeConfig> {
             from: boundary.from,
             to: boundary.to,
             functions: Vec::new(), // Empty = auto-detect all functions at boundary
+            pattern: None,
             description: Some(format!("{:?} -> {:?} (CLI)", boundary.from, boundary.to)),
         });
     }

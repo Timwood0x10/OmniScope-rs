@@ -102,7 +102,8 @@ impl FamilyId {
         name.hash(&mut hasher);
         let hash = hasher.finish() as u32;
         // 确保 ID 在 USER_FAMILY_START 范围内
-        let id = (hash % (u16::MAX as u32 - Self::USER_FAMILY_START as u32)) + Self::USER_FAMILY_START as u32;
+        let id = (hash % (u16::MAX as u32 - Self::USER_FAMILY_START as u32))
+            + Self::USER_FAMILY_START as u32;
         FamilyId(id as u16)
     }
 

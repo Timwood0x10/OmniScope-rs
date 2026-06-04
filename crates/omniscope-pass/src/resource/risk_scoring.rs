@@ -94,6 +94,8 @@ fn base_severity(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::UncheckedFfiReturn => 0.75,
         // High severity: null dereference is undefined behavior
         IssueCandidateKind::NullDereference => 0.95,
+        // High severity: cross-language free is almost always a real issue
+        IssueCandidateKind::CrossLanguageFree => 0.9,
     }
 }
 

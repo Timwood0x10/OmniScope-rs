@@ -9,25 +9,57 @@
 //! LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm@22 cargo test --test llvm_sys_test --features llvm-backend
 //! ```
 
-// Only compile when the llvm-backend feature is active
+// Only compile when the llvm-backend feature is active.
 #![cfg(feature = "llvm-backend")]
 
 use std::path::Path;
+use std::sync::Once;
 
 use omniscope_ir::llvm_sys_adapter::{is_available, parse_with_llvm_sys};
 use omniscope_ir::{IRInstructionKind, IRModule};
 
-/// Path to the test .ll file (created by the test harness).
+/// Path to the test .ll file (created lazily by the test harness).
 fn test_ll_path() -> &'static Path {
     Path::new("/tmp/test_llvm_sys.ll")
+}
+
+fn ensure_fixture_exists() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let content = r#"target triple = "arm64-apple-darwin24.6.0"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128-Fn32"
+
+declare void @external_func(i32)
+
+define i32 @test_function(i64 %n, ptr %p) {
+entry:
+  %cmp = icmp sgt i64 %n, 0
+  br i1 %cmp, label %then, label %else
+
+then:
+  %val = load i32, ptr %p
+  call void @external_func(i32 %val)
+  br label %exit
+
+else:
+  store i32 42, ptr %p
+  br label %exit
+
+exit:
+  ret i32 0
+}
+"#;
+        std::fs::write(test_ll_path(), content)
+            .expect("Failed to write test fixture /tmp/test_llvm_sys.ll");
+    });
 }
 
 // ──────────────────────────────────────────────────────────────────────────
 // Basic availability
 // ──────────────────────────────────────────────────────────────────────────
 
-/// The llvm-sys backend must be available when the feature is enabled and
-/// LLVM libraries are linked.
+/// Objective: Verify the llvm-sys backend is linked and callable.
+/// Invariants: `is_available()` must return true when the feature is active.
 #[test]
 fn test_llvm_sys_is_available() {
     assert!(
@@ -40,12 +72,14 @@ fn test_llvm_sys_is_available() {
 // Module-level metadata
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Parse the test .ll file and verify module-level metadata.
+/// Objective: Verify module-level metadata is parsed correctly.
+/// Invariants: target triple contains host arch, data layout starts with
+/// endianness marker, and little_endian flag is set.
 #[test]
 fn test_module_metadata() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse test .ll file");
 
-    // Target triple
     let triple = module
         .data_layout
         .target_triple
@@ -57,7 +91,6 @@ fn test_module_metadata() {
         triple
     );
 
-    // Data layout
     let layout = module
         .data_layout
         .data_layout
@@ -69,27 +102,23 @@ fn test_module_metadata() {
         layout
     );
 
-    // Endianness
     assert_eq!(
         module.data_layout.little_endian,
         Some(true),
         "Should be little-endian"
     );
-
-    // Pointer size (from data layout "e-m:o-i64:64-..." the pointer p0:64:64
-    // may not be explicit; check it was parsed or is None)
-    // On macOS arm64 with "e-m:o-i64:64-i128:128-n32:64-S128-Fn32", pointer
-    // size may not have an explicit "p:64:64" entry, so it might be None.
-    // This is acceptable — the text parser behaves the same way.
 }
 
 // ──────────────────────────────────────────────────────────────────────────
 // Functions and declarations
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify function count: 1 defined function, 1 declaration.
+/// Objective: Verify the function and declaration counts match the fixture.
+/// Invariants: Exactly one defined function (`test_function`) and one
+/// external declaration (`external_func`) must be present.
 #[test]
 fn test_function_count() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     assert_eq!(
@@ -117,26 +146,19 @@ fn test_function_count() {
     );
 }
 
-/// Verify function body instruction counts.
+/// Objective: Verify the instruction count and kind distribution in the
+/// function body matches the fixture.
+/// Invariants: The fixture defines 8 instructions: 1 icmp, 3 branches,
+/// 1 load, 1 call, 1 store, 1 ret.
 #[test]
 fn test_function_body_instructions() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
         .function_bodies
         .get("test_function")
         .expect("test_function should have a body");
-
-    // Expected instructions in test_function:
-    //   %cmp = icmp sgt i64 %n, 0         → Icmp
-    //   br i1 %cmp, label %then, label %else → Branch
-    //   %val = load i32, ptr %p, align 4   → Load
-    //   call void @external_func(i32 %val) → Call
-    //   br label %exit                      → Branch
-    //   store i32 42, ptr %p, align 4      → Store
-    //   br label %exit                      → Branch
-    //   ret i32 0                           → Ret
-    // Total: 8 instructions
 
     assert_eq!(
         body.instructions.len(),
@@ -146,7 +168,6 @@ fn test_function_body_instructions() {
         body.instructions
     );
 
-    // Count by kind
     assert_eq!(
         body.count_kind(IRInstructionKind::Icmp),
         1,
@@ -183,9 +204,12 @@ fn test_function_body_instructions() {
 // Call target verification
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify that the call to `external_func` is detected.
+/// Objective: Verify the call instruction correctly records its callee.
+/// Invariants: The single call in `test_function` must target
+/// `external_func` (without the `@` prefix).
 #[test]
 fn test_call_target() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let call_insts = module
@@ -213,10 +237,13 @@ fn test_call_target() {
 // Type information (result_type must NOT be None)
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify that `result_type` is populated for instructions that produce
-/// values (icmp, load, call returning non-void).
+/// Objective: Verify `result_type` is populated for instructions that
+/// produce values (icmp, load, call returning non-void).
+/// Invariants: icmp must have `i1`, load must have `i32`, call must have
+/// a non-None result type.
 #[test]
 fn test_result_type_populated() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -224,7 +251,6 @@ fn test_result_type_populated() {
         .get("test_function")
         .expect("test_function should have a body");
 
-    // Check icmp instruction has result_type
     let icmp_insts = body.instructions_of_kind(IRInstructionKind::Icmp);
     assert_eq!(icmp_insts.len(), 1, "Should have 1 icmp");
     assert!(
@@ -239,7 +265,6 @@ fn test_result_type_populated() {
         icmp_ty
     );
 
-    // Check load instruction has result_type
     let load_insts = body.instructions_of_kind(IRInstructionKind::Load);
     assert_eq!(load_insts.len(), 1, "Should have 1 load");
     assert!(
@@ -254,7 +279,6 @@ fn test_result_type_populated() {
         load_ty
     );
 
-    // Check call instruction has result_type (void in this case)
     let call_insts = body.instructions_of_kind(IRInstructionKind::Call);
     assert_eq!(call_insts.len(), 1, "Should have 1 call");
     assert!(
@@ -263,23 +287,20 @@ fn test_result_type_populated() {
         call_insts[0].raw_text
     );
 
-    // Check ret instruction has result_type (void for ret void, or the
-    // return value type)
     let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
     assert_eq!(ret_insts.len(), 1, "Should have 1 ret");
-    // ret instructions may or may not have a meaningful result_type;
-    // we just verify the field exists (is Some).
-    // Note: ret doesn't produce a value, so result_type may be None
-    // depending on the implementation. We don't assert Some here.
 }
 
 // ──────────────────────────────────────────────────────────────────────────
 // Element type verification
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify that `element_type` is populated for load/store instructions.
+/// Objective: Verify `element_type` is populated for load/store instructions.
+/// Invariants: load must report `i32` element type, store must also report
+/// `i32` element type derived from the pointer operand.
 #[test]
 fn test_element_type_populated() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -287,7 +308,6 @@ fn test_element_type_populated() {
         .get("test_function")
         .expect("test_function should have a body");
 
-    // Load instruction should have element_type
     let load_insts = body.instructions_of_kind(IRInstructionKind::Load);
     assert_eq!(load_insts.len(), 1, "Should have 1 load");
     assert!(
@@ -302,7 +322,6 @@ fn test_element_type_populated() {
         elem_ty
     );
 
-    // Store instruction should have element_type
     let store_insts = body.instructions_of_kind(IRInstructionKind::Store);
     assert_eq!(store_insts.len(), 1, "Should have 1 store");
     assert!(
@@ -316,9 +335,12 @@ fn test_element_type_populated() {
 // ICMP predicate verification
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify that icmp predicate is correctly extracted.
+/// Objective: Verify the ICMP predicate string is extracted correctly.
+/// Invariants: The icmp `sgt` (signed greater-than) predicate must be
+/// present in the parsed instruction.
 #[test]
 fn test_icmp_predicate() {
+    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -341,7 +363,9 @@ fn test_icmp_predicate() {
 // Empty module
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify that parsing an empty .ll file produces a valid empty module.
+/// Objective: Verify parsing an empty .ll file produces a valid empty module.
+/// Invariants: All collections (functions, declarations, calls, bodies) must
+/// be empty after parsing a minimal module with no definitions.
 #[test]
 fn test_empty_module() {
     use std::io::Write;
@@ -350,8 +374,7 @@ fn test_empty_module() {
     let mut tmpfile = NamedTempFile::new().expect("Failed to create temp file");
     writeln!(
         tmpfile,
-        r#"
-target triple = "arm64-apple-darwin24.6.0"
+        r#"target triple = "arm64-apple-darwin24.6.0"
 "#
     )
     .expect("Failed to write temp file");
@@ -377,30 +400,31 @@ target triple = "arm64-apple-darwin24.6.0"
 // Cross-validation with text parser
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Verify that the llvm-sys adapter produces results consistent with the
-/// text parser (same function names, same instruction counts).
+/// Objective: Verify the llvm-sys adapter produces results consistent with
+/// the text parser (same function names, declaration names, and instruction
+/// counts for each kind).
+/// Invariants: Both parsers must agree on function count, declaration count,
+/// and per-kind instruction counts for `test_function`.
 #[test]
 fn test_cross_validate_with_text_parser() {
+    ensure_fixture_exists();
     let ll_content = std::fs::read_to_string(test_ll_path()).expect("Failed to read .ll file");
 
     let text_module = IRModule::parse_from_text(&ll_content);
     let llvm_module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse with llvm-sys");
 
-    // Same function count
     assert_eq!(
         text_module.functions.len(),
         llvm_module.functions.len(),
         "Function count should match between text parser and llvm-sys"
     );
 
-    // Same declaration count
     assert_eq!(
         text_module.declarations.len(),
         llvm_module.declarations.len(),
         "Declaration count should match between text parser and llvm-sys"
     );
 
-    // Same function names
     for name in text_module.functions.keys() {
         assert!(
             llvm_module.functions.contains_key(name),
@@ -409,7 +433,6 @@ fn test_cross_validate_with_text_parser() {
         );
     }
 
-    // Same declaration names
     for name in text_module.declarations.keys() {
         assert!(
             llvm_module.declarations.contains_key(name),
@@ -418,7 +441,6 @@ fn test_cross_validate_with_text_parser() {
         );
     }
 
-    // Instruction count should match for test_function
     let text_body = text_module
         .function_bodies
         .get("test_function")
@@ -436,7 +458,6 @@ fn test_cross_validate_with_text_parser() {
         llvm_body.instructions.len()
     );
 
-    // Kind-by-kind count should match
     for kind in &[
         IRInstructionKind::Icmp,
         IRInstructionKind::Branch,

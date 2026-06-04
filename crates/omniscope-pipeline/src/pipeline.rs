@@ -71,6 +71,11 @@ impl Pipeline {
         self.omniscope_config.as_ref()
     }
 
+    /// Sets the OmniScope configuration
+    pub fn set_config(&mut self, config: OmniScopeConfig) {
+        self.omniscope_config = Some(config);
+    }
+
     /// Sets the IR module to analyze
     pub fn set_ir_module(&mut self, module: IRModule) {
         self.ir_module = Some(module);
@@ -93,7 +98,8 @@ impl Pipeline {
         self.pass_manager.register(StructuralInferencePass::new());
         // Use configuration-aware pass if available
         if let Some(config) = &self.omniscope_config {
-            self.pass_manager.register(ContractGraphBuilderPass::with_config(config.clone()));
+            self.pass_manager
+                .register(ContractGraphBuilderPass::with_config(config.clone()));
         } else {
             self.pass_manager.register(ContractGraphBuilderPass::new());
         }
@@ -132,6 +138,54 @@ impl Pipeline {
         let result = PipelineResult::with_issues(pass_results, duration, issues, pass_timings);
 
         Ok(result)
+    }
+
+    /// Runs the full analysis pipeline with automatic boundary inference.
+    ///
+    /// When no explicit `--cross` configuration is provided, this method
+    /// automatically infers FFI boundaries from the IR module.
+    ///
+    /// # Returns
+    /// `Result<PipelineResult>` containing analysis results.
+    pub fn run_with_auto_inference(&mut self) -> Result<PipelineResult> {
+        // 如果没有显式配置，尝试自动推断
+        let boundary_ctx = if let Some(config) = &self.omniscope_config {
+            // 使用显式配置
+            omniscope_types::boundary::BoundaryContext::from_config(&config.ffi_boundary)
+        } else {
+            // 自动推断
+            if let Some(module) = &self.ir_module {
+                omniscope_pass::infer_boundaries(module)
+            } else {
+                omniscope_types::boundary::BoundaryContext::new()
+            }
+        };
+
+        // 如果推断出了边界，创建配置并设置
+        if !boundary_ctx.is_empty() {
+            let inferred_config = omniscope_types::config::OmniScopeConfig {
+                project: None,
+                ffi_boundary: boundary_ctx
+                    .function_boundaries()
+                    .iter()
+                    .map(
+                        |(func, (from, to))| omniscope_types::config::FFIBoundaryConfig {
+                            from: *from,
+                            to: *to,
+                            functions: vec![func.clone()],
+                            pattern: None,
+                            description: Some("Auto-inferred boundary".to_string()),
+                        },
+                    )
+                    .collect(),
+                resource_family: Vec::new(),
+                analysis: omniscope_types::config::AnalysisOptions::default(),
+            };
+            self.omniscope_config = Some(inferred_config);
+        }
+
+        // 运行标准 pipeline
+        self.run()
     }
 
     /// Returns the number of registered passes

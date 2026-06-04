@@ -144,6 +144,17 @@ pub enum SemanticKind {
     /// in WriteToImmutable analysis to reduce false positives.
     RuntimeInternal,
 
+    // ── Cross-language boundary classification ──
+    /// Function is in a declared cross-language boundary.
+    /// Used when --cross parameter specifies FFI boundaries.
+    /// Functions at these boundaries should be treated as cross-language calls.
+    DeclaredCrossBoundary,
+
+    /// Function is internal to one language (not a boundary).
+    /// Functions without cross-language context are classified as internal.
+    /// Issues from internal functions may have different severity.
+    NonBoundaryInternal,
+
     // ── New patterns for multi-key semantic queries ──
     /// Resource is managed by a runtime (e.g., GC, reference counting system).
     /// Not a local leak — ownership transferred to runtime.
@@ -572,6 +583,10 @@ impl SemanticKind {
 
             // ── Runtime internal patterns (0.9) ──
             SemanticKind::RuntimeInternal => 0.9, // Compiler/runtime managed
+
+            // ── Cross-language boundary classification ──
+            SemanticKind::DeclaredCrossBoundary => 0.6, // At FFI boundary, moderate risk
+            SemanticKind::NonBoundaryInternal => 0.8,   // Internal function, generally safe
 
             // ── New patterns for multi-key semantic queries ──
             SemanticKind::RuntimeManagedResource => 0.8, // GC-managed, safe

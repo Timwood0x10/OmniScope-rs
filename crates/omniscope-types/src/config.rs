@@ -77,7 +77,9 @@ fn default_parallel() -> bool {
 }
 
 /// Supported source languages
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     /// C language
@@ -259,6 +261,16 @@ pub struct FFIBoundaryConfig {
     #[serde(default)]
     pub functions: Vec<String>,
 
+    /// Function name pattern (supports wildcards).
+    /// Pattern syntax:
+    /// - `*` matches any sequence of characters
+    /// - `c_*` matches functions starting with `c_`
+    /// - `*_init` matches functions ending with `_init`
+    /// - `*malloc*` matches functions containing `malloc`
+    /// - `c_fft_*` matches functions starting with `c_fft_`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+
     /// Optional description.
     pub description: Option<String>,
 }
@@ -342,12 +354,14 @@ impl OmniScopeConfig {
                     from: Language::C,
                     to: Language::Cpp,
                     functions: vec!["example_c_to_cpp".to_string()],
+                    pattern: None,
                     description: Some("Example C to C++ boundary".to_string()),
                 },
                 FFIBoundaryConfig {
                     from: Language::Zig,
                     to: Language::C,
                     functions: vec!["example_zig_to_c".to_string()],
+                    pattern: None,
                     description: Some("Example Zig to C boundary".to_string()),
                 },
             ],
@@ -464,6 +478,72 @@ impl OmniScopeConfig {
             .iter()
             .find(|boundary| boundary.functions.contains(&function.to_string()))
             .map(|boundary| (boundary.from, boundary.to))
+    }
+
+    /// Check if a function is in any FFI boundary, supporting language pair matching.
+    ///
+    /// This method supports:
+    /// 1. Explicit function list
+    /// 2. Pattern matching
+    /// 3. Language pair matching (when functions is empty)
+    ///
+    /// # Arguments
+    /// * `function` - The function name to check.
+    /// * `caller_lang` - The language of the caller function.
+    /// * `callee_lang` - The language of the callee function.
+    ///
+    /// # Returns
+    /// `Some((from, to))` if the function is in a declared boundary, `None` otherwise.
+    pub fn is_ffi_boundary_with_lang(
+        &self,
+        function: &str,
+        caller_lang: Language,
+        callee_lang: Language,
+    ) -> Option<(Language, Language)> {
+        // 先检查显式函数列表和模式匹配
+        for boundary in &self.ffi_boundary {
+            // 检查显式函数列表
+            if boundary.functions.contains(&function.to_string()) {
+                return Some((boundary.from, boundary.to));
+            }
+
+            // 检查模式匹配（如果有）
+            if let Some(pattern) = &boundary.pattern {
+                if crate::boundary::matches_pattern(function, pattern) {
+                    return Some((boundary.from, boundary.to));
+                }
+            }
+        }
+
+        // 再检查语言对匹配
+        for boundary in &self.ffi_boundary {
+            if boundary.functions.is_empty()
+                && boundary.pattern.is_none()
+                && boundary.from == caller_lang
+                && boundary.to == callee_lang
+            {
+                return Some((boundary.from, boundary.to));
+            }
+        }
+
+        None
+    }
+
+    /// Convert configuration to a `BoundaryContext`.
+    ///
+    /// This creates a `BoundaryContext` from all declared FFI boundaries,
+    /// including both exact function names and wildcard patterns.
+    ///
+    /// # Returns
+    /// A `BoundaryContext` ready for boundary detection queries.
+    pub fn to_boundary_context(&self) -> crate::boundary::BoundaryContext {
+        let mut ctx = crate::boundary::BoundaryContext::new();
+
+        for boundary in &self.ffi_boundary {
+            ctx.add_boundary(boundary);
+        }
+
+        ctx
     }
 }
 

@@ -183,6 +183,9 @@ impl TerminalReporter {
             IssueCandidateKind::NullDereference => {
                 self.format_null_dereference(candidate, verdict, &badge)
             }
+            IssueCandidateKind::CrossLanguageFree => {
+                self.format_cross_family(candidate, verdict, &badge)
+            }
         }
     }
 

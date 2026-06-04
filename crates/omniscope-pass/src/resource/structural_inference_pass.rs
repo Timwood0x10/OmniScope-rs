@@ -306,6 +306,81 @@ impl Pass for StructuralInferencePass {
             }
         }
 
+        // ── Write boundary semantics from --cross configuration ──
+        // If --cross boundaries are configured, classify functions as
+        // DeclaredCrossBoundary based on whether they are in the declared
+        // boundary list.  When the boundary has an empty `functions` list
+        // (CLI `--cross` without explicit function names), use language
+        // detection to identify functions that actually cross the boundary.
+        // Do NOT default to NonBoundaryInternal for other functions, as this
+        // would incorrectly suppress valid cross-boundary issues when only
+        // partial boundaries are declared or when CLI functions are empty.
+        if let Some(config) = ctx.config() {
+            let boundary_functions = config.ffi_boundary_functions();
+            let boundary_set: std::collections::HashSet<&str> = boundary_functions
+                .iter()
+                .map(|(func, _, _)| *func)
+                .collect();
+
+            // Determine whether the config declares any boundary at all.
+            // When `boundary_functions` is empty but `config.ffi_boundary`
+            // is non-empty, the user specified `--cross FROM:TO` without
+            // listing explicit function names — use language detection
+            // to identify functions that actually cross the boundary.
+            let use_language_detection = boundary_set.is_empty() && !config.ffi_boundary.is_empty();
+
+            // Get all functions from IR module
+            if let Some(module) = ctx.get_ir_module() {
+                // Build a language detector for cross-boundary detection
+                let detector = if use_language_detection {
+                    Some(omniscope_semantics::LanguageDetector::new())
+                } else {
+                    None
+                };
+
+                for func_name in module.functions.keys() {
+                    let func = func_name.trim_start_matches('@');
+
+                    let is_boundary = if boundary_set.contains(func) {
+                        // Function is explicitly declared in boundary list
+                        true
+                    } else if use_language_detection {
+                        // Use language detection to check if this function
+                        // crosses any declared language boundary
+                        if let Some(ref det) = detector {
+                            let func_lang = det.detect_from_function(func);
+                            // Check if function's language matches any boundary's
+                            // from or to language
+                            config.ffi_boundary.iter().any(|boundary| {
+                                func_lang == boundary.from || func_lang == boundary.to
+                            })
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if is_boundary {
+                        // Function is in declared boundary (or detected as boundary)
+                        srt_resolutions
+                            .entry(func.to_string())
+                            .or_default()
+                            .push(SemanticKind::DeclaredCrossBoundary);
+
+                        let key = omniscope_semantics::SemanticKey::symbol(func);
+                        srt_key_resolutions
+                            .entry(key)
+                            .or_default()
+                            .push(SemanticKind::DeclaredCrossBoundary);
+                    }
+                    // Do NOT mark functions not in boundary as NonBoundaryInternal
+                    // This allows the system to still detect cross-boundary issues
+                    // for functions that are not explicitly declared as boundaries
+                }
+            }
+        }
+
         let srt_entry_count = srt_resolutions.len();
         let srt_key_entry_count = srt_key_resolutions.len();
         ctx.store("srt_resolutions", srt_resolutions);

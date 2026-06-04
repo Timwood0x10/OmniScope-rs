@@ -275,7 +275,7 @@ const LIBRARY_ALLOC_TABLE: &[LibraryAllocEntry] = &[
     LibraryAllocEntry {
         name: "GetStringUTFChars",
         language: LanguageHint::Java,
-        effect: LibraryAllocEffect::Borrow,
+        effect: LibraryAllocEffect::Acquire,
         evidence_file: "java_jni_bugs.ll",
     },
     LibraryAllocEntry {
@@ -560,8 +560,8 @@ mod tests {
             .expect("library_alloc_pairs_inference::test_lookup_jni: in table");
         assert_eq!(
             get_chars.effect,
-            LibraryAllocEffect::Borrow,
-            "GetStringUTFChars should be classified as Borrow effect"
+            LibraryAllocEffect::Acquire,
+            "GetStringUTFChars should be classified as Acquire effect"
         );
     }
 

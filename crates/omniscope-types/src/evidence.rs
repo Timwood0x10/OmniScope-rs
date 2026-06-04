@@ -224,6 +224,10 @@ pub enum IssueCandidateKind {
     /// dereferenced without a null check. This includes FFI returns
     /// passed to null-sink functions (strlen, memcpy, free, etc.).
     NullDereference,
+    /// Cross-language free: memory allocated in one language freed in another.
+    /// This is the FFI boundary variant of cross-family free.
+    /// Example: Rust Box allocated, C free() called.
+    CrossLanguageFree,
 }
 
 #[cfg(test)]

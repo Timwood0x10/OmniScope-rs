@@ -18,6 +18,7 @@ use crate::resource::raw_fact_collector::RawResourceFact;
 use omniscope_semantics::ffi_contract::{ContractType, FFIContractDB};
 use omniscope_semantics::resource::memory_graph::MemoryGraph;
 use omniscope_semantics::resource::summary::SummaryStore;
+use omniscope_semantics::LanguageDetector;
 
 /// FIFO queue entry: (instance_id, optional_alloc_family).
 type AcquireEntry = (u64, Option<FamilyId>);
@@ -91,10 +92,8 @@ impl ContractGraph {
 
     /// Mark a function as an FFI boundary.
     pub fn mark_ffi_boundary(&mut self, function: &str, from: Language, to: Language) {
-        self.ffi_boundaries.insert(
-            function.to_string(),
-            FFIBoundary { from, to },
-        );
+        self.ffi_boundaries
+            .insert(function.to_string(), FFIBoundary { from, to });
     }
 
     /// Check if a function is an FFI boundary.
@@ -130,19 +129,61 @@ impl ContractGraphBuilderPass {
     ///
     /// This method applies FFI boundary and resource family configuration
     /// to the graph. It should be called after the graph is built from IR.
-    fn apply_config(&self, config: &OmniScopeConfig, graph: &mut ContractGraph) {
+    ///
+    /// When `boundary.functions` is empty, it means "match all functions
+    /// between these languages". In this case, we use language detection
+    /// to identify functions that cross the boundary.
+    fn apply_config(
+        &self,
+        config: &OmniScopeConfig,
+        graph: &mut ContractGraph,
+        raw_facts: &[RawResourceFact],
+    ) {
+        // Create language detector for wildcard boundaries
+        let detector = LanguageDetector::new();
+
         // Apply FFI boundaries
         for boundary in &config.ffi_boundary {
-            for func in &boundary.functions {
-                // Mark functions as FFI boundaries
-                graph.mark_ffi_boundary(func, boundary.from, boundary.to);
+            // 如果有显式函数列表，标记这些函数为 FFI 边界
+            if !boundary.functions.is_empty() {
+                for func in &boundary.functions {
+                    // Mark functions as FFI boundaries
+                    graph.mark_ffi_boundary(func, boundary.from, boundary.to);
 
-                tracing::debug!(
-                    function = %func,
+                    tracing::debug!(
+                        function = %func,
+                        from = %boundary.from,
+                        to = %boundary.to,
+                        "Applied FFI boundary from config"
+                    );
+                }
+            } else {
+                // 空函数列表表示匹配该语言对的所有函数
+                // 使用语言检测器来识别跨越边界的函数
+                tracing::info!(
                     from = %boundary.from,
                     to = %boundary.to,
-                    "Applied FFI boundary from config"
+                    "Processing wildcard FFI boundary for language pair"
                 );
+
+                // 遍历所有原始事实，检测语言并标记边界
+                for fact in raw_facts {
+                    let caller_lang = detector.detect_from_function(&fact.caller_name);
+                    let callee_lang = detector.detect_from_function(&fact.function_name);
+
+                    // 如果调用者和被调用者的语言与边界匹配，标记为 FFI 边界
+                    if caller_lang == boundary.from && callee_lang == boundary.to {
+                        graph.mark_ffi_boundary(&fact.function_name, boundary.from, boundary.to);
+
+                        tracing::debug!(
+                            function = %fact.function_name,
+                            caller = %fact.caller_name,
+                            from = %boundary.from,
+                            to = %boundary.to,
+                            "Marked function as FFI boundary via language detection"
+                        );
+                    }
+                }
             }
         }
 
@@ -165,15 +206,16 @@ impl ContractGraphBuilderPass {
         config: &OmniScopeConfig,
     ) -> ContractGraph {
         let mut graph = ContractGraph::new();
-        
+
         // 1. 应用配置中的 FFI 边界
-        self.apply_config(config, &mut graph);
-        
+        // 注意：这里没有原始事实，所以使用空切片
+        self.apply_config(config, &mut graph, &[]);
+
         // 2. 正常构建图
         // Note: This is a simplified version. In practice, we would need to
         // integrate with the existing run() method logic.
         // For now, we just apply the configuration.
-        
+
         graph
     }
 }
@@ -781,11 +823,12 @@ impl Pass for ContractGraphBuilderPass {
 
         // Apply configuration if available
         // First try self.config, then try from context
-        let config = self.config.as_ref().or_else(|| {
-            ctx.config()
-        });
+        let config = self.config.as_ref().or_else(|| ctx.config());
         if let Some(config) = config {
-            self.apply_config(config, &mut graph);
+            // 获取原始事实用于语言检测
+            let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
+            let raw_facts = raw_facts.unwrap_or_default();
+            self.apply_config(config, &mut graph, &raw_facts);
         }
 
         let edge_count = graph.edge_count();

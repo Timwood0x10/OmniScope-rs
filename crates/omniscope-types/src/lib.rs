@@ -15,6 +15,7 @@
 //! - Verifier verdicts (gating issue output)
 
 pub mod abi;
+pub mod boundary;
 pub mod call_graph_types;
 pub mod config;
 pub mod effect;
@@ -25,6 +26,7 @@ pub mod resource_family;
 
 // Re-exports
 pub use abi::{AbiType, CallingConvention};
+pub use boundary::{matches_pattern, BoundaryContext, CrossBoundary};
 pub use call_graph_types::{
     is_dangerous, is_libc, is_sink, is_source, CallGraphEdge, CallGraphNode, CrossLangEdge,
     FunctionKind,

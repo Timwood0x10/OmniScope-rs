@@ -20,8 +20,11 @@
 //!   a suppression tag (R-0~R-7), the issue is suppressed.
 
 use omniscope_core::{Issue, IssueCandidate, Result};
-use omniscope_semantics::resource::memory_graph::{family_to_resource_class, ResourceClass};
-use omniscope_semantics::FamilyRegistry;
+#[allow(unused_imports)]
+use omniscope_semantics::resource::memory_graph::{
+    family_to_resource_class, MemoryGraph, ResourceClass, ResourceState,
+};
+use omniscope_semantics::{FamilyRegistry, LanguageDetector, SemanticKind};
 use omniscope_types::{
     EvidenceKind, FamilyId, IssueCandidateKind, OmniScopeConfig, VerifierVerdict,
 };
@@ -88,6 +91,22 @@ impl Pass for IssueVerifierPass {
         // Get configuration from context
         let config = ctx.config().cloned();
 
+        // Get boundary context from context
+        #[allow(unused_variables)]
+        let boundary_ctx = ctx
+            .get_ref::<omniscope_types::boundary::BoundaryContext>("boundary_context")
+            .cloned();
+
+        // Get MemoryGraph for resource state verification
+        // Clone to avoid borrow conflict with mutable ctx operations
+        let memory_graph = ctx.get_ref::<MemoryGraph>("memory_graph").cloned();
+
+        // Get SRT resolutions for semantic-based verification
+        // Clone to avoid borrow conflict with mutable ctx operations
+        let srt_resolutions = ctx
+            .get_ref::<std::collections::HashMap<String, Vec<SemanticKind>>>("srt_resolutions")
+            .cloned();
+
         // Layer 1: NoiseReduction — fast string-based FP pre-filter.
         let noise = NoiseReduction::new();
 
@@ -96,7 +115,87 @@ impl Pass for IssueVerifierPass {
         let mut noise_suppressed: usize = 0;
 
         for mut candidate in candidates {
-            let verdict = verify_candidate(&candidate, &registry, config.as_ref());
+            // Check MemoryGraph state first for leak candidates
+            let verdict = if let Some(resource_id) = candidate.resource_id {
+                if let Some(ref graph) = memory_graph {
+                    if let Some(node) = graph.get_node(resource_id) {
+                        // Check if resource is in a managed state
+                        // Only suppress leak-type candidates when resource is managed
+                        // CrossFamilyFree, UseAfterFree etc. should still be verified
+                        match node.state {
+                            ResourceState::StoredToOwner
+                            | ResourceState::StoredToRuntime
+                            | ResourceState::EscapedToCaller
+                            | ResourceState::EscapedToOutParam
+                            | ResourceState::RuntimeManaged => {
+                                // Resource is managed, not a local leak
+                                // Only suppress leak-type candidates
+                                if is_leak_candidate(&candidate) {
+                                    tracing::debug!(
+                                        "Resource {} in {:?} state: ExplainedSafe (leak candidate)",
+                                        resource_id,
+                                        node.state
+                                    );
+                                    VerifierVerdict::ExplainedSafe
+                                } else {
+                                    // For non-leak candidates (CrossFamilyFree, UseAfterFree, etc.),
+                                    // continue with standard verification
+                                    verify_candidate(&candidate, &registry, config.as_ref())
+                                }
+                            }
+                            _ => {
+                                // Check SRT resolutions for semantic-based suppression
+                                // Only suppress leak-type candidates when SRT has suppression
+                                let symbol = candidate
+                                    .release_function
+                                    .as_deref()
+                                    .unwrap_or(&candidate.alloc_function);
+                                if let Some(ref resolutions) = srt_resolutions {
+                                    if let Some(kinds) = resolutions.get(symbol) {
+                                        if kinds.contains(&SemanticKind::StoredToOwner)
+                                            || kinds.contains(&SemanticKind::StoredToRuntime)
+                                            || kinds.contains(&SemanticKind::RuntimeManagedResource)
+                                            || kinds.contains(&SemanticKind::EscapedToCaller)
+                                            || kinds.contains(&SemanticKind::EscapedToOutParam)
+                                        {
+                                            // Only suppress leak-type candidates
+                                            if is_leak_candidate(&candidate) {
+                                                tracing::debug!(
+                                                    "SRT has suppression for '{}': ExplainedSafe (leak candidate)",
+                                                    symbol
+                                                );
+                                                VerifierVerdict::ExplainedSafe
+                                            } else {
+                                                // For non-leak candidates, continue with standard verification
+                                                verify_candidate(
+                                                    &candidate,
+                                                    &registry,
+                                                    config.as_ref(),
+                                                )
+                                            }
+                                        } else {
+                                            verify_candidate(&candidate, &registry, config.as_ref())
+                                        }
+                                    } else {
+                                        verify_candidate(&candidate, &registry, config.as_ref())
+                                    }
+                                } else {
+                                    verify_candidate(&candidate, &registry, config.as_ref())
+                                }
+                            }
+                        }
+                    } else {
+                        // No node in MemoryGraph, use standard verification
+                        verify_candidate(&candidate, &registry, config.as_ref())
+                    }
+                } else {
+                    // No MemoryGraph available, use standard verification
+                    verify_candidate(&candidate, &registry, config.as_ref())
+                }
+            } else {
+                // No resource_id, use standard verification
+                verify_candidate(&candidate, &registry, config.as_ref())
+            };
             candidate.verdict = Some(verdict);
 
             // Attach a human-readable description based on the verdict.
@@ -180,8 +279,8 @@ impl Default for IssueVerifierPass {
 
 /// Determines if a resource family represents memory resources.
 ///
-/// HeapMemory, RuntimeManaged, and HandleBased families are considered
-/// memory-like resources because they require explicit release and can leak.
+/// HeapMemory and RuntimeManaged families are considered memory-like
+/// resources because they require explicit release and can leak.
 /// FileDescriptor, Socket, ProcessHandle are OS handle resources that
 /// should not be reported as memory leaks.
 ///
@@ -192,11 +291,30 @@ impl Default for IssueVerifierPass {
 /// `true` if the family represents memory-like resources, `false` otherwise.
 fn is_memory_resource(family_id: FamilyId) -> bool {
     // Map family IDs to their resource classes.
-    // HeapMemory, RuntimeManaged, and HandleBased are memory-like resources.
+    // HeapMemory and RuntimeManaged are memory-like resources.
     // FileDescriptor, Socket, ProcessHandle are OS handles, not memory.
     matches!(
         family_to_resource_class(family_id),
-        ResourceClass::HeapMemory | ResourceClass::RuntimeManaged | ResourceClass::ProcessHandle
+        ResourceClass::HeapMemory | ResourceClass::RuntimeManaged
+    )
+}
+
+/// Checks if a candidate is a leak type issue.
+///
+/// Leak type issues are those that represent memory leaks or resource leaks.
+/// This includes DefiniteLeak, ConditionalLeak, and OwnershipEscapeLeak.
+///
+/// # Arguments
+/// * `candidate` - The issue candidate to check.
+///
+/// # Returns
+/// `true` if the candidate is a leak type issue, `false` otherwise.
+fn is_leak_candidate(candidate: &IssueCandidate) -> bool {
+    matches!(
+        candidate.kind,
+        IssueCandidateKind::DefiniteLeak
+            | IssueCandidateKind::ConditionalLeak
+            | IssueCandidateKind::OwnershipEscapeLeak
     )
 }
 
@@ -283,6 +401,11 @@ fn verify_candidate(
             // Null pointer dereference — always a real issue.
             VerifierVerdict::ConfirmedIssue
         }
+        IssueCandidateKind::CrossLanguageFree => {
+            // Cross-language free is similar to cross-family free
+            // but across language boundaries. Usually a real issue.
+            verify_cross_family_free(candidate, registry, config)
+        }
     }
 }
 
@@ -301,14 +424,33 @@ fn verify_cross_family_free(
     // If the function is in a known FFI boundary, it's likely a real issue
     // because cross-family free across language boundaries is dangerous.
     if let Some(config) = config {
-        if let Some((from, to)) =
-            config.is_ffi_boundary(candidate.release_function.as_deref().unwrap_or(""))
-        {
+        let release_func = candidate.release_function.as_deref().unwrap_or("");
+
+        // 先检查显式函数列表
+        if let Some((from, to)) = config.is_ffi_boundary(release_func) {
             // This is a known FFI boundary function. The cross-family free
             // across language boundaries is almost always a real issue.
             tracing::debug!(
                 "Cross-family free in FFI boundary function '{}' ({:?} -> {:?})",
-                candidate.release_function.as_deref().unwrap_or("unknown"),
+                release_func,
+                from,
+                to
+            );
+            return VerifierVerdict::ConfirmedIssue;
+        }
+
+        // 如果没有显式函数列表，使用语言检测来检查语言对匹配
+        let detector = LanguageDetector::new();
+        let caller_lang = detector.detect_from_function(&candidate.alloc_function);
+        let callee_lang = detector.detect_from_function(release_func);
+
+        if let Some((from, to)) =
+            config.is_ffi_boundary_with_lang(release_func, caller_lang, callee_lang)
+        {
+            // This is a known FFI boundary function via language detection.
+            tracing::debug!(
+                "Cross-family free in FFI boundary function '{}' via language detection ({:?} -> {:?})",
+                release_func,
                 from,
                 to
             );
@@ -500,6 +642,7 @@ fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind) -> bool {
 fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdict) -> String {
     let kind_label = match candidate.kind {
         IssueCandidateKind::CrossFamilyFree => "cross-family free",
+        IssueCandidateKind::CrossLanguageFree => "cross-language free",
         IssueCandidateKind::UseAfterRelease => "use after release",
         IssueCandidateKind::DoubleRelease => "double release",
         IssueCandidateKind::ConditionalLeak => "conditional leak",

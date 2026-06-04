@@ -153,6 +153,7 @@ impl Pass for IssueCandidateBuilderPass {
                             )
                             .with_release_family(release_family)
                             .with_release_function(release_func)
+                            .with_resource_id(*instance_id)
                             .with_description(format!(
                                 "cross-language free: {} ({:?}) released by {} ({:?})",
                                 alloc_func, alloc_family, release_func, release_family
@@ -178,6 +179,7 @@ impl Pass for IssueCandidateBuilderPass {
                             )
                             .with_release_family(release_family)
                             .with_release_function(release_func)
+                            .with_resource_id(*instance_id)
                             .with_description(format!(
                                 "cross-family release: {} ({:?}) released by {} ({:?})",
                                 alloc_func, alloc_family, release_func, release_family
@@ -210,7 +212,8 @@ impl Pass for IssueCandidateBuilderPass {
                                 .family
                                 .unwrap_or(FamilyId::C_HEAP),
                             &graph.edges[release_indices[0]].function_name,
-                        );
+                        )
+                        .with_resource_id(*instance_id);
                         candidate.add_evidence(
                             Evidence::new(
                                 EvidenceKind::NullGuardedRelease,
@@ -242,7 +245,8 @@ impl Pass for IssueCandidateBuilderPass {
                                 IssueCandidateKind::DoubleRelease,
                                 family,
                                 &graph.edges[ri].function_name,
-                            );
+                            )
+                            .with_resource_id(*instance_id);
                             candidate.add_evidence(
                                 Evidence::new(
                                     EvidenceKind::MultipleRelease,
@@ -291,7 +295,8 @@ impl Pass for IssueCandidateBuilderPass {
                                     IssueCandidateKind::BorrowEscape,
                                     inst.family,
                                     func_name,
-                                );
+                                )
+                                .with_resource_id(*instance_id);
                                 candidate.add_evidence(
                                     Evidence::new(
                                         EvidenceKind::CallbackEscape,
@@ -331,7 +336,8 @@ impl Pass for IssueCandidateBuilderPass {
                                     IssueCandidateKind::InvalidBorrowedFree,
                                     inst.family,
                                     func_name,
-                                );
+                                )
+                                .with_resource_id(*instance_id);
                                 candidate.add_evidence(
                                     Evidence::new(
                                         EvidenceKind::InvalidBorrowedFree,
@@ -388,7 +394,8 @@ impl Pass for IssueCandidateBuilderPass {
                                         IssueCandidateKind::UseAfterFree,
                                         inst.family,
                                         func_name,
-                                    );
+                                    )
+                                    .with_resource_id(*instance_id);
 
                                     let use_desc = post_release_uses
                                         .iter()
@@ -428,7 +435,8 @@ impl Pass for IssueCandidateBuilderPass {
                             IssueCandidateKind::DoubleReclaim,
                             family,
                             &graph.edges[ri].function_name,
-                        );
+                        )
+                        .with_resource_id(*instance_id);
                         candidate.add_evidence(
                             Evidence::new(
                                 EvidenceKind::RawOwnershipReclaim,
@@ -464,7 +472,8 @@ impl Pass for IssueCandidateBuilderPass {
                         IssueCandidateKind::OwnershipEscapeLeak,
                         family,
                         escape_func,
-                    );
+                    )
+                    .with_resource_id(*instance_id);
                     candidate.add_evidence(
                         Evidence::new(
                             EvidenceKind::OwnershipEscapeLeak,
@@ -510,6 +519,7 @@ impl Pass for IssueCandidateBuilderPass {
                             )
                             .with_release_family(reclaim_family)
                             .with_release_function(&graph.edges[ri].function_name)
+                            .with_resource_id(*instance_id)
                             .with_description(format!(
                                 "cross-family reclaim: {} ({:?}) reclaimed by {} ({:?})",
                                 graph.edges[ai].function_name,
@@ -540,7 +550,8 @@ impl Pass for IssueCandidateBuilderPass {
                             IssueCandidateKind::NeedsModel,
                             family,
                             &graph.edges[ri].function_name,
-                        );
+                        )
+                        .with_resource_id(*instance_id);
                         candidate.add_evidence(
                             Evidence::new(
                                 EvidenceKind::RawOwnershipReclaim,
@@ -577,7 +588,8 @@ impl Pass for IssueCandidateBuilderPass {
                         instance.family,
                         func_name,
                     )
-                    .with_alloc_contract(instance.contract);
+                    .with_alloc_contract(instance.contract)
+                    .with_resource_id(instance.id);
 
                     candidate.add_evidence(
                         Evidence::new(

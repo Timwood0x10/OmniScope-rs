@@ -18,9 +18,9 @@ pub mod resource;
 
 // Re-exports — Analysis passes
 pub use analysis::{
-    BorrowEscapePass, CallGraphPass, DangerSurfacePass, FFIBoundaryPass, HeapProvenancePass,
-    InteriorMutabilityPass, NoiseReduction, PrecisionMetrics, RaiiDropPass, SurfaceClassifierPass,
-    WriteToImmutablePass,
+    infer_boundaries, BorrowEscapePass, CallGraphPass, DangerSurfacePass, FFIBoundaryPass,
+    HeapProvenancePass, InteriorMutabilityPass, NoiseReduction, PrecisionMetrics, RaiiDropPass,
+    SurfaceClassifierPass, WriteToImmutablePass,
 };
 
 // Re-exports — Resource contract passes

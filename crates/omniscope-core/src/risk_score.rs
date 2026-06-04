@@ -135,6 +135,7 @@ fn kind_base_score(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::InvalidBorrowedFree => 0.9,
         IssueCandidateKind::UncheckedFfiReturn => 0.7,
         IssueCandidateKind::NullDereference => 0.8,
+        IssueCandidateKind::CrossLanguageFree => 0.9,
     }
 }
 

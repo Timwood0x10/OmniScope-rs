@@ -27,6 +27,7 @@ struct FFIBoundaryInfo {
 }
 
 pub mod borrow_escape;
+pub mod boundary_inference;
 pub mod call_graph;
 pub mod danger_surface;
 pub mod ffi_boundary_detector;
@@ -38,6 +39,7 @@ pub mod surface_classifier_pass;
 pub mod write_to_immutable;
 
 pub use borrow_escape::BorrowEscapePass;
+pub use boundary_inference::infer_boundaries;
 pub use call_graph::CallGraphPass;
 pub use danger_surface::DangerSurfacePass;
 pub use heap_provenance::HeapProvenancePass;

@@ -56,6 +56,9 @@ pub struct IssueCandidate {
     /// Human-readable description (populated by verifier).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Resource instance ID in the MemoryGraph (for MemoryGraph-based verification).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<u64>,
 }
 
 /// Unique identifier for issue candidates.
@@ -83,6 +86,7 @@ impl IssueCandidate {
             alloc_location: None,
             release_location: None,
             description: None,
+            resource_id: None,
         }
     }
 
@@ -127,6 +131,12 @@ impl IssueCandidate {
         self
     }
 
+    /// Sets the resource instance ID for MemoryGraph-based verification.
+    pub fn with_resource_id(mut self, resource_id: u64) -> Self {
+        self.resource_id = Some(resource_id);
+        self
+    }
+
     /// Returns true if this candidate has been verified.
     pub fn is_verified(&self) -> bool {
         self.verdict.is_some()
@@ -156,6 +166,7 @@ impl IssueCandidate {
             IssueCandidateKind::InvalidBorrowedFree => IssueKind::InvalidFree,
             IssueCandidateKind::UncheckedFfiReturn => IssueKind::UncheckedReturn,
             IssueCandidateKind::NullDereference => IssueKind::NullDereference,
+            IssueCandidateKind::CrossLanguageFree => IssueKind::CrossLanguageFree,
         }
     }
 
