@@ -88,8 +88,8 @@ struct AnalyzeCommand {
     #[arg(long, default_value = "false")]
     parallel: bool,
 
-    /// IR loading strategy (auto, direct-cpp-ffi, direct-cpp, llvm-sys, cpp-pass, text-parser)
-    #[arg(long, default_value = "auto")]
+    /// IR loading strategy (auto-fast, auto, direct-cpp-ffi, direct-cpp, llvm-sys, cpp-pass, text-parser)
+    #[arg(long, default_value = "auto-fast")]
     strategy: String,
 
     /// Only show FFI boundary issues (cross-language memory safety)
@@ -111,8 +111,8 @@ struct AuditCommand {
     #[arg(short = 't', long, default_value = "ffi")]
     audit_type: String,
 
-    /// IR loading strategy (auto, direct-cpp-ffi, direct-cpp, llvm-sys, cpp-pass, text-parser)
-    #[arg(long, default_value = "auto")]
+    /// IR loading strategy (auto-fast, auto, direct-cpp-ffi, direct-cpp, llvm-sys, cpp-pass, text-parser)
+    #[arg(long, default_value = "auto-fast")]
     strategy: String,
 }
 

@@ -619,7 +619,10 @@ fn test_accuracy_regression() {
         fp_count,
         BASELINE_FP
     );
-    info!("  [PASS] FP {} <= baseline {} (+1 tolerance)", fp_count, BASELINE_FP);
+    info!(
+        "  [PASS] FP {} <= baseline {} (+1 tolerance)",
+        fp_count, BASELINE_FP
+    );
 
     assert!(
         fn_count <= BASELINE_FN + 2,

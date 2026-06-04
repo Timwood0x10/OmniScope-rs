@@ -338,17 +338,17 @@ fn test_e2e_same_family_no_issue() {
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "free".to_string(),
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -391,17 +391,17 @@ fn test_e2e_cross_family_produces_issue() {
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "_ZdlPv".to_string(), // operator delete(void*)
         caller: "test_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -459,9 +459,9 @@ fn test_e2e_conditional_leak_candidate() {
         caller: "leaky_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -502,25 +502,25 @@ fn test_e2e_double_release_candidate() {
         caller: "buggy_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "free".to_string(),
         caller: "buggy_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "free".to_string(),
         caller: "buggy_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -575,17 +575,17 @@ fn test_e2e_box_into_raw_normal_no_false_positive() {
         caller: "safe_transfer".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "Box::from_raw".to_string(),
         caller: "safe_transfer".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -627,17 +627,17 @@ fn test_e2e_box_from_raw_double_reclaim_tp() {
         caller: "buggy_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "Box::from_raw".to_string(),
         caller: "buggy_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -678,17 +678,17 @@ fn test_e2e_cstring_from_raw_double_reclaim_tp() {
         caller: "buggy_cstring".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "CString::from_raw".to_string(),
         caller: "buggy_cstring".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -729,17 +729,17 @@ fn test_e2e_malloc_reclaimed_by_rust_cross_family() {
         caller: "cross_ffi".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "Box::from_raw".to_string(),
         caller: "cross_ffi".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -781,9 +781,9 @@ fn test_e2e_into_raw_without_from_raw_escape_leak() {
         caller: "leaky_ffi".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -825,9 +825,9 @@ fn test_e2e_vec_from_raw_parts_unknown_source_needs_model() {
         caller: "suspicious_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -874,9 +874,9 @@ fn test_e2e_stack_userdata_callback_escape_tp() {
         caller: "async_handler".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -922,17 +922,17 @@ fn test_e2e_box_into_raw_callback_no_false_positive() {
         caller: "safe_handler".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
     module.calls.push(omniscope_ir::CallInstruction {
         callee: "register_callback".to_string(),
         caller: "safe_handler".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -975,9 +975,9 @@ fn test_e2e_synchronous_callback_no_false_positive() {
         caller: "sync_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);
@@ -1187,9 +1187,9 @@ fn test_e2e_invalid_borrowed_free() {
         caller: "buggy_func".to_string(),
         is_external: true,
         location: None,
-            args: Vec::new(),
-            result: None,
-        });
+        args: Vec::new(),
+        result: None,
+    });
 
     let mut ctx = PassContext::new();
     ctx.store("ir_module", module);

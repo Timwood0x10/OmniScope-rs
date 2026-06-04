@@ -27,11 +27,14 @@ fn dump_calls_from_c_fft_c_bridge() {
     for call in &fft_forward_calls {
         let callee_name = call.callee.trim_start_matches('@');
         let caller_name = call.caller.trim_start_matches('@');
-        
+
         let assessment = omniscope_semantics::assess_ffi_safety(callee_name, caller_name, &module);
         println!(
             "  callee={:?} caller={:?} verdict={:?} should_suppress={}",
-            callee_name, caller_name, assessment.verdict, assessment.should_suppress_issue()
+            callee_name,
+            caller_name,
+            assessment.verdict,
+            assessment.should_suppress_issue()
         );
         println!("  evidence: {:?}", assessment.evidence);
     }
@@ -45,11 +48,14 @@ fn dump_calls_from_c_fft_c_bridge() {
     for call in &test_signal_calls {
         let callee_name = call.callee.trim_start_matches('@');
         let caller_name = call.caller.trim_start_matches('@');
-        
+
         let assessment = omniscope_semantics::assess_ffi_safety(callee_name, caller_name, &module);
         println!(
             "  callee={:?} caller={:?} verdict={:?} should_suppress={}",
-            callee_name, caller_name, assessment.verdict, assessment.should_suppress_issue()
+            callee_name,
+            caller_name,
+            assessment.verdict,
+            assessment.should_suppress_issue()
         );
         println!("  evidence: {:?}", assessment.evidence);
     }
@@ -60,7 +66,10 @@ fn dump_calls_from_c_fft_c_bridge() {
         println!("  {}: {} instructions", name, body.instructions.len());
     }
 
-    assert!(!module.calls.is_empty(), "No calls found in c_fft_c_bridge.ll");
+    assert!(
+        !module.calls.is_empty(),
+        "No calls found in c_fft_c_bridge.ll"
+    );
 }
 
 #[test]
@@ -86,11 +95,14 @@ fn dump_calls_from_c_hash_c_bridge() {
     for call in &hash_calls {
         let callee_name = call.callee.trim_start_matches('@');
         let caller_name = call.caller.trim_start_matches('@');
-        
+
         let assessment = omniscope_semantics::assess_ffi_safety(callee_name, caller_name, &module);
         println!(
             "  callee={:?} caller={:?} verdict={:?} should_suppress={}",
-            callee_name, caller_name, assessment.verdict, assessment.should_suppress_issue()
+            callee_name,
+            caller_name,
+            assessment.verdict,
+            assessment.should_suppress_issue()
         );
         println!("  evidence: {:?}", assessment.evidence);
     }
@@ -101,5 +113,8 @@ fn dump_calls_from_c_hash_c_bridge() {
         println!("  {}: {} instructions", name, body.instructions.len());
     }
 
-    assert!(!module.calls.is_empty(), "No calls found in c_hash_c_bridge.ll");
+    assert!(
+        !module.calls.is_empty(),
+        "No calls found in c_hash_c_bridge.ll"
+    );
 }

@@ -262,11 +262,11 @@ fn walk_module_functions(module_ref: LLVMModuleRef, module: &mut IRModule) -> Re
                         .clone()
                         .unwrap_or_else(|| "indirect".to_string());
                     let is_external = module.declarations.contains_key(&callee_name);
-                    
+
                     // Parse arguments and result from raw text
                     let args = parse_call_args_from_raw(&inst.raw_text);
                     let result = parse_call_result_from_raw(&inst.raw_text);
-                    
+
                     module.calls.push(crate::parser::CallInstruction {
                         callee: callee_name,
                         caller: name.clone(),

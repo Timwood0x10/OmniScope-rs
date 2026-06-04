@@ -1568,8 +1568,12 @@ int main(int argc, char **argv) {
     errs() << "JSON bytes: " << timing_stats.json_bytes << "\n";
 
     if (Slice == SLICE_FFI) {
-      errs() << "FFI seeds: " << detectFfiSeeds(Index).size() << "\n";
+      auto Seeds = detectFfiSeeds(Index);
+      errs() << "FFI seeds: " << Seeds.size() << "\n";
       errs() << "Slice hops: " << SliceHops << "\n";
+      if (Seeds.empty()) {
+        errs() << "NO_FFI_SEEDS: no FFI boundary functions detected\n";
+      }
     }
   }
 

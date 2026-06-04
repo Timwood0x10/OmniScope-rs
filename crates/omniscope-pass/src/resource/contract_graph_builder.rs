@@ -163,16 +163,30 @@ impl Pass for ContractGraphBuilderPass {
                     .push_back((instance_id, Some(family)));
             } else {
                 // Release — pop the oldest matching acquire instance (FIFO)
-                let (source_id, alloc_family) =
-                    if let Some(instances) = acquire_instances.get_mut(&key) {
-                        if let Some((sid, af)) = instances.pop_front() {
-                            (sid, af)
-                        } else {
-                            (0, None)
-                        }
+                // First try same-family matching (exact key)
+                let (source_id, alloc_family) = if let Some(instances) =
+                    acquire_instances.get_mut(&key)
+                {
+                    if let Some((sid, af)) = instances.pop_front() {
+                        (sid, af)
                     } else {
                         (0, None)
-                    };
+                    }
+                } else {
+                    // No same-family acquire found — try cross-family matching.
+                    // Look for any acquire in the same function but different family.
+                    // This enables CrossFamilyFree detection (e.g., malloc + sqlite3_free).
+                    let mut found = (0, None);
+                    for ((other_func, other_family), instances) in acquire_instances.iter_mut() {
+                        if *other_func == fact.function && *other_family != family {
+                            if let Some((sid, af)) = instances.pop_front() {
+                                found = (sid, af);
+                                break;
+                            }
+                        }
+                    }
+                    found
+                };
 
                 // If no matching acquire, create a standalone instance.
                 // Do NOT push into acquire_instances — this is an orphan release

@@ -29,6 +29,12 @@ pub struct LoadedIr {
     pub strategy: LoadStrategy,
     /// Time taken to load the IR module in milliseconds.
     pub load_ms: u64,
+    /// Time spent in the backend (C++ extractor, LLVM, etc.) in milliseconds.
+    pub backend_ms: Option<u64>,
+    /// Time spent deserializing the output (JSON/MsgPack) in milliseconds.
+    pub deserialize_ms: Option<u64>,
+    /// Whether the result was loaded from cache.
+    pub cache_hit: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +231,9 @@ pub fn load_ir(path: &Path, strategy: LoadStrategy) -> Result<LoadedIr> {
         module,
         strategy: actual_strategy,
         load_ms,
+        backend_ms: None,
+        deserialize_ms: None,
+        cache_hit: false,
     })
 }
 
@@ -505,18 +514,20 @@ fn load_via_cpp_pass(path: &Path) -> Result<IRModule> {
 /// This function implements caching: if the file hasn't changed, it returns
 /// cached JSON output instead of re-running the expensive C++ extractor.
 fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
-    // Check cache first
+    // Check cache first with strategy-specific fingerprint
     if let Some(cache) = get_ir_cache() {
-        if let Some(entry) = cache.check_cache(path) {
+        if let Some(entry) =
+            cache.check_cache_with_params(path, "direct-cpp-ffi", Some("ffi"), None)
+        {
             debug!(path = %path.display(), "Cache hit for direct C++ FFI extractor");
-            let json_str = cache
-                .load_cached_json(&entry)
-                .context("Failed to load cached JSON")?;
+            let bytes = cache
+                .load_cached_bytes(&entry)
+                .context("Failed to load cached bytes")?;
 
-            let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
-                .context("failed to deserialize cached direct C++ FFI JSON output")?;
+            let module = crate::ir_model::parse_from_msgpack(&bytes)
+                .context("failed to deserialize cached direct C++ FFI msgpack output")?;
 
-            return Ok(model.to_ir_module());
+            return Ok(module);
         }
     }
 
@@ -527,22 +538,36 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
     debug!(
         extractor = %extractor.display(),
         input = %path.display(),
-        "Running direct C++ IR extractor with FFI slice"
+        "Running direct C++ IR extractor with FFI slice (msgpack)"
     );
 
-    let output = std::process::Command::new(&extractor)
-        .arg("--slice=ffi")
+    let mut cmd = std::process::Command::new(&extractor);
+    cmd.arg("--slice=ffi")
         .arg("--slice-hops=2")
         .arg("--slice-stats")
         .arg("--no-raw")
+        .arg("--format=msgpack");
+
+    // Enable timing output when OMNISCOPE_IR_TIMING is set
+    if std::env::var_os("OMNISCOPE_IR_TIMING").is_some() {
+        cmd.arg("-t");
+    }
+
+    let output = cmd
         .arg(path)
         .output()
         .with_context(|| format!("failed to execute ir_extractor at {}", extractor.display()))?;
 
-    // Print slice stats from stderr
+    // Print slice stats from stderr and check for early exit conditions
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.is_empty() {
         debug!(stats = %stderr.trim(), "FFI slice statistics");
+
+        // Early return if no FFI seeds detected - avoid unnecessary processing
+        if stderr.contains("NO_FFI_SEEDS") {
+            debug!("No FFI seeds detected, returning empty module");
+            return Ok(IRModule::default());
+        }
     }
 
     if !output.status.success() {
@@ -553,19 +578,14 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
         );
     }
 
-    let json_str =
-        String::from_utf8(output.stdout).context("ir_extractor output is not valid UTF-8")?;
-
-    let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
-        .context("failed to deserialize ir_extractor JSON output")?;
-
-    let module = model.to_ir_module();
+    let module = crate::ir_model::parse_from_msgpack(&output.stdout)
+        .context("failed to deserialize ir_extractor msgpack output")?;
 
     // Only cache non-empty results — empty modules indicate the FFI slice
     // filter removed all functions, and we don't want to cache that.
     if !module.functions.is_empty() {
         if let Some(cache) = get_ir_cache() {
-            if let Err(e) = cache.save_to_cache(path, &json_str) {
+            if let Err(e) = cache.save_to_cache_bytes_with_params(path, &output.stdout, "direct-cpp-ffi", Some("ffi"), None) {
                 warn!(error = %e, "Failed to save direct C++ FFI extractor output to cache");
             }
         }
@@ -587,18 +607,18 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
 /// This function implements caching: if the file hasn't changed, it returns
 /// cached JSON output instead of re-running the expensive C++ extractor.
 fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
-    // Check cache first
+    // Check cache first with strategy-specific fingerprint
     if let Some(cache) = get_ir_cache() {
-        if let Some(entry) = cache.check_cache(path) {
+        if let Some(entry) = cache.check_cache_with_params(path, "direct-cpp", None, None) {
             debug!(path = %path.display(), "Cache hit for direct C++ extractor");
-            let json_str = cache
-                .load_cached_json(&entry)
-                .context("Failed to load cached JSON")?;
+            let bytes = cache
+                .load_cached_bytes(&entry)
+                .context("Failed to load cached bytes")?;
 
-            let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
-                .context("failed to deserialize cached direct C++ JSON output")?;
+            let module = crate::ir_model::parse_from_msgpack(&bytes)
+                .context("failed to deserialize cached direct C++ msgpack output")?;
 
-            return Ok(model.to_ir_module());
+            return Ok(module);
         }
     }
 
@@ -609,10 +629,18 @@ fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
     debug!(
         extractor = %extractor.display(),
         input = %path.display(),
-        "Running direct C++ IR extractor"
+        "Running direct C++ IR extractor (msgpack)"
     );
 
-    let output = std::process::Command::new(&extractor)
+    let mut cmd = std::process::Command::new(&extractor);
+    cmd.arg("--format=msgpack");
+
+    // Enable timing output when OMNISCOPE_IR_TIMING is set
+    if std::env::var_os("OMNISCOPE_IR_TIMING").is_some() {
+        cmd.arg("-t");
+    }
+
+    let output = cmd
         .arg(path)
         .output()
         .with_context(|| format!("failed to execute ir_extractor at {}", extractor.display()))?;
@@ -626,18 +654,13 @@ fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
         );
     }
 
-    let json_str =
-        String::from_utf8(output.stdout).context("ir_extractor output is not valid UTF-8")?;
-
-    let model = crate::ir_model::IRModuleModel::from_json_str(&json_str)
-        .context("failed to deserialize ir_extractor JSON output")?;
-
-    let module = model.to_ir_module();
+    let module = crate::ir_model::parse_from_msgpack(&output.stdout)
+        .context("failed to deserialize ir_extractor msgpack output")?;
 
     // Only cache non-empty results to avoid poisoning the cache.
     if !module.functions.is_empty() {
         if let Some(cache) = get_ir_cache() {
-            if let Err(e) = cache.save_to_cache(path, &json_str) {
+            if let Err(e) = cache.save_to_cache_bytes_with_params(path, &output.stdout, "direct-cpp", None, None) {
                 warn!(error = %e, "Failed to save direct C++ extractor output to cache");
             }
         }

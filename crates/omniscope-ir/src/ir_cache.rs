@@ -111,6 +111,60 @@ impl IrCache {
         Ok(fingerprint)
     }
 
+    /// Generate fingerprint with additional parameters for cache key extension.
+    ///
+    /// This includes strategy, slice mode, and other configuration in the hash
+    /// to ensure cache entries are specific to the loading configuration.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the IR file
+    /// * `strategy` - Loading strategy name (e.g., "direct-cpp", "direct-cpp-ffi")
+    /// * `slice_mode` - Optional slice mode (e.g., "ffi", "none")
+    /// * `extra` - Optional extra parameters string
+    pub fn generate_fingerprint_with_params(
+        &self,
+        path: &Path,
+        strategy: &str,
+        slice_mode: Option<&str>,
+        extra: Option<&str>,
+    ) -> Result<u64> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let canonical_path = fs::canonicalize(path)
+            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
+
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("Failed to get file metadata: {}", path.display()))?;
+
+        let size = metadata.len();
+        let mtime = metadata
+            .modified()
+            .with_context(|| format!("Failed to get modification time: {}", path.display()))?
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .with_context(|| "Failed to convert SystemTime to duration")?
+            .as_nanos();
+
+        let mut hasher = DefaultHasher::new();
+        canonical_path.hash(&mut hasher);
+        size.hash(&mut hasher);
+        mtime.hash(&mut hasher);
+        strategy.hash(&mut hasher);
+        slice_mode.hash(&mut hasher);
+        extra.hash(&mut hasher);
+
+        let fingerprint = hasher.finish();
+        debug!(
+            path = %path.display(),
+            strategy = strategy,
+            slice_mode = ?slice_mode,
+            fingerprint = fingerprint,
+            "Generated fingerprint with params"
+        );
+
+        Ok(fingerprint)
+    }
+
     /// Check if cache entry exists and is valid
     ///
     /// # Arguments
@@ -140,6 +194,62 @@ impl IrCache {
             debug!(path = %path.display(), "Cache miss");
             None
         }
+    }
+
+    /// Check if cache entry exists with specific parameters
+    ///
+    /// This checks for both msgpack and JSON cache files.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the IR file
+    /// * `strategy` - Loading strategy name
+    /// * `slice_mode` - Optional slice mode
+    /// * `extra` - Optional extra parameters
+    ///
+    /// # Returns
+    /// Some(CacheEntry) if cache hit, None if cache miss
+    pub fn check_cache_with_params(
+        &self,
+        path: &Path,
+        strategy: &str,
+        slice_mode: Option<&str>,
+        extra: Option<&str>,
+    ) -> Option<CacheEntry> {
+        let fingerprint =
+            match self.generate_fingerprint_with_params(path, strategy, slice_mode, extra) {
+                Ok(f) => f,
+                Err(e) => {
+                    debug!("Failed to generate fingerprint: {}", e);
+                    return None;
+                }
+            };
+
+        // Check for msgpack cache first (preferred)
+        let msgpack_path = self
+            .cache_dir
+            .join(format!("{:016x}.ir.msgpack", fingerprint));
+        if msgpack_path.exists() {
+            debug!(path = %path.display(), cache_path = %msgpack_path.display(), "Cache hit (msgpack)");
+            return Some(CacheEntry {
+                fingerprint,
+                json_path: msgpack_path,
+                timestamp: SystemTime::now(),
+            });
+        }
+
+        // Fall back to JSON cache
+        let json_path = self.cache_dir.join(format!("{:016x}.ir.json", fingerprint));
+        if json_path.exists() {
+            debug!(path = %path.display(), cache_path = %json_path.display(), "Cache hit (json)");
+            return Some(CacheEntry {
+                fingerprint,
+                json_path,
+                timestamp: SystemTime::now(),
+            });
+        }
+
+        debug!(path = %path.display(), "Cache miss");
+        None
     }
 
     /// Load cached JSON content
@@ -185,6 +295,70 @@ impl IrCache {
             cache_path = %cache_path.display(),
             size = json_str.len(),
             "Saved IR to cache"
+        );
+
+        Ok(CacheEntry {
+            fingerprint,
+            json_path: cache_path,
+            timestamp: SystemTime::now(),
+        })
+    }
+
+    /// Load cached bytes (msgpack or JSON)
+    ///
+    /// # Arguments
+    /// * `entry` - Cache entry to load
+    ///
+    /// # Returns
+    /// Cached bytes
+    pub fn load_cached_bytes(&self, entry: &CacheEntry) -> Result<Vec<u8>> {
+        let content = fs::read(&entry.json_path).with_context(|| {
+            format!("Failed to read cached file: {}", entry.json_path.display())
+        })?;
+
+        debug!(
+            path = %entry.json_path.display(),
+            size = content.len(),
+            "Loaded cached bytes"
+        );
+
+        Ok(content)
+    }
+
+    /// Save bytes content to cache (msgpack format)
+    ///
+    /// # Arguments
+    /// * `path` - Original IR file path
+    /// * `bytes` - Binary content to cache
+    /// * `strategy` - Loading strategy name
+    /// * `slice_mode` - Optional slice mode
+    /// * `extra` - Optional extra parameters
+    ///
+    /// # Returns
+    /// Cache entry if successful
+    pub fn save_to_cache_bytes_with_params(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        strategy: &str,
+        slice_mode: Option<&str>,
+        extra: Option<&str>,
+    ) -> Result<CacheEntry> {
+        self.ensure_cache_dir()?;
+
+        let fingerprint = self.generate_fingerprint_with_params(path, strategy, slice_mode, extra)?;
+        let cache_path = self
+            .cache_dir
+            .join(format!("{:016x}.ir.msgpack", fingerprint));
+
+        fs::write(&cache_path, bytes)
+            .with_context(|| format!("Failed to write cache file: {}", cache_path.display()))?;
+
+        info!(
+            path = %path.display(),
+            cache_path = %cache_path.display(),
+            size = bytes.len(),
+            "Saved IR to cache (msgpack)"
         );
 
         Ok(CacheEntry {

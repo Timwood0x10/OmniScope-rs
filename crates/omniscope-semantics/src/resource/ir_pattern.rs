@@ -741,11 +741,7 @@ fn detect_fallible_out_param_init(body: &FunctionBody) -> Option<BehaviorPattern
         .instructions
         .iter()
         .filter(|i| i.kind == IRInstructionKind::Store)
-        .filter(|i| {
-            i.operands
-                .first()
-                .is_some_and(|v| v == "null" || v == "0")
-        })
+        .filter(|i| i.operands.first().is_some_and(|v| v == "null" || v == "0"))
         .filter_map(|i| i.operands.get(1).cloned())
         .collect();
 
@@ -787,9 +783,7 @@ fn detect_fallible_out_param_init(body: &FunctionBody) -> Option<BehaviorPattern
 
         let has_null_store_after = body.instructions.iter().skip(call_pos + 1).any(|i| {
             i.kind == IRInstructionKind::Store
-                && i.operands
-                    .first()
-                    .is_some_and(|v| v == "null" || v == "0")
+                && i.operands.first().is_some_and(|v| v == "null" || v == "0")
                 && i.operands.get(1).is_some_and(|t| *t == out_param)
         });
 

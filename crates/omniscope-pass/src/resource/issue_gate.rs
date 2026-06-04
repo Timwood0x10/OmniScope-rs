@@ -183,7 +183,7 @@ where
             }
         }
 
-        // ── CrossFamilyFree: same logic as CrossLanguageFree ──
+        // ── CrossFamilyFree: detect wrong allocator/deallocator pairing ──
         omniscope_core::IssueKind::CrossFamilyFree => {
             if has_kind(key, SemanticKind::IntoRawTransfer) {
                 return GateVerdict::SuppressOwnershipTransfer;
@@ -194,9 +194,10 @@ where
             {
                 return GateVerdict::SuppressNonMemorySyscall;
             }
-            if has_kind(key, SemanticKind::LibraryRelease) {
-                return GateVerdict::SuppressLibraryRelease;
-            }
+            // NOTE: Do NOT suppress LibraryRelease for CrossFamilyFree.
+            // CrossFamilyFree specifically detects when a library release function
+            // is used with the WRONG allocator (e.g., malloc + sqlite3_free).
+            // Suppressing LibraryRelease would defeat the purpose of this check.
         }
 
         // ── FfiUnsafeCall: suppress for non-memory syscalls and safe patterns ──
