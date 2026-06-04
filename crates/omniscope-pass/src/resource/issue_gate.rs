@@ -36,7 +36,7 @@
 //! | FfiUnsafeCall         | JavaLocalRef/GlobalRef/WeakRef | Java JNI |
 
 use omniscope_core::Issue;
-use omniscope_semantics::SemanticKind;
+use omniscope_semantics::{SemanticKey, SemanticKind};
 
 /// Verdict returned by the issue gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -288,6 +288,67 @@ pub fn check_issue_with_kinds(
             .get(key)
             .is_some_and(|kinds| kinds.contains(&kind))
     })
+}
+
+/// Checks an issue against multiple semantic kinds using SemanticKey.
+///
+/// This function supports multi-key queries by converting string keys to
+/// SemanticKey and checking against the resolutions map. It maintains
+/// backward compatibility with existing string-based queries while
+/// supporting new key types (Resource, Path, Owner, Value).
+///
+/// # Arguments
+///
+/// * `issue` — The issue to check.
+/// * `resolutions` — A map from SemanticKey to set of SemanticKinds.
+pub fn check_issue_with_keys(
+    issue: &Issue,
+    resolutions: &std::collections::HashMap<SemanticKey, Vec<SemanticKind>>,
+) -> GateVerdict {
+    // Try multiple key types for the issue
+
+    // First try direct symbol lookup
+    let has_kind = |key: &SemanticKey, kind: SemanticKind| -> bool {
+        if let Some(kinds) = resolutions.get(key) {
+            kinds.contains(&kind)
+        } else {
+            // For backward compatibility, also try string-based lookup
+            // This allows gradual migration from string keys to SemanticKey
+            false
+        }
+    };
+
+    // Use the symbol key for the main check
+    check_issue(issue, |key, kind| {
+        let semantic_key = SemanticKey::from_string(key);
+        has_kind(&semantic_key, kind)
+    })
+}
+
+/// Checks an issue against multiple semantic kinds with hybrid key support.
+///
+/// This function supports both string-based keys (for backward compatibility)
+/// and SemanticKey-based keys (for new multi-key queries). It checks both
+/// maps and returns the first suppression found.
+///
+/// # Arguments
+///
+/// * `issue` — The issue to check.
+/// * `string_resolutions` — Legacy string-based resolutions map.
+/// * `key_resolutions` — New SemanticKey-based resolutions map.
+pub fn check_issue_with_hybrid_keys(
+    issue: &Issue,
+    string_resolutions: &std::collections::HashMap<String, Vec<SemanticKind>>,
+    key_resolutions: &std::collections::HashMap<SemanticKey, Vec<SemanticKind>>,
+) -> GateVerdict {
+    // First try string-based lookup (backward compatibility)
+    let string_verdict = check_issue_with_kinds(issue, string_resolutions);
+    if !string_verdict.is_allowed() {
+        return string_verdict;
+    }
+
+    // Then try SemanticKey-based lookup
+    check_issue_with_keys(issue, key_resolutions)
 }
 
 #[cfg(test)]

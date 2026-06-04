@@ -1,16 +1,19 @@
 //! OmniScope CLI entry point
 //!
 //! This is the main entry point for the OmniScope static analyzer.
-//! It provides three subcommands:
+//! It provides four subcommands:
 //! - `analyze`: Full pipeline analysis with rich/JSON/SARIF output
 //! - `audit`: Language-specific FFI audit
 //! - `info`: Show configuration and pass information
+//! - `init`: Generate default configuration file
+//! - `validate`: Validate configuration file
 
 mod output;
 
 use clap::Parser;
 use omniscope_ir::loader_v2::{load_ir, LoadStrategy};
 use omniscope_pipeline::Pipeline;
+use omniscope_types::{FFIBoundaryConfig, Language, OmniScopeConfig, ProjectConfig};
 use output::json::JsonFormatter;
 use output::rich::RichFormatter;
 use output::sarif::SarifFormatter;
@@ -18,6 +21,58 @@ use output::{OutputFormat, OutputFormatter};
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
+
+/// Cross-language boundary specification parsed from CLI.
+///
+/// Used with `--cross FROM:TO` to specify FFI boundaries.
+/// Example: `--cross C:Cpp --cross Zig:C`
+#[derive(Debug, Clone)]
+struct CrossBoundary {
+    /// Source language of the FFI call.
+    from: Language,
+    /// Target language of the FFI call.
+    to: Language,
+}
+
+impl std::str::FromStr for CrossBoundary {
+    type Err = String;
+
+    /// Parse a cross boundary from "FROM:TO" format.
+    ///
+    /// Supported language names: C, Cpp/C++, Rust/RS, Zig, Go, Python/Py,
+    /// Java, CSharp/C#/CS.  Case-insensitive.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!(
+                "Invalid cross boundary format: {s}. Expected FROM:TO (e.g. C:Cpp)"
+            ));
+        }
+
+        let from = parse_language(parts[0])?;
+        let to = parse_language(parts[1])?;
+
+        Ok(Self { from, to })
+    }
+}
+
+/// Parse a language name string into a [`Language`] enum value.
+///
+/// Accepts common aliases (e.g. "c++" for Cpp, "rs" for Rust).
+/// Returns an error for unrecognized language names.
+fn parse_language(s: &str) -> Result<Language, String> {
+    match s.to_lowercase().as_str() {
+        "c" => Ok(Language::C),
+        "cpp" | "c++" => Ok(Language::Cpp),
+        "rust" | "rs" => Ok(Language::Rust),
+        "zig" => Ok(Language::Zig),
+        "go" => Ok(Language::Go),
+        "python" | "py" => Ok(Language::Python),
+        "java" => Ok(Language::Java),
+        "csharp" | "c#" | "cs" => Ok(Language::CSharp),
+        _ => Err(format!("Unknown language: {s}")),
+    }
+}
 
 /// Timing breakdown for CLI phases.
 #[derive(Debug)]
@@ -52,6 +107,12 @@ enum Commands {
 
     /// Show configuration and statistics
     Info(InfoCommand),
+
+    /// Initialize configuration file
+    Init(InitCommand),
+
+    /// Validate configuration file
+    Validate(ValidateCommand),
 }
 
 #[derive(clap::Args)]
@@ -71,6 +132,16 @@ struct AnalyzeCommand {
     /// Target language (c, cpp, rust, zig, go, python, java)
     #[arg(short = 'l', long)]
     language: Option<String>,
+
+    /// Cross-language boundaries (format: FROM:TO, repeatable).
+    /// Example: --cross C:Cpp --cross Zig:C
+    #[arg(long = "cross", value_name = "FROM:TO")]
+    cross: Vec<CrossBoundary>,
+
+    /// Configuration file path (TOML format).
+    /// Searches ./omniscope.toml and ~/.config/omniscope/config.toml when omitted.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     /// Enable verbose output (pipeline metrics)
     #[arg(short, long)]
@@ -123,6 +194,34 @@ struct InfoCommand {
     passes: bool,
 }
 
+/// Arguments for init command.
+#[derive(clap::Args)]
+struct InitCommand {
+    /// Output file path.
+    #[arg(long, default_value = "omniscope.toml")]
+    output: PathBuf,
+
+    /// Force overwrite existing file.
+    #[arg(long)]
+    force: bool,
+
+    /// Project name.
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Project description.
+    #[arg(long)]
+    description: Option<String>,
+}
+
+/// Arguments for validate command.
+#[derive(clap::Args)]
+struct ValidateCommand {
+    /// Configuration file path.
+    #[arg(long, default_value = "omniscope.toml")]
+    config: PathBuf,
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse CLI first so we can determine the desired log level.
     // CLI parsing is lightweight and does not need tracing.
@@ -154,6 +253,12 @@ fn main() -> anyhow::Result<()> {
         Commands::Info(cmd) => {
             run_info(cmd)?;
         }
+        Commands::Init(cmd) => {
+            run_init(cmd)?;
+        }
+        Commands::Validate(cmd) => {
+            run_validate(cmd)?;
+        }
     }
 
     Ok(())
@@ -163,6 +268,22 @@ fn main() -> anyhow::Result<()> {
 fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     tracing::info!("Starting analysis of {:?}", cmd.input);
     tracing::debug!("Format: {}, Parallel: {}", cmd.format, cmd.parallel);
+
+    // Load configuration from file and/or CLI arguments
+    let config = load_config(&cmd)?;
+    if !cmd.cross.is_empty() {
+        tracing::info!(
+            "CLI cross boundaries: {}",
+            cmd.cross
+                .iter()
+                .map(|b| format!("{:?}:{:?}", b.from, b.to))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if !config.ffi_boundary.is_empty() {
+        tracing::info!("Total FFI boundaries loaded: {}", config.ffi_boundary.len());
+    }
 
     // Parse the IR file — auto-detects best backend (llvm-sys > cpp pass > text)
     let strategy = parse_strategy(&cmd.strategy);
@@ -269,6 +390,54 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     tracing::info!("Analysis completed in {:?}", start.elapsed());
 
     Ok(())
+}
+
+/// Load configuration from file and/or command line arguments.
+///
+/// Resolution order:
+/// 1. If `--config` is provided, load that file exclusively.
+/// 2. Otherwise, search default locations (`./omniscope.toml`,
+///    `~/.config/omniscope/config.toml`).
+/// 3. Merge any `--cross` boundaries from the CLI on top.
+fn load_config(cmd: &AnalyzeCommand) -> anyhow::Result<OmniScopeConfig> {
+    // Load base configuration
+    let mut config = if let Some(ref config_path) = cmd.config {
+        tracing::info!("Loading config from {:?}", config_path);
+        OmniScopeConfig::load_from_file(config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?
+    } else {
+        match OmniScopeConfig::load_default() {
+            Ok(Some(cfg)) => {
+                tracing::debug!("Loaded default config");
+                cfg
+            }
+            Ok(None) => {
+                tracing::debug!("No config file found, using defaults");
+                OmniScopeConfig::default_config()
+            }
+            Err(e) => {
+                tracing::warn!("Error loading default config: {e}");
+                OmniScopeConfig::default_config()
+            }
+        }
+    };
+
+    // Merge CLI --cross boundaries into the configuration
+    for boundary in &cmd.cross {
+        tracing::debug!(
+            "Adding CLI cross boundary: {:?} -> {:?}",
+            boundary.from,
+            boundary.to
+        );
+        config.ffi_boundary.push(FFIBoundaryConfig {
+            from: boundary.from,
+            to: boundary.to,
+            functions: Vec::new(), // Empty = auto-detect all functions at boundary
+            description: Some(format!("{:?} -> {:?} (CLI)", boundary.from, boundary.to)),
+        });
+    }
+
+    Ok(config)
 }
 
 /// Filters pipeline result to only include FFI boundary issues.
@@ -604,6 +773,167 @@ fn run_info(cmd: InfoCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Runs the init command — generate default configuration file.
+fn run_init(cmd: InitCommand) -> anyhow::Result<()> {
+    use colored::Colorize;
+
+    tracing::info!("Initializing configuration file: {:?}", cmd.output);
+
+    // Check if file exists and force flag is not set
+    if cmd.output.exists() && !cmd.force {
+        anyhow::bail!(
+            "Configuration file already exists: {}. Use --force to overwrite.",
+            cmd.output.display()
+        );
+    }
+
+    // Generate default configuration with optional project info
+    let mut config = OmniScopeConfig::generate_default();
+
+    // Set project name and description if provided
+    if cmd.name.is_some() || cmd.description.is_some() {
+        config.project = Some(ProjectConfig {
+            name: cmd.name.clone().or_else(|| {
+                // Default to directory name if not specified
+                std::env::current_dir()
+                    .ok()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            }),
+            description: cmd.description.clone(),
+        });
+    } else {
+        // Set default project name to directory name
+        config.project = Some(ProjectConfig {
+            name: std::env::current_dir()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string())),
+            description: None,
+        });
+    }
+
+    // Serialize to TOML
+    let content = toml::to_string_pretty(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+
+    // Write to file
+    std::fs::write(&cmd.output, content)
+        .map_err(|e| anyhow::anyhow!("Failed to write config file {:?}: {}", cmd.output, e))?;
+
+    // Print success message
+    println!("{}", "✓ Configuration file created".green().bold());
+    println!();
+    println!(
+        "  {} {}",
+        "File:".white(),
+        cmd.output.display().to_string().cyan()
+    );
+    println!();
+    println!("{}", "Next steps:".yellow().bold());
+    println!(
+        "  1. Edit {} to configure FFI boundaries",
+        cmd.output.display()
+    );
+    println!(
+        "  2. Run: omniscope analyze --config {} <input.ll>",
+        cmd.output.display()
+    );
+    println!();
+
+    tracing::info!("Configuration file created: {:?}", cmd.output);
+
+    Ok(())
+}
+
+/// Runs the validate command — validate configuration file.
+fn run_validate(cmd: ValidateCommand) -> anyhow::Result<()> {
+    use colored::Colorize;
+
+    tracing::info!("Validating configuration file: {:?}", cmd.config);
+
+    // Load and parse configuration
+    match OmniScopeConfig::load_from_file(&cmd.config) {
+        Ok(config) => {
+            println!("{}", "✓ Configuration file is valid".green().bold());
+            println!();
+            println!("{}", "Configuration summary:".yellow().bold());
+            println!(
+                "  {} {}",
+                "FFI boundaries:".white(),
+                config.ffi_boundary.len()
+            );
+            println!(
+                "  {} {}",
+                "Resource families:".white(),
+                config.resource_family.len()
+            );
+            println!();
+            println!("{}", "Analysis options:".yellow().bold());
+            println!(
+                "    {} {}",
+                "Cross-language:".white(),
+                config.analysis.cross_language
+            );
+            println!(
+                "    {} {}",
+                "Cross-family:".white(),
+                config.analysis.cross_family
+            );
+            println!(
+                "    {} {}",
+                "Leak detection:".white(),
+                config.analysis.leak_detection
+            );
+            println!(
+                "    {} {}",
+                "Use-after-free:".white(),
+                config.analysis.use_after_free
+            );
+            println!();
+
+            // Print FFI boundaries if any
+            if !config.ffi_boundary.is_empty() {
+                println!("{}", "FFI Boundaries:".yellow().bold());
+                for (i, boundary) in config.ffi_boundary.iter().enumerate() {
+                    println!("  {}. {} -> {}", i + 1, boundary.from, boundary.to);
+                    if !boundary.functions.is_empty() {
+                        println!("     Functions: {}", boundary.functions.join(", "));
+                    }
+                    if let Some(desc) = &boundary.description {
+                        println!("     Description: {}", desc);
+                    }
+                }
+                println!();
+            }
+
+            // Print resource families if any
+            if !config.resource_family.is_empty() {
+                println!("{}", "Resource Families:".yellow().bold());
+                for (i, family) in config.resource_family.iter().enumerate() {
+                    println!("  {}. {} ({:?})", i + 1, family.name, family.kind);
+                    if !family.acquire.is_empty() {
+                        println!("     Acquire: {}", family.acquire.join(", "));
+                    }
+                    if !family.release.is_empty() {
+                        println!("     Release: {}", family.release.join(", "));
+                    }
+                }
+                println!();
+            }
+
+            tracing::info!("Configuration file is valid: {:?}", cmd.config);
+            Ok(())
+        }
+        Err(e) => {
+            println!("{}", "✗ Configuration file is invalid".red().bold());
+            println!();
+            println!("{} {}", "Error:".red(), e);
+            println!();
+            tracing::warn!("Configuration file is invalid: {:?}", cmd.config);
+            anyhow::bail!("Invalid configuration file: {}", e);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +1152,208 @@ mod tests {
         assert!(
             filtered_issue.location.is_some(),
             "Issue location must be preserved"
+        );
+    }
+
+    // ========================================================================
+    // Init Command Tests
+    // ========================================================================
+
+    /// Objective: Verify that generate_default_config produces valid config.
+    /// Invariants: Default config should have example FFI boundaries and resource families.
+    #[test]
+    fn test_generate_default_config() {
+        let config = OmniScopeConfig::generate_default();
+
+        // Should have example FFI boundaries
+        assert_eq!(
+            config.ffi_boundary.len(),
+            2,
+            "Default config should have 2 example FFI boundaries"
+        );
+
+        // First boundary should be C -> C++
+        assert_eq!(
+            config.ffi_boundary[0].from,
+            Language::C,
+            "First FFI boundary should be from C"
+        );
+        assert_eq!(
+            config.ffi_boundary[0].to,
+            Language::Cpp,
+            "First FFI boundary should be to C++"
+        );
+
+        // Should have example resource family
+        assert_eq!(
+            config.resource_family.len(),
+            1,
+            "Default config should have 1 example resource family"
+        );
+        assert_eq!(
+            config.resource_family[0].name, "custom_allocator",
+            "Example resource family should be named 'custom_allocator'"
+        );
+
+        // Analysis should have default values
+        assert!(
+            config.analysis.cross_language,
+            "Cross-language analysis should be enabled by default"
+        );
+    }
+
+    /// Objective: Verify that default config can be serialized to valid TOML.
+    /// Invariants: Serialized config should contain expected sections.
+    #[test]
+    fn test_generate_default_config_serialization() {
+        let config = OmniScopeConfig::generate_default();
+
+        // Serialize to TOML
+        let toml_content =
+            toml::to_string_pretty(&config).expect("Config should serialize to valid TOML");
+
+        // Verify it's not empty
+        assert!(
+            !toml_content.is_empty(),
+            "Serialized TOML should not be empty"
+        );
+
+        // Verify it contains expected sections
+        assert!(
+            toml_content.contains("[[ffi_boundary]]"),
+            "TOML should contain ffi_boundary section"
+        );
+        assert!(
+            toml_content.contains("[[resource_family]]"),
+            "TOML should contain resource_family section"
+        );
+        assert!(
+            toml_content.contains("[analysis]"),
+            "TOML should contain analysis section"
+        );
+    }
+
+    /// Objective: Verify that default config roundtrip preserves data.
+    /// Invariants: Serialized-then-deserialized config should match original.
+    #[test]
+    fn test_generate_default_config_roundtrip() {
+        let original = OmniScopeConfig::generate_default();
+
+        // Serialize to TOML
+        let toml_content =
+            toml::to_string_pretty(&original).expect("Config should serialize to valid TOML");
+
+        // Deserialize back
+        let deserialized: OmniScopeConfig =
+            toml::from_str(&toml_content).expect("TOML should deserialize to valid config");
+
+        // Verify roundtrip preserves data
+        assert_eq!(
+            deserialized.ffi_boundary.len(),
+            original.ffi_boundary.len(),
+            "Roundtrip should preserve FFI boundary count"
+        );
+        assert_eq!(
+            deserialized.resource_family.len(),
+            original.resource_family.len(),
+            "Roundtrip should preserve resource family count"
+        );
+        assert_eq!(
+            deserialized.analysis.cross_language, original.analysis.cross_language,
+            "Roundtrip should preserve cross_language setting"
+        );
+    }
+
+    // ========================================================================
+    // Validate Command Tests
+    // ========================================================================
+
+    /// Objective: Verify that load_from_file parses valid TOML config.
+    /// Invariants: Parsed config should match serialized config.
+    #[test]
+    fn test_load_from_file_valid_config() {
+        use std::io::Write;
+
+        // Create a temporary file with valid config
+        let mut temp_file = tempfile::NamedTempFile::new().expect("Should create temp file");
+
+        let config = OmniScopeConfig::generate_default();
+        let toml_content = toml::to_string_pretty(&config).expect("Config should serialize");
+
+        temp_file
+            .write_all(toml_content.as_bytes())
+            .expect("Should write to temp file");
+
+        // Load from file
+        let loaded_config = OmniScopeConfig::load_from_file(temp_file.path())
+            .expect("Should load valid config file");
+
+        // Verify loaded config matches original
+        assert_eq!(
+            loaded_config.ffi_boundary.len(),
+            config.ffi_boundary.len(),
+            "Loaded config should have same FFI boundary count"
+        );
+        assert_eq!(
+            loaded_config.resource_family.len(),
+            config.resource_family.len(),
+            "Loaded config should have same resource family count"
+        );
+    }
+
+    /// Objective: Verify that load_from_file handles invalid TOML.
+    /// Invariants: Should return error for invalid TOML content.
+    #[test]
+    fn test_load_from_file_invalid_toml() {
+        use std::io::Write;
+
+        // Create a temporary file with invalid TOML
+        let mut temp_file = tempfile::NamedTempFile::new().expect("Should create temp file");
+
+        temp_file
+            .write_all(b"this is not valid toml [[[")
+            .expect("Should write to temp file");
+
+        // Load from file should fail
+        let result = OmniScopeConfig::load_from_file(temp_file.path());
+        assert!(result.is_err(), "Should return error for invalid TOML");
+    }
+
+    /// Objective: Verify that load_from_file handles non-existent file.
+    /// Invariants: Should return error for non-existent file.
+    #[test]
+    fn test_load_from_file_nonexistent() {
+        let result =
+            OmniScopeConfig::load_from_file(std::path::Path::new("/nonexistent/file.toml"));
+        assert!(result.is_err(), "Should return error for non-existent file");
+    }
+
+    /// Objective: Verify that save_to_file writes valid TOML.
+    /// Invariants: Written file should be loadable and match original config.
+    #[test]
+    fn test_save_to_file() {
+        let config = OmniScopeConfig::generate_default();
+
+        // Create a temporary file path
+        let temp_dir = tempfile::tempdir().expect("Should create temp directory");
+        let file_path = temp_dir.path().join("test_config.toml");
+
+        // Save to file
+        config
+            .save_to_file(&file_path)
+            .expect("Should save config to file");
+
+        // Verify file exists
+        assert!(file_path.exists(), "Config file should exist after saving");
+
+        // Load from file and verify
+        let loaded_config =
+            OmniScopeConfig::load_from_file(&file_path).expect("Should load saved config");
+
+        assert_eq!(
+            loaded_config.ffi_boundary.len(),
+            config.ffi_boundary.len(),
+            "Loaded config should have same FFI boundary count"
         );
     }
 }

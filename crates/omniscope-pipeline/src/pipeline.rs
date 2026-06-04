@@ -12,7 +12,7 @@ use omniscope_pass::{
     PassManager, RaiiDropPass, RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
     SurfaceClassifierPass, WriteToImmutablePass,
 };
-use omniscope_types::AnalysisConfig;
+use omniscope_types::{AnalysisConfig, OmniScopeConfig};
 use std::time::Instant;
 
 /// Pipeline manager for orchestrating analysis
@@ -23,6 +23,8 @@ pub struct Pipeline {
     config: AnalysisConfig,
     /// The IR module to analyze
     ir_module: Option<IRModule>,
+    /// Optional FFI boundary and resource family configuration
+    omniscope_config: Option<OmniScopeConfig>,
 }
 
 impl Pipeline {
@@ -32,6 +34,7 @@ impl Pipeline {
             pass_manager: PassManager::new(),
             config: AnalysisConfig::default(),
             ir_module: None,
+            omniscope_config: None,
         }
     }
 
@@ -41,12 +44,31 @@ impl Pipeline {
             pass_manager: PassManager::new(),
             config,
             ir_module: None,
+            omniscope_config: None,
+        }
+    }
+
+    /// Creates a pipeline with full OmniScope configuration
+    pub fn with_omniscope_config(
+        config: AnalysisConfig,
+        omniscope_config: OmniScopeConfig,
+    ) -> Self {
+        Self {
+            pass_manager: PassManager::new(),
+            config,
+            ir_module: None,
+            omniscope_config: Some(omniscope_config),
         }
     }
 
     /// Returns the configuration
     pub fn config(&self) -> &AnalysisConfig {
         &self.config
+    }
+
+    /// Returns the OmniScope configuration, if any
+    pub fn omniscope_config(&self) -> Option<&OmniScopeConfig> {
+        self.omniscope_config.as_ref()
     }
 
     /// Sets the IR module to analyze
@@ -69,7 +91,12 @@ impl Pipeline {
         self.pass_manager.register(IRBehaviorSummaryPass::new());
         self.pass_manager.register(SummaryBuilderPass::new());
         self.pass_manager.register(StructuralInferencePass::new());
-        self.pass_manager.register(ContractGraphBuilderPass::new());
+        // Use configuration-aware pass if available
+        if let Some(config) = &self.omniscope_config {
+            self.pass_manager.register(ContractGraphBuilderPass::with_config(config.clone()));
+        } else {
+            self.pass_manager.register(ContractGraphBuilderPass::new());
+        }
         self.pass_manager.register(OwnershipSolverPass::new());
         self.pass_manager.register(IssueCandidateBuilderPass::new());
         self.pass_manager.register(IssueVerifierPass::new());
@@ -95,9 +122,10 @@ impl Pipeline {
     pub fn run(&mut self) -> Result<PipelineResult> {
         let start = Instant::now();
 
-        // Run all passes with shared context, injecting IR module if available
-        let (pass_results, pass_timings, issues) =
-            self.pass_manager.run_all_with_ir(self.ir_module.take())?;
+        // Run all passes with shared context, injecting IR module and configuration
+        let (pass_results, pass_timings, issues) = self
+            .pass_manager
+            .run_all_with_ir_and_config(self.ir_module.take(), self.omniscope_config.take())?;
 
         // Aggregate results
         let duration = start.elapsed();

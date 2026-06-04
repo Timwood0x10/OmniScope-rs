@@ -83,6 +83,29 @@ impl FamilyId {
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 
+    /// Create a custom family ID from a name.
+    ///
+    /// Uses a hash of the name to generate a unique ID that is
+    /// above `USER_FAMILY_START` to avoid collisions with built-in IDs.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the custom resource family.
+    ///
+    /// # Returns
+    /// A `FamilyId` with a unique hash-based ID.
+    pub fn custom(name: &str) -> Self {
+        // 使用 hash 生成唯一 ID
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        let hash = hasher.finish() as u32;
+        // 确保 ID 在 USER_FAMILY_START 范围内
+        let id = (hash % (u16::MAX as u32 - Self::USER_FAMILY_START as u32)) + Self::USER_FAMILY_START as u32;
+        FamilyId(id as u16)
+    }
+
     /// Returns a human-readable name for well-known family IDs.
     pub fn display_name(self) -> &'static str {
         match self {
@@ -131,6 +154,18 @@ pub enum FamilyKind {
     LibraryManaged,
     /// User-inferred family from model mining.
     UserDefined,
+    /// File descriptor based resource (open/close, dup, pipe).
+    /// File descriptors are integer handles to OS resources.
+    FileDescriptor,
+    /// Socket-based resource (socket/accept/close).
+    /// Sockets are network communication endpoints.
+    Socket,
+    /// Process handle resource (fork/exec/waitpid).
+    /// Process handles represent OS processes.
+    ProcessHandle,
+    /// Runtime-managed resource (Go runtime, Java runtime).
+    /// Resources managed by language runtime systems.
+    RuntimeManaged,
 }
 
 /// Lifetime domain for a resource family.
@@ -393,14 +428,14 @@ pub static FAMILY_RUST_RAW_OWNERSHIP: ResourceFamily = ResourceFamily {
 /// File descriptor family: open/creat/socket/accept/dup/pipe + close.
 /// File descriptors are integer handles to OS resources (files, sockets, pipes).
 /// Unlike pointer-based resources, fd values are small integers that cannot
-/// be dereferenced directly. This family uses ManualHeap kind because
-/// file descriptors require explicit close() to release OS resources.
+/// be dereferenced directly. This family uses FileDescriptor kind because
+/// file descriptors are handle-based resources, not memory.
 /// No compatible releases — fd values from different families cannot be
 /// used interchangeably (e.g., socket fd cannot be closed with fclose).
 pub static FAMILY_FILE_DESCRIPTOR: ResourceFamily = ResourceFamily {
     id: FamilyId::FILE_DESCRIPTOR,
     name: "file_descriptor",
-    kind: FamilyKind::ManualHeap,
+    kind: FamilyKind::FileDescriptor,
     lifetime: LifetimeDomain::ExplicitFree,
     compatible_releases: &[],
 };

@@ -29,7 +29,10 @@ pub use call_graph_types::{
     is_dangerous, is_libc, is_sink, is_source, CallGraphEdge, CallGraphNode, CrossLangEdge,
     FunctionKind,
 };
-pub use config::{AnalysisConfig, Language, OutputFormat};
+pub use config::{
+    AnalysisConfig, AnalysisOptions, ConfigError, FFIBoundaryConfig, Language, OmniScopeConfig,
+    OutputFormat, ProjectConfig, ResourceFamilyConfig,
+};
 
 // Re-exports — Resource contract types
 pub use effect::{ArgIndex, Effect, FunctionOrigin, LanguageHint, VerifierVerdict};

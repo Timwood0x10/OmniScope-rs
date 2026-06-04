@@ -1,0 +1,49 @@
+# OmniScope Configuration File
+# This file configures the OmniScope static analyzer for your project.
+
+[project]
+name = "my_project"
+description = "Example project configuration for OmniScope"
+
+# FFI boundary definitions
+# Define which functions cross language boundaries
+[[ffi_boundary]]
+from = "c"
+to = "cpp"
+functions = ["c_fft_forward", "c_hash", "c_matrix_multiply"]
+description = "C -> C++ bridge functions"
+
+[[ffi_boundary]]
+from = "zig"
+to = "c"
+functions = ["c_alloc_buffer", "c_free_buffer"]
+description = "Zig -> C bridge functions"
+
+[[ffi_boundary]]
+from = "rust"
+to = "c"
+functions = ["rust_callback_handler"]
+description = "Rust -> C callback bridge"
+
+# Custom resource family definitions
+# Define your own resource families for custom allocators or libraries
+[[resource_family]]
+name = "custom_allocator"
+kind = "ManualHeap"
+acquire = ["my_alloc", "my_calloc", "my_realloc"]
+release = ["my_free"]
+compatible_releases = []
+
+[[resource_family]]
+name = "database_connection"
+kind = "LibraryManaged"
+acquire = ["db_connect", "db_open"]
+release = ["db_disconnect", "db_close"]
+compatible_releases = []
+
+# Analysis options
+[analysis]
+cross_language = true
+cross_family = true
+leak_detection = true
+use_after_free = true

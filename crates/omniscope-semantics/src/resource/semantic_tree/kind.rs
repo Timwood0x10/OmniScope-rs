@@ -143,6 +143,165 @@ pub enum SemanticKind {
     /// These functions are part of the Zig runtime and should be suppressed
     /// in WriteToImmutable analysis to reduce false positives.
     RuntimeInternal,
+
+    // ── New patterns for multi-key semantic queries ──
+    /// Resource is managed by a runtime (e.g., GC, reference counting system).
+    /// Not a local leak — ownership transferred to runtime.
+    RuntimeManagedResource,
+    /// Resource is not memory (e.g., file descriptor, socket, handle).
+    /// Memory leak detection should not apply.
+    NonMemoryResource,
+    /// Resource is stored to an owner structure (e.g., struct field, container).
+    /// Not a local leak — ownership transferred to container.
+    StoredToOwner,
+    /// Resource is stored to runtime-managed structure (e.g., GC heap, global).
+    /// Not a local leak — ownership transferred to runtime.
+    StoredToRuntime,
+    /// Resource escapes to caller (returned from function).
+    /// Not a local leak — caller is responsible.
+    EscapedToCaller,
+    /// Resource escapes via out-parameter.
+    /// Not a local leak — caller is responsible.
+    EscapedToOutParam,
+    /// Out-parameter is initialized with fallible operation.
+    /// May be NULL on error path — not necessarily a bug.
+    FallibleOutParamInit,
+    /// Value is NULL on error path (defensive NULLing).
+    /// Expected pattern for fallible operations.
+    NullOnErrorPath,
+    /// Resource is released on all exit paths.
+    /// No leak — cleanup is complete.
+    ReleaseOnAllExitPaths,
+    /// Resource is alias of already-released resource.
+    /// Double-free detection should consider this.
+    AliasOfReleased,
+}
+
+/// Semantic key for querying the semantic tree.
+///
+/// Different key types allow querying by different aspects of the program:
+/// - Symbol: function/variable name
+/// - Value: SSA register name
+/// - Resource: allocation site ID
+/// - Path: (function_name, path_id) for control-flow-sensitive queries
+/// - Owner: owning structure/variable name
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SemanticKey {
+    /// Query by symbol name (function, variable, type).
+    Symbol(String),
+    /// Query by SSA value register name.
+    Value(String),
+    /// Query by resource allocation site ID.
+    Resource(u64),
+    /// Query by (function_name, path_id) for path-sensitive analysis.
+    Path(String, u64),
+    /// Query by owner name (container, structure).
+    Owner(String),
+}
+
+impl SemanticKey {
+    /// Creates a Symbol key.
+    pub fn symbol(name: &str) -> Self {
+        Self::Symbol(name.to_string())
+    }
+
+    /// Creates a Value key.
+    pub fn value(reg: &str) -> Self {
+        Self::Value(reg.to_string())
+    }
+
+    /// Creates a Resource key.
+    pub fn resource(id: u64) -> Self {
+        Self::Resource(id)
+    }
+
+    /// Creates a Path key.
+    pub fn path(func: &str, id: u64) -> Self {
+        Self::Path(func.to_string(), id)
+    }
+
+    /// Creates an Owner key.
+    pub fn owner(name: &str) -> Self {
+        Self::Owner(name.to_string())
+    }
+
+    /// Converts a string key to a SemanticKey (for backward compatibility).
+    /// This allows existing code that uses String keys to work with the new system.
+    pub fn from_string(key: &str) -> Self {
+        // Try to parse as different key types
+        if key.starts_with("resource:") {
+            if let Some(id_str) = key.strip_prefix("resource:") {
+                if let Ok(id) = id_str.parse::<u64>() {
+                    return Self::Resource(id);
+                }
+            }
+        } else if key.starts_with("owner:") {
+            if let Some(name) = key.strip_prefix("owner:") {
+                return Self::Owner(name.to_string());
+            }
+        } else if key.starts_with("path:") {
+            if let Some(rest) = key.strip_prefix("path:") {
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    if let Ok(id) = parts[1].parse::<u64>() {
+                        return Self::Path(parts[0].to_string(), id);
+                    }
+                }
+            }
+        } else if key.starts_with("value:") {
+            if let Some(reg) = key.strip_prefix("value:") {
+                return Self::Value(reg.to_string());
+            }
+        }
+        // Default to Symbol for backward compatibility
+        Self::Symbol(key.to_string())
+    }
+
+    /// Converts the key to a string representation.
+    pub fn to_key_string(&self) -> String {
+        match self {
+            Self::Symbol(name) => name.clone(),
+            Self::Value(reg) => format!("value:{reg}"),
+            Self::Resource(id) => format!("resource:{id}"),
+            Self::Path(func, id) => format!("path:{func}:{id}"),
+            Self::Owner(name) => format!("owner:{name}"),
+        }
+    }
+
+    /// Returns true if this key is a symbol key.
+    pub fn is_symbol(&self) -> bool {
+        matches!(self, Self::Symbol(_))
+    }
+
+    /// Returns the symbol name if this is a Symbol key.
+    pub fn as_symbol(&self) -> Option<&str> {
+        match self {
+            Self::Symbol(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Returns the resource ID if this is a Resource key.
+    pub fn as_resource(&self) -> Option<u64> {
+        match self {
+            Self::Resource(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Returns the owner name if this is an Owner key.
+    pub fn as_owner(&self) -> Option<&str> {
+        match self {
+            Self::Owner(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for SemanticKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_key_string())
+    }
 }
 
 impl SemanticKind {
@@ -157,6 +316,9 @@ impl SemanticKind {
                 | SemanticKind::CppSharedPtr
                 | SemanticKind::CsharpSafeHandle
                 | SemanticKind::RuntimeInternal
+                | SemanticKind::StoredToOwner
+                | SemanticKind::StoredToRuntime
+                | SemanticKind::RuntimeManagedResource
         )
     }
 
@@ -177,6 +339,11 @@ impl SemanticKind {
                 | SemanticKind::CppDestructor
                 | SemanticKind::CsharpSafeHandle
                 | SemanticKind::JavaLocalRef
+                | SemanticKind::EscapedToCaller
+                | SemanticKind::EscapedToOutParam
+                | SemanticKind::StoredToOwner
+                | SemanticKind::StoredToRuntime
+                | SemanticKind::RuntimeManagedResource
         )
     }
 
@@ -195,6 +362,9 @@ impl SemanticKind {
                 | SemanticKind::CsharpSafeHandle
                 | SemanticKind::CsharpFinalizer
                 | SemanticKind::JavaGlobalRef
+                | SemanticKind::ReleaseOnAllExitPaths
+                | SemanticKind::AliasOfReleased
+                | SemanticKind::RuntimeManagedResource
         )
     }
 
@@ -220,6 +390,12 @@ impl SemanticKind {
                 | SemanticKind::CsharpPinvokeMarshal
                 | SemanticKind::JavaGlobalRef
                 | SemanticKind::JavaWeakRef
+                | SemanticKind::RuntimeManagedResource
+                | SemanticKind::NonMemoryResource
+                | SemanticKind::StoredToOwner
+                | SemanticKind::StoredToRuntime
+                | SemanticKind::ReleaseOnAllExitPaths
+                | SemanticKind::AliasOfReleased
         )
     }
 
@@ -396,6 +572,18 @@ impl SemanticKind {
 
             // ── Runtime internal patterns (0.9) ──
             SemanticKind::RuntimeInternal => 0.9, // Compiler/runtime managed
+
+            // ── New patterns for multi-key semantic queries ──
+            SemanticKind::RuntimeManagedResource => 0.8, // GC-managed, safe
+            SemanticKind::NonMemoryResource => 0.9,      // Not memory, safe
+            SemanticKind::StoredToOwner => 0.7,          // Ownership transferred
+            SemanticKind::StoredToRuntime => 0.7,        // Ownership transferred
+            SemanticKind::EscapedToCaller => 0.6,        // Caller responsible
+            SemanticKind::EscapedToOutParam => 0.6,      // Caller responsible
+            SemanticKind::FallibleOutParamInit => 0.5,   // May be NULL
+            SemanticKind::NullOnErrorPath => 0.8,        // Defensive NULLing
+            SemanticKind::ReleaseOnAllExitPaths => 0.9,  // Cleanup complete
+            SemanticKind::AliasOfReleased => 0.3,        // Double-free risk
 
             // ── Default ──
             SemanticKind::Unknown => 0.5,

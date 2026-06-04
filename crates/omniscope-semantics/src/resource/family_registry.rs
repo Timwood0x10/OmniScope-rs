@@ -143,6 +143,59 @@ impl FamilyRegistry {
         self.families.len()
     }
 
+    /// Load resource families from configuration.
+    ///
+    /// Registers custom resource families defined in the configuration file,
+    /// including their acquire and release symbols.
+    ///
+    /// # Arguments
+    /// * `config` - The OmniScope configuration containing resource family definitions.
+    pub fn load_from_config(&mut self, config: &omniscope_types::config::OmniScopeConfig) {
+        for family_config in &config.resource_family {
+            let family_id = FamilyId::custom(&family_config.name);
+            let family = ResourceFamilyOwned {
+                id: family_id,
+                name: family_config.name.clone(),
+                kind: family_config.kind,
+                lifetime: omniscope_types::LifetimeDomain::ExplicitFree,
+                compatible_releases: family_config
+                    .compatible_releases
+                    .iter()
+                    .map(|r| FamilyId::custom(r))
+                    .collect(),
+            };
+
+            self.add_user_family(family);
+
+            // 注册 acquire 函数
+            for acquire in &family_config.acquire {
+                self.add_symbol(
+                    acquire,
+                    family_id,
+                    SymbolEffect::Acquire,
+                    LanguageHint::Unknown,
+                );
+            }
+
+            // 注册 release 函数
+            for release in &family_config.release {
+                self.add_symbol(
+                    release,
+                    family_id,
+                    SymbolEffect::Release,
+                    LanguageHint::Unknown,
+                );
+            }
+
+            tracing::debug!(
+                family = %family_config.name,
+                acquire_count = family_config.acquire.len(),
+                release_count = family_config.release.len(),
+                "Loaded resource family from config"
+            );
+        }
+    }
+
     fn register_builtin_families(&mut self) {
         for family in BUILTIN_FAMILIES {
             self.families.insert(

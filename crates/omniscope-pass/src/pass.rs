@@ -4,6 +4,7 @@
 
 use omniscope_core::{Diagnostic, Fact, Issue, MemoryPool, Result};
 use omniscope_ir::IRModule;
+use omniscope_types::OmniScopeConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -175,6 +176,8 @@ pub struct PassContext {
     /// temporary strings and data structures. The pool is reset at the
     /// start of each pass run to reclaim memory for the next pass.
     pool: MemoryPool,
+    /// Optional configuration for FFI boundaries and resource families.
+    config: Option<OmniScopeConfig>,
 }
 
 impl Clone for PassContext {
@@ -195,6 +198,7 @@ impl Clone for PassContext {
             suppressed_issues: self.suppressed_issues.clone(),
             next_issue_id: self.next_issue_id,
             pool: MemoryPool::new(),
+            config: self.config.clone(),
         }
     }
 }
@@ -211,7 +215,28 @@ impl PassContext {
             suppressed_issues: Vec::new(),
             next_issue_id: 1,
             pool: MemoryPool::new(),
+            config: None,
         }
+    }
+
+    /// Creates a new pass context with configuration
+    pub fn with_config(config: OmniScopeConfig) -> Self {
+        Self {
+            ir_module: None,
+            shared: Arc::new(HashMap::new()),
+            diagnostics: Vec::new(),
+            facts: Vec::new(),
+            issues: Vec::new(),
+            suppressed_issues: Vec::new(),
+            next_issue_id: 1,
+            pool: MemoryPool::new(),
+            config: Some(config),
+        }
+    }
+
+    /// Returns the configuration, if any.
+    pub fn config(&self) -> Option<&OmniScopeConfig> {
+        self.config.as_ref()
     }
 
     /// Returns a mutable reference to the arena-based memory pool.
@@ -382,6 +407,77 @@ impl PassContext {
         EmitOutcome::Allowed { id }
     }
 
+    /// Emits an issue into the context, checking the SRT gate with SemanticKey support.
+    ///
+    /// This method supports multi-key queries by checking both string-based
+    /// and SemanticKey-based resolutions. It maintains backward compatibility
+    /// while supporting new key types (Resource, Path, Owner, Value).
+    ///
+    /// # Arguments
+    ///
+    /// * `issue` — The issue to emit.
+    /// * `string_resolutions` — Legacy string-based resolutions map.
+    /// * `key_resolutions` — New SemanticKey-based resolutions map.
+    ///
+    /// # Returns
+    ///
+    /// `EmitOutcome::Allowed` if the issue passes the gate,
+    /// or `EmitOutcome::Suppressed(reason)` if the SRT gate suppresses it.
+    pub fn emit_issue_with_keys(
+        &mut self,
+        issue: Issue,
+        string_resolutions: Option<
+            &std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>,
+        >,
+        key_resolutions: Option<
+            &std::collections::HashMap<
+                omniscope_semantics::SemanticKey,
+                Vec<omniscope_semantics::SemanticKind>,
+            >,
+        >,
+    ) -> EmitOutcome {
+        let id = issue.id;
+
+        // Check SRT gate if resolutions are available.
+        let gate_verdict = match (string_resolutions, key_resolutions) {
+            (Some(string_res), Some(key_res)) => {
+                // Use hybrid check when both maps are available
+                crate::resource::issue_gate::check_issue_with_hybrid_keys(
+                    &issue, string_res, key_res,
+                )
+            }
+            (Some(string_res), None) => {
+                // Only string-based resolutions available
+                crate::resource::issue_gate::check_issue_with_kinds(&issue, string_res)
+            }
+            (None, Some(key_res)) => {
+                // Only SemanticKey-based resolutions available
+                crate::resource::issue_gate::check_issue_with_keys(&issue, key_res)
+            }
+            (None, None) => {
+                // No resolutions available — allow the issue
+                crate::resource::issue_gate::GateVerdict::Allow
+            }
+        };
+
+        if !gate_verdict.is_allowed() {
+            tracing::debug!(
+                "IssueGate suppressed {:?}: {} [{}]",
+                issue.kind,
+                issue.description,
+                gate_verdict.reason(),
+            );
+            self.suppressed_issues.push(issue);
+            return EmitOutcome::Suppressed {
+                id,
+                reason: gate_verdict.reason().to_string(),
+            };
+        }
+
+        self.issues.push(issue);
+        EmitOutcome::Allowed { id }
+    }
+
     /// Returns all suppressed issues (filtered by SRT gate).
     pub fn suppressed_issues(&self) -> &[Issue] {
         &self.suppressed_issues
@@ -427,6 +523,7 @@ impl PassContext {
             suppressed_issues: Vec::new(),     // Empty - pass will produce its own
             next_issue_id: self.next_issue_id, // Copy starting ID
             pool: MemoryPool::new(),           // Fresh pool for this thread
+            config: self.config.clone(),       // Share configuration
         }
     }
 
@@ -461,6 +558,11 @@ impl PassContext {
         // Inherit ir_module if we don't have one yet
         if self.ir_module.is_none() {
             self.ir_module = other.ir_module.clone();
+        }
+
+        // Inherit config if we don't have one yet
+        if self.config.is_none() {
+            self.config = other.config;
         }
 
         // Advance issue ID counter past the highest used ID

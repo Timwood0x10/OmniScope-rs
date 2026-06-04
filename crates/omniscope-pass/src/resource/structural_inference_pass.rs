@@ -175,6 +175,8 @@ impl Pass for StructuralInferencePass {
         // This populates `srt_resolutions` so that `PassContext::emit_issue`
         // can enforce the SRT gate. Without this, the gate is a no-op.
         let mut srt_resolutions: HashMap<String, Vec<SemanticKind>> = HashMap::new();
+        let mut srt_key_resolutions: HashMap<omniscope_semantics::SemanticKey, Vec<SemanticKind>> =
+            HashMap::new();
 
         for (_, summary) in store.iter() {
             let symbol = &summary.name;
@@ -265,7 +267,11 @@ impl Pass for StructuralInferencePass {
             }
 
             if !kinds.is_empty() {
-                srt_resolutions.insert(symbol.clone(), kinds);
+                srt_resolutions.insert(symbol.clone(), kinds.clone());
+
+                // Also populate SemanticKey-based resolutions
+                let symbol_key = omniscope_semantics::SemanticKey::symbol(symbol);
+                srt_key_resolutions.insert(symbol_key, kinds);
             }
         }
 
@@ -290,12 +296,20 @@ impl Pass for StructuralInferencePass {
                     srt_resolutions
                         .entry(caller.to_string())
                         .or_insert_with(|| vec![SemanticKind::FromParameter]);
+
+                    // Also populate SemanticKey-based resolutions
+                    let caller_key = omniscope_semantics::SemanticKey::symbol(caller);
+                    srt_key_resolutions
+                        .entry(caller_key)
+                        .or_insert_with(|| vec![SemanticKind::FromParameter]);
                 }
             }
         }
 
         let srt_entry_count = srt_resolutions.len();
+        let srt_key_entry_count = srt_key_resolutions.len();
         ctx.store("srt_resolutions", srt_resolutions);
+        ctx.store("srt_key_resolutions", srt_key_resolutions);
 
         let mut result = PassResult::new(self.name())
             .with_nodes(raw_facts.len())
@@ -308,6 +322,7 @@ impl Pass for StructuralInferencePass {
         result.add_stat("static_lifetime_inferences", static_lifetime_count);
         result.add_stat("behavior_override_count", behavior_override_count);
         result.add_stat("srt_resolution_entries", srt_entry_count);
+        result.add_stat("srt_key_resolution_entries", srt_key_entry_count);
 
         Ok(result)
     }

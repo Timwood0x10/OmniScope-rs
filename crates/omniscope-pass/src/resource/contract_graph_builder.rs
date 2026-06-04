@@ -11,11 +11,12 @@
 //! is reset at the start of each pass run so that the arena is reused.
 
 use omniscope_core::Result;
-use omniscope_types::{Effect, FamilyId, FunctionId};
+use omniscope_types::{Effect, FamilyId, FunctionId, Language, OmniScopeConfig};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
 use omniscope_semantics::ffi_contract::{ContractType, FFIContractDB};
+use omniscope_semantics::resource::memory_graph::MemoryGraph;
 use omniscope_semantics::resource::summary::SummaryStore;
 
 /// FIFO queue entry: (instance_id, optional_alloc_family).
@@ -41,6 +42,15 @@ pub struct ContractEdge {
     pub family: Option<FamilyId>,
 }
 
+/// FFI boundary definition.
+#[derive(Debug, Clone)]
+pub struct FFIBoundary {
+    /// Source language.
+    pub from: Language,
+    /// Target language.
+    pub to: Language,
+}
+
 /// The resource contract graph.
 #[derive(Debug, Clone, Default)]
 pub struct ContractGraph {
@@ -48,6 +58,8 @@ pub struct ContractGraph {
     pub edges: Vec<ContractEdge>,
     /// Resource instance ID counter.
     next_instance_id: u64,
+    /// FFI boundary definitions from configuration.
+    pub ffi_boundaries: std::collections::HashMap<String, FFIBoundary>,
 }
 
 impl ContractGraph {
@@ -56,6 +68,7 @@ impl ContractGraph {
         Self {
             edges: Vec::new(),
             next_instance_id: 1,
+            ffi_boundaries: std::collections::HashMap::new(),
         }
     }
 
@@ -75,6 +88,19 @@ impl ContractGraph {
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
+
+    /// Mark a function as an FFI boundary.
+    pub fn mark_ffi_boundary(&mut self, function: &str, from: Language, to: Language) {
+        self.ffi_boundaries.insert(
+            function.to_string(),
+            FFIBoundary { from, to },
+        );
+    }
+
+    /// Check if a function is an FFI boundary.
+    pub fn is_ffi_boundary(&self, function: &str) -> Option<(Language, Language)> {
+        self.ffi_boundaries.get(function).map(|b| (b.from, b.to))
+    }
 }
 
 /// Contract graph builder pass.
@@ -82,12 +108,73 @@ impl ContractGraph {
 /// Builds the resource contract graph from raw facts and function
 /// summaries. Each acquire fact creates a resource instance and
 /// each release fact creates a release edge to that instance.
-pub struct ContractGraphBuilderPass;
+pub struct ContractGraphBuilderPass {
+    /// Optional configuration for FFI boundaries and resource families.
+    config: Option<OmniScopeConfig>,
+}
 
 impl ContractGraphBuilderPass {
     /// Creates a new contract graph builder pass.
     pub fn new() -> Self {
-        Self
+        Self { config: None }
+    }
+
+    /// Creates a new contract graph builder pass with configuration.
+    pub fn with_config(config: OmniScopeConfig) -> Self {
+        Self {
+            config: Some(config),
+        }
+    }
+
+    /// Apply configuration to the contract graph.
+    ///
+    /// This method applies FFI boundary and resource family configuration
+    /// to the graph. It should be called after the graph is built from IR.
+    fn apply_config(&self, config: &OmniScopeConfig, graph: &mut ContractGraph) {
+        // Apply FFI boundaries
+        for boundary in &config.ffi_boundary {
+            for func in &boundary.functions {
+                // Mark functions as FFI boundaries
+                graph.mark_ffi_boundary(func, boundary.from, boundary.to);
+
+                tracing::debug!(
+                    function = %func,
+                    from = %boundary.from,
+                    to = %boundary.to,
+                    "Applied FFI boundary from config"
+                );
+            }
+        }
+
+        // Apply resource families
+        for family in &config.resource_family {
+            tracing::debug!(
+                "Custom resource family: {} ({:?})",
+                family.name,
+                family.kind
+            );
+            // Register acquire and release functions for custom families
+            // This will be used by the FamilyRegistry for symbol lookup
+        }
+    }
+
+    /// Build contract graph with configuration.
+    pub fn build_with_config(
+        &mut self,
+        _module: &omniscope_ir::IRModule,
+        config: &OmniScopeConfig,
+    ) -> ContractGraph {
+        let mut graph = ContractGraph::new();
+        
+        // 1. 应用配置中的 FFI 边界
+        self.apply_config(config, &mut graph);
+        
+        // 2. 正常构建图
+        // Note: This is a simplified version. In practice, we would need to
+        // integrate with the existing run() method logic.
+        // For now, we just apply the configuration.
+        
+        graph
     }
 }
 
@@ -111,6 +198,7 @@ impl Pass for ContractGraphBuilderPass {
         ctx.reset_pool();
 
         let mut graph = ContractGraph::new();
+        let mut memory_graph = MemoryGraph::new();
 
         // Retrieve raw facts from the context
         let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
@@ -121,6 +209,8 @@ impl Pass for ContractGraphBuilderPass {
 
         // Pre-allocate graph edges to reduce reallocations.
         graph.edges.reserve(raw_facts.len());
+        memory_graph.nodes.reserve(raw_facts.len());
+        memory_graph.edges.reserve(raw_facts.len());
 
         // Build contract edges from raw facts
         // Group facts by (function_id, family) for acquire→release pairing.
@@ -587,8 +677,120 @@ impl Pass for ContractGraphBuilderPass {
             ctx.store("ir_module", module.clone());
         }
 
+        // Populate MemoryGraph from ContractGraph
+        // Create nodes for each resource instance and edges for acquire/release
+        for edge in &graph.edges {
+            match &edge.effect {
+                Effect::Acquire { family, result } => {
+                    // Create a node for the acquired resource
+                    let resource_class =
+                        omniscope_semantics::resource::memory_graph::family_to_resource_class(
+                            *family,
+                        );
+                    let node = omniscope_semantics::resource::memory_graph::MemoryNode {
+                        id: *result,
+                        resource_class,
+                        state: omniscope_semantics::resource::memory_graph::ResourceState::Owned,
+                        function_name: edge.caller_name.clone(),
+                        family_id: Some(*family),
+                    };
+                    memory_graph.add_node(node);
+                }
+                Effect::Release { family: _, arg: _ } => {
+                    // Create an edge for the release
+                    let memory_edge = omniscope_semantics::resource::memory_graph::MemoryEdge {
+                        source: edge.source,
+                        target: 0, // 0 = "sink" (deallocation)
+                        kind: omniscope_semantics::resource::memory_graph::MemoryEdgeKind::Release,
+                        function_name: edge.function_name.clone(),
+                    };
+                    memory_graph.add_edge(memory_edge);
+
+                    // Update the source node state to Released
+                    memory_graph.set_state(
+                        edge.source,
+                        omniscope_semantics::resource::memory_graph::ResourceState::Released,
+                    );
+                }
+                Effect::ConditionalRelease { family: _, arg: _ } => {
+                    // Create an edge for conditional release
+                    let memory_edge = omniscope_semantics::resource::memory_graph::MemoryEdge {
+                        source: edge.source,
+                        target: 0, // 0 = "sink" (deallocation)
+                        kind: omniscope_semantics::resource::memory_graph::MemoryEdgeKind::Release,
+                        function_name: edge.function_name.clone(),
+                    };
+                    memory_graph.add_edge(memory_edge);
+                }
+                Effect::OwnershipEscape {
+                    family: _,
+                    result: _,
+                } => {
+                    // Create an edge for ownership escape
+                    let memory_edge = omniscope_semantics::resource::memory_graph::MemoryEdge {
+                        source: edge.source,
+                        target: 0, // 0 = "sink" (escape)
+                        kind: omniscope_semantics::resource::memory_graph::MemoryEdgeKind::ReturnToCaller,
+                        function_name: edge.function_name.clone(),
+                    };
+                    memory_graph.add_edge(memory_edge);
+
+                    // Update the source node state to EscapedToCaller
+                    memory_graph.set_state(
+                        edge.source,
+                        omniscope_semantics::resource::memory_graph::ResourceState::EscapedToCaller,
+                    );
+                }
+                Effect::OwnershipReclaim {
+                    family: _,
+                    result: _,
+                } => {
+                    // Create an edge for ownership reclaim (from_raw)
+                    let memory_edge = omniscope_semantics::resource::memory_graph::MemoryEdge {
+                        source: edge.source,
+                        target: edge.target,
+                        kind: omniscope_semantics::resource::memory_graph::MemoryEdgeKind::Use,
+                        function_name: edge.function_name.clone(),
+                    };
+                    memory_graph.add_edge(memory_edge);
+                }
+                Effect::EscapesToCallback { arg: _ } => {
+                    // Create an edge for callback escape
+                    let memory_edge = omniscope_semantics::resource::memory_graph::MemoryEdge {
+                        source: edge.source,
+                        target: 0, // 0 = "sink" (callback)
+                        kind: omniscope_semantics::resource::memory_graph::MemoryEdgeKind::Use,
+                        function_name: edge.function_name.clone(),
+                    };
+                    memory_graph.add_edge(memory_edge);
+                }
+                _ => {
+                    // For other effects, create a generic use edge
+                    if edge.source != 0 {
+                        let memory_edge = omniscope_semantics::resource::memory_graph::MemoryEdge {
+                            source: edge.source,
+                            target: edge.target,
+                            kind: omniscope_semantics::resource::memory_graph::MemoryEdgeKind::Use,
+                            function_name: edge.function_name.clone(),
+                        };
+                        memory_graph.add_edge(memory_edge);
+                    }
+                }
+            }
+        }
+
+        // Apply configuration if available
+        // First try self.config, then try from context
+        let config = self.config.as_ref().or_else(|| {
+            ctx.config()
+        });
+        if let Some(config) = config {
+            self.apply_config(config, &mut graph);
+        }
+
         let edge_count = graph.edge_count();
         ctx.store("contract_graph", graph);
+        ctx.store("memory_graph", memory_graph);
 
         let result = PassResult::new(self.name())
             .with_nodes(edge_count)

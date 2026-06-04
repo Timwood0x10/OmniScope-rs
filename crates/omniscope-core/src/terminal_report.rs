@@ -177,6 +177,12 @@ impl TerminalReporter {
             IssueCandidateKind::InvalidBorrowedFree => {
                 self.format_invalid_borrowed_free(candidate, verdict, &badge)
             }
+            IssueCandidateKind::UncheckedFfiReturn => {
+                self.format_unchecked_ffi_return(candidate, verdict, &badge)
+            }
+            IssueCandidateKind::NullDereference => {
+                self.format_null_dereference(candidate, verdict, &badge)
+            }
         }
     }
 
@@ -336,6 +342,32 @@ impl TerminalReporter {
         let family = format_family_label(candidate.alloc_family, self.use_color);
         format!(
             "{badge} invalid free of borrowed pointer: borrowed pointer freed in '{}' ({})",
+            candidate.alloc_function, family
+        )
+    }
+
+    fn format_unchecked_ffi_return(
+        &self,
+        candidate: &IssueCandidate,
+        _verdict: VerifierVerdict,
+        badge: &str,
+    ) -> String {
+        let family = format_family_label(candidate.alloc_family, self.use_color);
+        format!(
+            "{badge} unchecked FFI return value: unchecked return from '{}' ({})",
+            candidate.alloc_function, family
+        )
+    }
+
+    fn format_null_dereference(
+        &self,
+        candidate: &IssueCandidate,
+        _verdict: VerifierVerdict,
+        badge: &str,
+    ) -> String {
+        let family = format_family_label(candidate.alloc_family, self.use_color);
+        format!(
+            "{badge} null pointer dereference: potential null dereference in '{}' ({})",
             candidate.alloc_function, family
         )
     }

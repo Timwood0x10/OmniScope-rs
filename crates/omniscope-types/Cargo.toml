@@ -13,6 +13,7 @@ categories = ["development-tools", "development-tools::debugging"]
 [dependencies]
 # Serialization
 serde = { workspace = true }
+toml = { workspace = true }
 
 # Collections
 indexmap = { workspace = true }
@@ -20,6 +21,9 @@ smallvec = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+
+# Configuration file support
+dirs = "5"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

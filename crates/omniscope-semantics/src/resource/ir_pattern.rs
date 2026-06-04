@@ -171,6 +171,39 @@ pub enum BehaviorPattern {
         /// Index of the out-param argument.
         out_arg_index: u32,
     },
+
+    // ── New patterns for multi-key semantic queries ──
+    /// Resource is stored to an owner structure (struct field, container).
+    /// Pattern: `store ptr %resource, ptr %owner_field`
+    /// Indicates ownership transfer to container — not a local leak.
+    StoreToOwner {
+        /// The owner field or container being stored to.
+        owner_field: String,
+    },
+
+    /// Resource is stored to runtime-managed structure (GC heap, global).
+    /// Pattern: `store ptr %resource, ptr @global` or `store ptr %resource, ptr %gc_root`
+    /// Indicates ownership transfer to runtime — not a local leak.
+    StoreToRuntime {
+        /// The runtime-managed target (global, GC root, etc.).
+        runtime_target: String,
+    },
+
+    /// Resource escapes to caller via return or out-parameter.
+    /// Pattern: `ret ptr %resource` or `store ptr %resource, ptr %out_param`
+    /// Caller is responsible for cleanup — not a local leak.
+    ResourceEscape {
+        /// How the resource escapes: return value or out-parameter.
+        escape_type: EscapeType,
+    },
+
+    /// Resource is released on all exit paths.
+    /// Pattern: `call @release` in all branches before `ret`
+    /// No leak — cleanup is complete on all paths.
+    ReleaseOnAllExitPaths {
+        /// The release function called.
+        release_function: String,
+    },
 }
 
 /// Category for POSIX non-memory operations (R-4).
@@ -184,6 +217,15 @@ pub enum PosixOpCategory {
     Process,
     /// Other non-memory operations: time, signal, etc.
     Other,
+}
+
+/// How a resource escapes from a function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EscapeType {
+    /// Resource is returned from the function.
+    ReturnValue,
+    /// Resource is stored to an out-parameter.
+    OutParameter,
 }
 
 /// Summary of a function's behavior derived from its IR instruction stream.
@@ -1007,6 +1049,235 @@ fn is_release_callee(name: &str) -> bool {
         || name.contains("dealloc")
         || name.contains("release")
         || name.contains("destroy")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// New pattern detectors for multi-key semantic queries
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Detect StoreToOwner pattern: `store ptr %resource, ptr %owner_field`
+/// Resource is stored to a struct field or container — ownership transfer.
+fn detect_store_to_owner(body: &FunctionBody) -> Option<BehaviorPattern> {
+    let store_insts = body.instructions_of_kind(IRInstructionKind::Store);
+
+    for store in &store_insts {
+        // Check if storing a pointer to a field (getelementptr result)
+        if store.operands.len() >= 2 {
+            let stored_value = &store.operands[0];
+            let store_target = &store.operands[1];
+
+            // Check if the stored value comes from a call or allocation
+            let comes_from_alloc = body.instructions.iter().any(|i| {
+                (i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::Alloca)
+                    && i.dest.as_deref() == Some(stored_value.as_str())
+            });
+
+            if comes_from_alloc {
+                // Check if the target is a field access (getelementptr)
+                let is_field_access = body.instructions.iter().any(|i| {
+                    i.kind == IRInstructionKind::GetElementPtr
+                        && i.dest.as_deref() == Some(store_target.as_str())
+                });
+
+                if is_field_access {
+                    return Some(BehaviorPattern::StoreToOwner {
+                        owner_field: store_target.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect StoreToRuntime pattern: `store ptr %resource, ptr @global` or `store ptr %resource, ptr %gc_root`
+/// Resource is stored to runtime-managed structure — ownership transfer to runtime.
+fn detect_store_to_runtime(body: &FunctionBody) -> Option<BehaviorPattern> {
+    let store_insts = body.instructions_of_kind(IRInstructionKind::Store);
+
+    for store in &store_insts {
+        if store.operands.len() >= 2 {
+            let stored_value = &store.operands[0];
+            let store_target = &store.operands[1];
+
+            // Check if the stored value comes from a call or allocation
+            let comes_from_alloc = body.instructions.iter().any(|i| {
+                (i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::Alloca)
+                    && i.dest.as_deref() == Some(stored_value.as_str())
+            });
+
+            if comes_from_alloc {
+                // Check if the target is a global variable or GC root
+                let is_global = store_target.starts_with('@')
+                    || store_target.contains("global")
+                    || store_target.contains("gc_root")
+                    || store_target.contains("runtime");
+
+                if is_global {
+                    return Some(BehaviorPattern::StoreToRuntime {
+                        runtime_target: store_target.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect ResourceEscape pattern: `ret ptr %resource` or `store ptr %resource, ptr %out_param`
+/// Resource escapes to caller — caller is responsible for cleanup.
+fn detect_resource_escape(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Check return instructions
+    let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
+    for ret in &ret_insts {
+        if let Some(ret_val) = ret.operands.first() {
+            // Check if the returned value comes from a call or allocation
+            let comes_from_alloc = body.instructions.iter().any(|i| {
+                (i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::Alloca)
+                    && i.dest.as_deref() == Some(ret_val.as_str())
+            });
+
+            if comes_from_alloc {
+                return Some(BehaviorPattern::ResourceEscape {
+                    escape_type: EscapeType::ReturnValue,
+                });
+            }
+        }
+    }
+
+    // Check store to out-parameters (parameters that are pointers)
+    // This is more complex — we need to identify which parameters are out-params
+    // For now, we'll use a heuristic: if a store writes to a parameter
+    let param_dests: HashSet<String> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Alloca)
+        .filter_map(|i| i.dest.clone())
+        .collect();
+
+    let store_insts = body.instructions_of_kind(IRInstructionKind::Store);
+    for store in &store_insts {
+        if store.operands.len() >= 2 {
+            let stored_value = &store.operands[0];
+            let store_target = &store.operands[1];
+
+            // Check if storing to a parameter (alloca for parameter)
+            if param_dests.contains(store_target) {
+                // Check if the stored value comes from a call or allocation
+                let comes_from_alloc = body.instructions.iter().any(|i| {
+                    (i.kind == IRInstructionKind::Call || i.kind == IRInstructionKind::Alloca)
+                        && i.dest.as_deref() == Some(stored_value.as_str())
+                });
+
+                if comes_from_alloc {
+                    return Some(BehaviorPattern::ResourceEscape {
+                        escape_type: EscapeType::OutParameter,
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect ReleaseOnAllExitPaths pattern: `call @release` in all branches before `ret`
+/// Resource is released on all exit paths — no leak.
+fn detect_release_on_all_exit_paths(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // This is a complex pattern that requires checking all exit paths
+    // For simplicity, we'll check if there's a release call before every ret
+    let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
+    let call_insts: Vec<&IRInstruction> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Call)
+        .collect();
+
+    // Check if any release call exists
+    let has_release = call_insts.iter().any(|c| {
+        c.callee
+            .as_ref()
+            .is_some_and(|name| is_release_callee(name))
+    });
+
+    if !has_release {
+        return None;
+    }
+
+    // Check if release calls appear before all return instructions
+    // This is a simplified check — in practice, we'd need to analyze CFG
+    let all_rets_have_release = ret_insts.iter().all(|ret| {
+        let ret_pos = body
+            .instructions
+            .iter()
+            .position(|i| i.raw_text == ret.raw_text && i.kind == ret.kind)
+            .unwrap_or(0);
+
+        // Check if there's a release call before this ret
+        body.instructions.iter().take(ret_pos).any(|i| {
+            i.kind == IRInstructionKind::Call
+                && i.callee
+                    .as_ref()
+                    .is_some_and(|name| is_release_callee(name))
+        })
+    });
+
+    if all_rets_have_release {
+        // Find the release function name
+        let release_func = call_insts
+            .iter()
+            .find(|c| {
+                c.callee
+                    .as_ref()
+                    .is_some_and(|name| is_release_callee(name))
+            })
+            .and_then(|c| c.callee.clone())
+            .unwrap_or_default();
+
+        return Some(BehaviorPattern::ReleaseOnAllExitPaths {
+            release_function: release_func,
+        });
+    }
+
+    None
+}
+
+/// Check if a function has store-to-owner pattern.
+/// Returns the owner field name if found.
+pub fn detect_store_to_owner_pattern(body: &FunctionBody) -> Option<String> {
+    detect_store_to_owner(body).map(|p| match p {
+        BehaviorPattern::StoreToOwner { owner_field } => owner_field,
+        _ => unreachable!(),
+    })
+}
+
+/// Check if a function has store-to-runtime pattern.
+/// Returns the runtime target name if found.
+pub fn detect_store_to_runtime_pattern(body: &FunctionBody) -> Option<String> {
+    detect_store_to_runtime(body).map(|p| match p {
+        BehaviorPattern::StoreToRuntime { runtime_target } => runtime_target,
+        _ => unreachable!(),
+    })
+}
+
+/// Check if a function has resource escape pattern.
+/// Returns the escape type if found.
+pub fn detect_resource_escape_pattern(body: &FunctionBody) -> Option<EscapeType> {
+    detect_resource_escape(body).map(|p| match p {
+        BehaviorPattern::ResourceEscape { escape_type } => escape_type,
+        _ => unreachable!(),
+    })
+}
+
+/// Check if a function has release-on-all-exit-paths pattern.
+/// Returns the release function name if found.
+pub fn detect_release_on_all_exit_paths_pattern(body: &FunctionBody) -> Option<String> {
+    detect_release_on_all_exit_paths(body).map(|p| match p {
+        BehaviorPattern::ReleaseOnAllExitPaths { release_function } => release_function,
+        _ => unreachable!(),
+    })
 }
 
 #[cfg(test)]

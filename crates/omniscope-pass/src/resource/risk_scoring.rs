@@ -90,6 +90,10 @@ fn base_severity(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::UseAfterFree => 0.9,
         // High severity: freeing a borrowed pointer is ownership violation
         IssueCandidateKind::InvalidBorrowedFree => 0.85,
+        // Medium-high severity: unchecked FFI return could be null deref
+        IssueCandidateKind::UncheckedFfiReturn => 0.75,
+        // High severity: null dereference is undefined behavior
+        IssueCandidateKind::NullDereference => 0.95,
     }
 }
 

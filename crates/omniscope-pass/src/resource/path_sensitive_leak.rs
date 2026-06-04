@@ -12,8 +12,7 @@
 //! - Uses summary store to determine release families
 //! - Produces ConditionalLeak candidates for the IssueVerifier
 
-use omniscope_core::diagnostics::Severity;
-use omniscope_core::{Confidence, Issue, IssueCandidate, IssueKind, Result};
+use omniscope_core::{Confidence, IssueCandidate, IssueKind, Result};
 use omniscope_semantics::SummaryStore;
 use omniscope_types::{Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
 
@@ -170,8 +169,8 @@ impl Pass for LeakDetectionPass {
             match leak_type {
                 LeakType::Definite => {
                     let candidate_kind = IssueCandidateKind::DefiniteLeak;
-                    let issue_kind = IssueKind::DefiniteLeak;
-                    let confidence = if alloc_count > 1 {
+                    let _issue_kind = IssueKind::DefiniteLeak;
+                    let _confidence = if alloc_count > 1 {
                         Confidence::High
                     } else {
                         Confidence::Medium
@@ -200,35 +199,16 @@ impl Pass for LeakDetectionPass {
                         .with_family(family),
                     );
 
-                    let candidate_description = candidate.description.clone().unwrap_or_else(|| {
+                    let _candidate_description = candidate.description.clone().unwrap_or_else(|| {
                         format!(
                             "definite memory leak: allocation of family {:?} in '{}' has no same-family release",
                             candidate.alloc_family, candidate.alloc_function
                         )
                     });
-                    let candidate_alloc_function = candidate.alloc_function.clone();
+                    let _candidate_alloc_function = candidate.alloc_function.clone();
 
                     leak_candidates.push(candidate);
                     candidate_id += 1;
-
-                    let mut issue = Issue::new(
-                        ctx.next_issue_id(),
-                        issue_kind,
-                        Severity::Warning,
-                        candidate_description,
-                    )
-                    .with_symbol(candidate_alloc_function.clone())
-                    .with_confidence(confidence);
-
-                    if !candidate_alloc_function.is_empty() && candidate_alloc_function != "unknown"
-                    {
-                        let location =
-                            omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
-                                .with_function(&candidate_alloc_function);
-                        issue = issue.with_location(location);
-                    }
-
-                    ctx.emit_issue(issue);
                 }
                 LeakType::Conditional => {
                     let mut candidate = IssueCandidate::new(
@@ -256,35 +236,16 @@ impl Pass for LeakDetectionPass {
                         .with_family(family),
                     );
 
-                    let candidate_description = candidate.description.clone().unwrap_or_else(|| {
+                    let _candidate_description = candidate.description.clone().unwrap_or_else(|| {
                         format!(
                             "conditional memory leak: allocation of family {:?} in '{}' has partial release coverage",
                             candidate.alloc_family, candidate.alloc_function
                         )
                     });
-                    let candidate_alloc_function = candidate.alloc_function.clone();
+                    let _candidate_alloc_function = candidate.alloc_function.clone();
 
                     leak_candidates.push(candidate);
                     candidate_id += 1;
-
-                    let mut issue = Issue::new(
-                        ctx.next_issue_id(),
-                        IssueKind::ConditionalLeak,
-                        Severity::Warning,
-                        candidate_description,
-                    )
-                    .with_symbol(candidate_alloc_function.clone())
-                    .with_confidence(Confidence::Medium);
-
-                    if !candidate_alloc_function.is_empty() && candidate_alloc_function != "unknown"
-                    {
-                        let location =
-                            omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
-                                .with_function(&candidate_alloc_function);
-                        issue = issue.with_location(location);
-                    }
-
-                    ctx.emit_issue(issue);
                 }
                 LeakType::Safe | LeakType::NeedsModel => {
                     // Safe or needs model - no issue to emit.

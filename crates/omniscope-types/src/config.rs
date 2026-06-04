@@ -1,9 +1,13 @@
 //! Configuration types for OmniScope
 //!
-//! This module defines configuration types for controlling analysis behavior.
+//! This module defines configuration types for controlling analysis behavior,
+//! including TOML configuration file support for custom FFI boundaries,
+//! resource families, and analysis options.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::FamilyKind;
 
 /// Main analysis configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +121,22 @@ impl Language {
     }
 }
 
+impl std::fmt::Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Language::C => write!(f, "C"),
+            Language::Cpp => write!(f, "C++"),
+            Language::Rust => write!(f, "Rust"),
+            Language::Zig => write!(f, "Zig"),
+            Language::Go => write!(f, "Go"),
+            Language::Python => write!(f, "Python"),
+            Language::Java => write!(f, "Java"),
+            Language::CSharp => write!(f, "C#"),
+            Language::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 /// Output format for analysis results
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -190,5 +210,355 @@ mod tests {
             OutputFormat::Json,
             "Default output format should be JSON for machine readability"
         );
+    }
+}
+
+// ============================================================================
+// TOML Configuration File Support
+// ============================================================================
+
+/// Main configuration structure for OmniScope.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OmniScopeConfig {
+    /// Project metadata.
+    pub project: Option<ProjectConfig>,
+
+    /// FFI boundary definitions.
+    #[serde(default)]
+    pub ffi_boundary: Vec<FFIBoundaryConfig>,
+
+    /// Custom resource family definitions.
+    #[serde(default)]
+    pub resource_family: Vec<ResourceFamilyConfig>,
+
+    /// Analysis options.
+    #[serde(default)]
+    pub analysis: AnalysisOptions,
+}
+
+/// Project metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectConfig {
+    /// Project name.
+    pub name: Option<String>,
+
+    /// Project description.
+    pub description: Option<String>,
+}
+
+/// FFI boundary configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FFIBoundaryConfig {
+    /// Source language.
+    pub from: Language,
+
+    /// Target language.
+    pub to: Language,
+
+    /// Functions that cross this boundary.
+    #[serde(default)]
+    pub functions: Vec<String>,
+
+    /// Optional description.
+    pub description: Option<String>,
+}
+
+/// Custom resource family configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceFamilyConfig {
+    /// Family name.
+    pub name: String,
+
+    /// Resource kind.
+    pub kind: FamilyKind,
+
+    /// Acquire functions.
+    #[serde(default)]
+    pub acquire: Vec<String>,
+
+    /// Release functions.
+    #[serde(default)]
+    pub release: Vec<String>,
+
+    /// Compatible release families.
+    #[serde(default)]
+    pub compatible_releases: Vec<String>,
+}
+
+/// Analysis options for configuration file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisOptions {
+    /// Enable cross-language detection.
+    #[serde(default = "default_true")]
+    pub cross_language: bool,
+
+    /// Enable cross-family detection.
+    #[serde(default = "default_true")]
+    pub cross_family: bool,
+
+    /// Enable leak detection.
+    #[serde(default = "default_true")]
+    pub leak_detection: bool,
+
+    /// Enable use-after-free detection.
+    #[serde(default = "default_true")]
+    pub use_after_free: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AnalysisOptions {
+    fn default() -> Self {
+        Self {
+            cross_language: true,
+            cross_family: true,
+            leak_detection: true,
+            use_after_free: true,
+        }
+    }
+}
+
+impl OmniScopeConfig {
+    /// Create a default configuration with no FFI boundaries.
+    ///
+    /// Useful as a fallback when no configuration file is found.
+    pub fn default_config() -> Self {
+        Self::default()
+    }
+
+    /// Generate a default configuration with example FFI boundaries and resource families.
+    ///
+    /// This is useful for generating example configuration files or for testing.
+    pub fn generate_default() -> Self {
+        Self {
+            project: Some(ProjectConfig {
+                name: None,
+                description: Some("OmniScope project".to_string()),
+            }),
+            ffi_boundary: vec![
+                FFIBoundaryConfig {
+                    from: Language::C,
+                    to: Language::Cpp,
+                    functions: vec!["example_c_to_cpp".to_string()],
+                    description: Some("Example C to C++ boundary".to_string()),
+                },
+                FFIBoundaryConfig {
+                    from: Language::Zig,
+                    to: Language::C,
+                    functions: vec!["example_zig_to_c".to_string()],
+                    description: Some("Example Zig to C boundary".to_string()),
+                },
+            ],
+            resource_family: vec![ResourceFamilyConfig {
+                name: "custom_allocator".to_string(),
+                kind: FamilyKind::ManualHeap,
+                acquire: vec!["my_alloc".to_string()],
+                release: vec!["my_free".to_string()],
+                compatible_releases: Vec::new(),
+            }],
+            analysis: AnalysisOptions::default(),
+        }
+    }
+
+    /// Load configuration from a TOML file.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the TOML configuration file.
+    ///
+    /// # Returns
+    /// Parsed configuration or error.
+    pub fn load_from_file(path: &Path) -> Result<Self, ConfigError> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ConfigError::IoError(path.display().to_string(), e))?;
+
+        Self::parse_toml(&content)
+    }
+
+    /// Parse configuration from a TOML string.
+    ///
+    /// # Arguments
+    /// * `content` - TOML string content.
+    ///
+    /// # Returns
+    /// Parsed configuration or error.
+    pub fn parse_toml(content: &str) -> Result<Self, ConfigError> {
+        toml::from_str(content).map_err(|e| ConfigError::ParseError(e.to_string()))
+    }
+
+    /// Save configuration to a TOML file.
+    ///
+    /// # Arguments
+    /// * `path` - Path to write the TOML configuration file.
+    ///
+    /// # Returns
+    /// Ok(()) on success, or an error if writing fails.
+    pub fn save_to_file(&self, path: &Path) -> Result<(), ConfigError> {
+        let content =
+            toml::to_string_pretty(self).map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        std::fs::write(path, content)
+            .map_err(|e| ConfigError::IoError(path.display().to_string(), e))?;
+        Ok(())
+    }
+
+    /// Parse configuration from a TOML string (convenience method).
+    ///
+    /// This is a convenience method that panics on error. Use `parse_toml` for
+    /// error handling.
+    ///
+    /// # Arguments
+    /// * `content` - TOML string content.
+    ///
+    /// # Returns
+    /// Parsed configuration.
+    ///
+    /// # Panics
+    /// Panics if the TOML content is invalid.
+    pub fn from_toml_str(content: &str) -> Self {
+        Self::parse_toml(content).expect("Failed to parse TOML config")
+    }
+
+    /// Load configuration from default locations.
+    ///
+    /// Searches for configuration in:
+    /// 1. `./omniscope.toml`
+    /// 2. `~/.config/omniscope/config.toml`
+    ///
+    /// # Returns
+    /// Configuration if found, None otherwise.
+    pub fn load_default() -> Result<Option<Self>, ConfigError> {
+        // Try current directory
+        let local_config = Path::new("omniscope.toml");
+        if local_config.exists() {
+            return Ok(Some(Self::load_from_file(local_config)?));
+        }
+
+        // Try home config
+        if let Some(home) = dirs::home_dir() {
+            let home_config = home.join(".config/omniscope/config.toml");
+            if home_config.exists() {
+                return Ok(Some(Self::load_from_file(&home_config)?));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Get all FFI boundary functions as a flat list.
+    pub fn ffi_boundary_functions(&self) -> Vec<(&str, Language, Language)> {
+        self.ffi_boundary
+            .iter()
+            .flat_map(|boundary| {
+                boundary
+                    .functions
+                    .iter()
+                    .map(move |func| (func.as_str(), boundary.from, boundary.to))
+            })
+            .collect()
+    }
+
+    /// Check if a function is in any FFI boundary.
+    pub fn is_ffi_boundary(&self, function: &str) -> Option<(Language, Language)> {
+        self.ffi_boundary
+            .iter()
+            .find(|boundary| boundary.functions.contains(&function.to_string()))
+            .map(|boundary| (boundary.from, boundary.to))
+    }
+}
+
+/// Configuration error types.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("IO error reading {0}: {1}")]
+    IoError(String, std::io::Error),
+
+    #[error("Parse error: {0}")]
+    ParseError(String),
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    /// Objective: Verify that a valid TOML configuration can be parsed.
+    /// Invariants: All fields should be correctly deserialized.
+    #[test]
+    fn test_parse_valid_config() {
+        let toml = r#"
+[project]
+name = "test_project"
+description = "A test project"
+
+[[ffi_boundary]]
+from = "c"
+to = "cpp"
+functions = ["c_fft_forward", "c_hash"]
+description = "C -> C++ bridge"
+
+[[ffi_boundary]]
+from = "zig"
+to = "c"
+functions = ["c_alloc_buffer"]
+
+[[resource_family]]
+name = "custom_allocator"
+kind = "ManualHeap"
+acquire = ["my_alloc"]
+release = ["my_free"]
+
+[analysis]
+cross_language = true
+cross_family = true
+leak_detection = true
+use_after_free = false
+"#;
+
+        let config = OmniScopeConfig::parse_toml(toml).unwrap();
+
+        assert_eq!(config.project.unwrap().name.unwrap(), "test_project");
+        assert_eq!(config.ffi_boundary.len(), 2);
+        assert_eq!(config.ffi_boundary[0].from, Language::C);
+        assert_eq!(config.ffi_boundary[0].to, Language::Cpp);
+        assert_eq!(config.ffi_boundary[0].functions.len(), 2);
+        assert_eq!(config.resource_family.len(), 1);
+        assert_eq!(config.resource_family[0].kind, FamilyKind::ManualHeap);
+        assert!(!config.analysis.use_after_free);
+    }
+
+    /// Objective: Verify that FFI boundary functions can be queried.
+    /// Invariants: All functions should be found with correct languages.
+    #[test]
+    fn test_ffi_boundary_functions() {
+        let toml = r#"
+[[ffi_boundary]]
+from = "c"
+to = "cpp"
+functions = ["func1", "func2"]
+
+[[ffi_boundary]]
+from = "zig"
+to = "c"
+functions = ["func3"]
+"#;
+
+        let config = OmniScopeConfig::parse_toml(toml).unwrap();
+        let functions = config.ffi_boundary_functions();
+
+        assert_eq!(functions.len(), 3);
+        assert_eq!(functions[0].0, "func1");
+        assert_eq!(functions[0].1, Language::C);
+        assert_eq!(functions[0].2, Language::Cpp);
+        assert_eq!(functions[2].0, "func3");
+        assert_eq!(functions[2].1, Language::Zig);
+    }
+
+    /// Objective: Verify that invalid TOML returns an error.
+    /// Invariants: Parse error should be descriptive.
+    #[test]
+    fn test_parse_invalid_config() {
+        let toml = "invalid toml content [[[";
+        let result = OmniScopeConfig::parse_toml(toml);
+        assert!(result.is_err());
     }
 }

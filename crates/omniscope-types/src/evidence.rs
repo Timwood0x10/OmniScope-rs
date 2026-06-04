@@ -97,6 +97,10 @@ pub enum EvidenceKind {
     /// Indicates conditional branches were analyzed to determine
     /// resource ownership state on specific paths.
     PathStateRefinement,
+    /// FFI return value null check missing.
+    /// An FFI function returned a pointer that was used without
+    /// a null check (load/store/gep/call-sink).
+    FfiReturnNullCheck,
     /// Unknown or insufficient evidence.
     Insufficient,
 }
@@ -211,6 +215,15 @@ pub enum IssueCandidateKind {
     /// This is different from BorrowEscape (which is about escaping scope)
     /// — this is about actually freeing a borrowed pointer.
     InvalidBorrowedFree,
+    /// Unchecked FFI return value: an FFI function returned a pointer
+    /// that was used without a null check (load/store/gep/call-sink).
+    /// This is a potential null pointer dereference if the FFI function
+    /// returns null on failure.
+    UncheckedFfiReturn,
+    /// Null pointer dereference: a pointer that may be null was
+    /// dereferenced without a null check. This includes FFI returns
+    /// passed to null-sink functions (strlen, memcpy, free, etc.).
+    NullDereference,
 }
 
 #[cfg(test)]

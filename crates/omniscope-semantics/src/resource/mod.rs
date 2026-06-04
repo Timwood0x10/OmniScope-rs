@@ -33,6 +33,7 @@ pub mod go_adapter;
 pub mod ir_pattern;
 pub mod java_adapter;
 pub mod length_truncation_detector;
+pub mod memory_graph;
 pub mod ownership_state;
 pub mod python_adapter;
 pub mod rust_stdlib_whitelist;

@@ -346,7 +346,8 @@ impl IrCache {
     ) -> Result<CacheEntry> {
         self.ensure_cache_dir()?;
 
-        let fingerprint = self.generate_fingerprint_with_params(path, strategy, slice_mode, extra)?;
+        let fingerprint =
+            self.generate_fingerprint_with_params(path, strategy, slice_mode, extra)?;
         let cache_path = self
             .cache_dir
             .join(format!("{:016x}.ir.msgpack", fingerprint));

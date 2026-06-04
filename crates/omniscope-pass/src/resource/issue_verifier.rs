@@ -20,8 +20,11 @@
 //!   a suppression tag (R-0~R-7), the issue is suppressed.
 
 use omniscope_core::{Issue, IssueCandidate, Result};
+use omniscope_semantics::resource::memory_graph::{family_to_resource_class, ResourceClass};
 use omniscope_semantics::FamilyRegistry;
-use omniscope_types::{EvidenceKind, IssueCandidateKind, VerifierVerdict};
+use omniscope_types::{
+    EvidenceKind, FamilyId, IssueCandidateKind, OmniScopeConfig, VerifierVerdict,
+};
 
 use crate::analysis::NoiseReduction;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -50,20 +53,40 @@ impl Pass for IssueVerifierPass {
     }
 
     fn dependencies(&self) -> Vec<&'static str> {
-        vec!["IssueCandidateBuilder"]
+        vec!["IssueCandidateBuilder", "FfiReturnCheck", "LeakDetection"]
     }
 
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
-        let candidates: Vec<IssueCandidate> = ctx
-            .get_ref::<Vec<IssueCandidate>>("issue_candidates")
-            .cloned()
-            .unwrap_or_default();
+        // Collect candidates from multiple sources:
+        // 1. IssueCandidateBuilder (resource contract analysis)
+        // 2. FfiReturnCheckPass (FFI null check analysis)
+        // 3. LeakDetectionPass (path-sensitive leak analysis)
+        let mut candidates: Vec<IssueCandidate> = Vec::new();
+
+        // Source 1: IssueCandidateBuilder
+        if let Some(issue_candidates) = ctx.get_ref::<Vec<IssueCandidate>>("issue_candidates") {
+            candidates.extend(issue_candidates.iter().cloned());
+        }
+
+        // Source 2: FfiReturnCheckPass
+        if let Some(ffi_candidates) = ctx.get_ref::<Vec<IssueCandidate>>("ffi_return_candidates") {
+            candidates.extend(ffi_candidates.iter().cloned());
+        }
+
+        // Source 3: LeakDetectionPass
+        if let Some(leak_candidates) = ctx.get_ref::<Vec<IssueCandidate>>("leak_candidates") {
+            candidates.extend(leak_candidates.iter().cloned());
+        }
+
         let registry = ctx
             .get_ref::<FamilyRegistry>("family_registry")
             .cloned()
             .unwrap_or_default();
+
+        // Get configuration from context
+        let config = ctx.config().cloned();
 
         // Layer 1: NoiseReduction — fast string-based FP pre-filter.
         let noise = NoiseReduction::new();
@@ -73,7 +96,7 @@ impl Pass for IssueVerifierPass {
         let mut noise_suppressed: usize = 0;
 
         for mut candidate in candidates {
-            let verdict = verify_candidate(&candidate, &registry);
+            let verdict = verify_candidate(&candidate, &registry, config.as_ref());
             candidate.verdict = Some(verdict);
 
             // Attach a human-readable description based on the verdict.
@@ -155,6 +178,28 @@ impl Default for IssueVerifierPass {
     }
 }
 
+/// Determines if a resource family represents memory resources.
+///
+/// HeapMemory, RuntimeManaged, and HandleBased families are considered
+/// memory-like resources because they require explicit release and can leak.
+/// FileDescriptor, Socket, ProcessHandle are OS handle resources that
+/// should not be reported as memory leaks.
+///
+/// # Arguments
+/// * `family_id` - The resource family identifier to check.
+///
+/// # Returns
+/// `true` if the family represents memory-like resources, `false` otherwise.
+fn is_memory_resource(family_id: FamilyId) -> bool {
+    // Map family IDs to their resource classes.
+    // HeapMemory, RuntimeManaged, and HandleBased are memory-like resources.
+    // FileDescriptor, Socket, ProcessHandle are OS handles, not memory.
+    matches!(
+        family_to_resource_class(family_id),
+        ResourceClass::HeapMemory | ResourceClass::RuntimeManaged | ResourceClass::ProcessHandle
+    )
+}
+
 /// Verifies a single issue candidate and returns a verdict.
 ///
 /// This is the core verification logic. It checks:
@@ -164,9 +209,27 @@ impl Default for IssueVerifierPass {
 /// - Destructor/drop/cleanup release path
 /// - Runtime/compiler origin
 /// - Unknown family policy (NeedsModel → Diagnostic, not high severity)
-fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> VerifierVerdict {
+fn verify_candidate(
+    candidate: &IssueCandidate,
+    registry: &FamilyRegistry,
+    config: Option<&OmniScopeConfig>,
+) -> VerifierVerdict {
+    // First, check if this is a non-memory resource (e.g., file descriptors).
+    // Non-memory resources should not be reported as memory leaks.
+    if !is_memory_resource(candidate.alloc_family) {
+        // For non-memory resources, only allow cross-family-free and use-after-release
+        // issues. Leak issues (DefiniteLeak, ConditionalLeak) should be suppressed.
+        match candidate.kind {
+            IssueCandidateKind::DefiniteLeak | IssueCandidateKind::ConditionalLeak => {
+                return VerifierVerdict::ExplainedSafe;
+            }
+            _ => {} // Other issue types may still be relevant
+        }
+    }
     match candidate.kind {
-        IssueCandidateKind::CrossFamilyFree => verify_cross_family_free(candidate, registry),
+        IssueCandidateKind::CrossFamilyFree => {
+            verify_cross_family_free(candidate, registry, config)
+        }
         IssueCandidateKind::UseAfterRelease => {
             // Use-after-release is almost always a real issue,
             // unless there is clear evidence of re-acquisition.
@@ -211,6 +274,15 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
             // Borrowed pointers should not be freed by the borrower.
             VerifierVerdict::ConfirmedIssue
         }
+        IssueCandidateKind::UncheckedFfiReturn => {
+            // Unchecked FFI return value — potential null dereference.
+            // This is a real issue if the FFI function can return null.
+            VerifierVerdict::ProbableIssue
+        }
+        IssueCandidateKind::NullDereference => {
+            // Null pointer dereference — always a real issue.
+            VerifierVerdict::ConfirmedIssue
+        }
     }
 }
 
@@ -218,11 +290,31 @@ fn verify_candidate(candidate: &IssueCandidate, registry: &FamilyRegistry) -> Ve
 fn verify_cross_family_free(
     candidate: &IssueCandidate,
     registry: &FamilyRegistry,
+    config: Option<&OmniScopeConfig>,
 ) -> VerifierVerdict {
     let Some(release_family) = candidate.release_family else {
         // Release family unknown — probable issue but not confirmed.
         return VerifierVerdict::ProbableIssue;
     };
+
+    // Check if this is a configured FFI boundary.
+    // If the function is in a known FFI boundary, it's likely a real issue
+    // because cross-family free across language boundaries is dangerous.
+    if let Some(config) = config {
+        if let Some((from, to)) =
+            config.is_ffi_boundary(candidate.release_function.as_deref().unwrap_or(""))
+        {
+            // This is a known FFI boundary function. The cross-family free
+            // across language boundaries is almost always a real issue.
+            tracing::debug!(
+                "Cross-family free in FFI boundary function '{}' ({:?} -> {:?})",
+                candidate.release_function.as_deref().unwrap_or("unknown"),
+                from,
+                to
+            );
+            return VerifierVerdict::ConfirmedIssue;
+        }
+    }
 
     // Check compatible release via the registry.
     if registry.is_compatible_release(candidate.alloc_family, release_family) {
@@ -419,6 +511,8 @@ fn build_verdict_description(candidate: &IssueCandidate, verdict: VerifierVerdic
         IssueCandidateKind::OwnershipEscapeLeak => "ownership escape leak",
         IssueCandidateKind::UseAfterFree => "use-after-free",
         IssueCandidateKind::InvalidBorrowedFree => "invalid borrowed free",
+        IssueCandidateKind::UncheckedFfiReturn => "unchecked FFI return",
+        IssueCandidateKind::NullDereference => "null dereference",
     };
 
     let verdict_label = match verdict {
@@ -493,8 +587,8 @@ mod tests {
         );
         assert_eq!(
             pass.dependencies(),
-            vec!["IssueCandidateBuilder"],
-            "Dependencies should be IssueCandidateBuilder"
+            vec!["IssueCandidateBuilder", "FfiReturnCheck", "LeakDetection"],
+            "Dependencies should be IssueCandidateBuilder, FfiReturnCheck, and LeakDetection"
         );
     }
 
@@ -510,7 +604,7 @@ mod tests {
         .with_release_family(FamilyId::CPP_NEW_SCALAR)
         .with_release_function("operator delete");
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -530,7 +624,7 @@ mod tests {
         .with_release_family(FamilyId::C_HEAP)
         .with_release_function("free");
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -548,7 +642,7 @@ mod tests {
             "custom_alloc",
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::Diagnostic,
@@ -566,7 +660,7 @@ mod tests {
             "free",
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -592,7 +686,7 @@ mod tests {
                 .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -616,7 +710,7 @@ mod tests {
                 .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -642,7 +736,7 @@ mod tests {
             .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -668,7 +762,7 @@ mod tests {
             .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -686,7 +780,7 @@ mod tests {
             "register_callback",
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::Diagnostic,
@@ -705,7 +799,7 @@ mod tests {
             "malloc",
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ProbableIssue,
@@ -723,7 +817,7 @@ mod tests {
             "malloc",
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -748,7 +842,7 @@ mod tests {
             .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -854,7 +948,7 @@ mod tests {
                 .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::Diagnostic,
@@ -889,7 +983,7 @@ mod tests {
                 .with_confidence(0.85),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -907,7 +1001,7 @@ mod tests {
             "free",
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -934,7 +1028,7 @@ mod tests {
             .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -958,7 +1052,7 @@ mod tests {
                 .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -985,7 +1079,7 @@ mod tests {
             .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1012,7 +1106,7 @@ mod tests {
             .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1036,7 +1130,7 @@ mod tests {
                 .with_confidence(0.85),
         );
 
-        let verdict = verify_candidate(&candidate, &registry);
+        let verdict = verify_candidate(&candidate, &registry, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ProbableIssue,

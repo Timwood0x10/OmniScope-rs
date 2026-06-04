@@ -585,7 +585,13 @@ fn load_via_direct_cpp_ffi(path: &Path) -> Result<IRModule> {
     // filter removed all functions, and we don't want to cache that.
     if !module.functions.is_empty() {
         if let Some(cache) = get_ir_cache() {
-            if let Err(e) = cache.save_to_cache_bytes_with_params(path, &output.stdout, "direct-cpp-ffi", Some("ffi"), None) {
+            if let Err(e) = cache.save_to_cache_bytes_with_params(
+                path,
+                &output.stdout,
+                "direct-cpp-ffi",
+                Some("ffi"),
+                None,
+            ) {
                 warn!(error = %e, "Failed to save direct C++ FFI extractor output to cache");
             }
         }
@@ -660,7 +666,13 @@ fn load_via_direct_cpp(path: &Path) -> Result<IRModule> {
     // Only cache non-empty results to avoid poisoning the cache.
     if !module.functions.is_empty() {
         if let Some(cache) = get_ir_cache() {
-            if let Err(e) = cache.save_to_cache_bytes_with_params(path, &output.stdout, "direct-cpp", None, None) {
+            if let Err(e) = cache.save_to_cache_bytes_with_params(
+                path,
+                &output.stdout,
+                "direct-cpp",
+                None,
+                None,
+            ) {
                 warn!(error = %e, "Failed to save direct C++ extractor output to cache");
             }
         }

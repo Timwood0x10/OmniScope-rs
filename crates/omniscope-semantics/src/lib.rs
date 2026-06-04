@@ -50,7 +50,7 @@ pub use resource::semantic_engine::{
 };
 pub use resource::semantic_tree::{
     build_semantic_tree, build_semantic_tree_with_cache, infer_provenance_from_context,
-    infer_provenance_from_syscall, PointerProvenance, SemanticKind, SemanticNode,
+    infer_provenance_from_syscall, PointerProvenance, SemanticKey, SemanticKind, SemanticNode,
     SemanticResolution, SemanticTree, SyscallSemantic, TypeSemantic,
 };
 pub use resource::structural_inference::{

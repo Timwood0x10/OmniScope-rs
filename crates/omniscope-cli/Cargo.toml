@@ -25,7 +25,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 colored = "3.1.1"
 serde_json = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
 omniscope-pass = { path = "../omniscope-pass" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

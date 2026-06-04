@@ -2,6 +2,7 @@
 
 use crate::pass::{Pass, PassContext, PassResult, PassTiming};
 use omniscope_core::Result;
+use omniscope_types::OmniScopeConfig;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -140,8 +141,24 @@ impl PassManager {
         &mut self,
         ir_module: Option<omniscope_ir::IRModule>,
     ) -> Result<(Vec<PassResult>, Vec<PassTiming>, Vec<omniscope_core::Issue>)> {
+        self.run_all_with_ir_and_config(ir_module, None)
+    }
+
+    /// Runs all passes with an IR module and optional configuration.
+    ///
+    /// This is the full version that accepts an optional `OmniScopeConfig`
+    /// for FFI boundary and resource family definitions.
+    pub fn run_all_with_ir_and_config(
+        &mut self,
+        ir_module: Option<omniscope_ir::IRModule>,
+        config: Option<OmniScopeConfig>,
+    ) -> Result<(Vec<PassResult>, Vec<PassTiming>, Vec<omniscope_core::Issue>)> {
         self.compute_order()?;
-        let mut ctx = PassContext::new();
+        let mut ctx = if let Some(config) = config {
+            PassContext::with_config(config)
+        } else {
+            PassContext::new()
+        };
         if let Some(module) = ir_module {
             // Build the shared instruction metadata cache before running passes.
             // This performs a single traversal of module.calls, functions, and

@@ -468,6 +468,8 @@ fn is_null_sink(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omniscope_core::IssueCandidate;
+    use omniscope_types::IssueCandidateKind;
 
     #[test]
     fn test_ffi_return_check_pass_creation() {
@@ -700,16 +702,21 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
+        // Check for UncheckedFfiReturn candidates
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
+            .collect();
         assert!(
-            result.get_issues().is_empty(),
-            "Null-checked FFI return must NOT produce issues, got {} issues: {:?}",
-            result.get_issues().len(),
-            result
-                .get_issues()
+            unchecked_candidates.is_empty(),
+            "Null-checked FFI return must NOT produce UncheckedFfiReturn candidates, got {} candidates: {:?}",
+            unchecked_candidates.len(),
+            unchecked_candidates
                 .iter()
-                .map(|i| i.kind)
+                .map(|c| c.kind)
                 .collect::<Vec<_>>()
         );
     }
@@ -735,12 +742,18 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
+        // Check for UncheckedFfiReturn candidates
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
+            .collect();
         assert!(
-            result.get_issues().is_empty(),
-            "Box::into_raw must NOT produce FFI unchecked return issues, got {} issues",
-            result.get_issues().len()
+            unchecked_candidates.is_empty(),
+            "Box::into_raw must NOT produce UncheckedFfiReturn candidates, got {} candidates",
+            unchecked_candidates.len()
         );
     }
 
@@ -847,16 +860,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        // Check for UncheckedFfiReturn candidates
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            !unchecked_issues.is_empty(),
-            "Non-allocator FFI (fopen) must still produce UncheckedReturn issue"
+            !unchecked_candidates.is_empty(),
+            "Non-allocator FFI (fopen) must still produce UncheckedFfiReturn candidate"
         );
     }
 }

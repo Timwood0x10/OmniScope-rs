@@ -154,6 +154,8 @@ impl IssueCandidate {
             IssueCandidateKind::OwnershipEscapeLeak => IssueKind::OwnershipEscapeLeak,
             IssueCandidateKind::UseAfterFree => IssueKind::UseAfterFree,
             IssueCandidateKind::InvalidBorrowedFree => IssueKind::InvalidFree,
+            IssueCandidateKind::UncheckedFfiReturn => IssueKind::UncheckedReturn,
+            IssueCandidateKind::NullDereference => IssueKind::NullDereference,
         }
     }
 

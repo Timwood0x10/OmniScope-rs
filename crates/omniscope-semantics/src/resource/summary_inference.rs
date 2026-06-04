@@ -475,6 +475,63 @@ pub fn behavior_to_summary(
                 ));
                 summary.confidence = summary.confidence.max(0.85);
             }
+
+            BehaviorPattern::StoreToOwner { owner_field } => {
+                summary.add_effect(Effect::StoresArgToOwner { arg: 0, owner: 0 });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: store ptr to owner field '{}' → ownership transferred to container",
+                        owner_field
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.88);
+            }
+
+            BehaviorPattern::StoreToRuntime { runtime_target } => {
+                summary.add_effect(Effect::StoresArgToGlobal { arg: 0 });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: store ptr to runtime target '{}' → ownership transferred to runtime",
+                        runtime_target
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.88);
+            }
+
+            BehaviorPattern::ResourceEscape { escape_type } => {
+                let escape_desc = match escape_type {
+                    super::ir_pattern::EscapeType::ReturnValue => "return value",
+                    super::ir_pattern::EscapeType::OutParameter => "out-parameter",
+                };
+                summary.add_effect(Effect::ReturnsOwned {
+                    family: FamilyId::C_HEAP,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: resource escapes via {} → caller responsible",
+                        escape_desc
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.85);
+            }
+
+            BehaviorPattern::ReleaseOnAllExitPaths { release_function } => {
+                summary.add_effect(Effect::Release {
+                    family: FamilyId::C_HEAP,
+                    arg: 0,
+                });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: release function '{}' called on all exit paths → cleanup complete",
+                        release_function
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.92);
+            }
         }
     }
 

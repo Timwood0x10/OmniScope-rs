@@ -193,17 +193,16 @@ fn test_cross_family_release_detection() {
     );
 
     // The CPP_NEW_SCALAR release has no matching acquire in the same
-    // (func_id, family) group, so a standalone instance is created and
-    // a Release (not ConditionalRelease) edge is produced. The cross-family
-    // detection in raw facts path only triggers when alloc_family != family
-    // within the SAME (func_id, family) group.
-    let release_edge = graph
+    // (func_id, family) group, but cross-family matching finds the C_HEAP acquire.
+    // Since C_HEAP and CPP_NEW_SCALAR are in the same language family (C/C++),
+    // a ConditionalRelease edge is produced (not CrossLanguageFree).
+    let conditional_release_edge = graph
         .edges
         .iter()
-        .find(|e| matches!(e.effect, Effect::Release { family, .. } if family == FamilyId::CPP_NEW_SCALAR));
+        .find(|e| matches!(e.effect, Effect::ConditionalRelease { family, .. } if family == FamilyId::CPP_NEW_SCALAR));
     assert!(
-        release_edge.is_some(),
-        "Must have a Release edge for CPP_NEW_SCALAR family"
+        conditional_release_edge.is_some(),
+        "Must have a ConditionalRelease edge for CPP_NEW_SCALAR family"
     );
 }
 

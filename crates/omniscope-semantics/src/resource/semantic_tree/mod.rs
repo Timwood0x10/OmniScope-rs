@@ -35,7 +35,7 @@ pub mod tree;
 pub mod type_semantic;
 
 // ── Re-exports for backward compatibility ──
-pub use kind::{SemanticKind, SemanticResolution};
+pub use kind::{SemanticKey, SemanticKind, SemanticResolution};
 pub use node::SemanticNode;
 pub use provenance::PointerProvenance;
 pub use syscall::SyscallSemantic;

@@ -125,6 +125,7 @@ impl Pass for WriteToImmutablePass {
 
 impl WriteToImmutablePass {
     /// Analyzes a store instruction target for write-to-immutable violations.
+    #[allow(clippy::too_many_arguments)]
     fn analyze_store_target(
         &self,
         ctx: &mut PassContext,
