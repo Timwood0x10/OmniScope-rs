@@ -36,7 +36,7 @@
 //! | FfiUnsafeCall         | JavaLocalRef/GlobalRef/WeakRef | Java JNI |
 //! | ConditionalLeak       | RaiiDropRelease/CppDestructor/GoDeferCleanup/etc. | R-3+ |
 //! | DefiniteLeak          | RaiiDropRelease/CppDestructor/GoDeferCleanup/etc. | R-3+ |
-//! | OwnershipEscapeLeak   | RaiiDropRelease/IntoRawTransfer/RuntimeInternal | R-3/R-6 |
+//! | OwnershipEscapeLeak   | RaiiDropRelease/IntoRawTransfer/RuntimeInternal | R-3/R-6/RuntimeInternal |
 
 use omniscope_core::Issue;
 use omniscope_semantics::{SemanticKey, SemanticKind};
@@ -67,6 +67,9 @@ pub enum GateVerdict {
     /// Issue suppressed because the callee is a known allocator (R-9).
     /// Suppresses UncheckedReturn for malloc/calloc/aligned_alloc etc.
     SuppressAllocatorReturn,
+    /// Suppressed because the symbol is a runtime/compiler internal (e.g.,
+    /// __rust_alloc, _ZN5alloc*, __cxa_*), not a user-code FFI violation.
+    SuppressRuntimeInternal,
 }
 
 impl GateVerdict {
@@ -96,6 +99,9 @@ impl GateVerdict {
             }
             GateVerdict::SuppressAllocatorReturn => {
                 "R-9: callee is a system/library allocator, unchecked return is expected noise"
+            }
+            GateVerdict::SuppressRuntimeInternal => {
+                "runtime/compiler internal symbol, not a user-code FFI violation"
             }
         }
     }
@@ -295,6 +301,11 @@ where
             {
                 return GateVerdict::SuppressRaii;
             }
+            // RuntimeInternal: compiler/runtime bridges (e.g., __rust_alloc,
+            // _ZN5alloc*, _ZN4core*, __cxa_*) — legitimate runtime calls, not FFI violations
+            if has_kind(key, SemanticKind::RuntimeInternal) {
+                return GateVerdict::SuppressRuntimeInternal;
+            }
         }
 
         // ── ConditionalLeak / DefiniteLeak: suppress when SRT signals indicate
@@ -355,7 +366,7 @@ where
             }
             // RuntimeInternal: runtime wrapper bridges (e.g., heap.c_allocator_impl)
             if has_kind(key, SemanticKind::RuntimeInternal) {
-                return GateVerdict::SuppressRaii;
+                return GateVerdict::SuppressRuntimeInternal;
             }
         }
 
@@ -728,7 +739,7 @@ mod tests {
         });
         assert_eq!(
             verdict,
-            GateVerdict::SuppressRaii,
+            GateVerdict::SuppressRuntimeInternal,
             "ConditionalLeak with RuntimeInternal should be suppressed"
         );
     }

@@ -29,6 +29,7 @@ use omniscope_types::{
     EvidenceKind, FamilyId, IssueCandidateKind, OmniScopeConfig, VerifierVerdict,
 };
 
+use super::structural_inference_pass::is_runtime_internal;
 use crate::analysis::NoiseReduction;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
@@ -113,8 +114,32 @@ impl Pass for IssueVerifierPass {
         let mut verified: Vec<IssueCandidate> = Vec::new();
         let mut issues: Vec<Issue> = Vec::new();
         let mut noise_suppressed: usize = 0;
+        let mut ffi_gate_suppressed: usize = 0;
 
         for mut candidate in candidates {
+            // ── FFI Gate: suppress runtime-internal leaks without FFI evidence ──
+            // Only downgrade leak candidates where BOTH:
+            //   1. No FFI evidence attached (not from FFI boundary detection)
+            //   2. The alloc function is a known runtime internal
+            // This preserves user-code leaks (real bugs) while suppressing
+            // allocator/runtime noise. DoubleFree, UseAfterFree etc. always pass.
+            let alloc_fn = candidate.alloc_function.clone();
+            if !candidate.has_ffi_evidence()
+                && is_leak_candidate(&candidate)
+                && is_runtime_internal(&alloc_fn)
+            {
+                tracing::debug!(
+                    "FFI Gate: suppressing runtime-internal leak {} ({:?}) from {}",
+                    candidate.id,
+                    candidate.kind,
+                    alloc_fn
+                );
+                ffi_gate_suppressed += 1;
+                candidate.verdict = Some(VerifierVerdict::Diagnostic);
+                verified.push(candidate);
+                continue;
+            }
+
             // Check MemoryGraph state first for leak candidates
             let verdict = if let Some(resource_id) = candidate.resource_id {
                 if let Some(ref graph) = memory_graph {
@@ -321,6 +346,7 @@ impl Pass for IssueVerifierPass {
         }
         result.add_stat("gate_suppressed", gate_suppressed);
         result.add_stat("noise_suppressed", noise_suppressed);
+        result.add_stat("ffi_gate_suppressed", ffi_gate_suppressed);
 
         Ok(result)
     }

@@ -633,7 +633,7 @@ fn is_ffi_boundary_function(name: &str) -> bool {
 /// These patterns mirror `is_zig_runtime_internal` in module_index.rs
 /// and the NoiseReduction safe_patterns list, but are applied at the
 /// SRT level so IssueGate can use RuntimeInternal for suppression.
-fn is_runtime_internal(name: &str) -> bool {
+pub fn is_runtime_internal(name: &str) -> bool {
     // ── Zig runtime internal ──
     if name.starts_with("std.") {
         return true;

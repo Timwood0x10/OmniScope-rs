@@ -17,6 +17,7 @@
 //! - Skips known non-null APIs (Rust runtime, allocators, drop glue)
 //! - Skips `Box::into_raw` / `from_raw` (Rust raw ownership, already tracked)
 
+use omniscope_core::issue_candidate::FfiEvidence;
 use omniscope_core::{IssueCandidate, Result};
 use omniscope_ir::{IRInstruction, IRInstructionKind, IRModule};
 use omniscope_types::{Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
@@ -189,7 +190,12 @@ fn scan_function_body(
                                     .with_description(format!(
                                         "FFI return value '{}' from '{}' passed to null-sensitive function '{}' without check",
                                         op, source_callee, callee
-                                    ));
+                                    ))
+                                    .with_ffi_evidence(
+                                        FfiEvidence::FfiReturnUnchecked {
+                                            callee: source_callee.to_string(),
+                                        }
+                                    );
 
                                     // Add evidence
                                     candidate.add_evidence(Evidence::new(
@@ -248,7 +254,12 @@ fn scan_function_body(
                         .with_description(format!(
                             "FFI return value '{}' from '{}' used without null check in '{}'",
                             op, source_callee, func_name
-                        ));
+                        ))
+                        .with_ffi_evidence(
+                            FfiEvidence::FfiReturnUnchecked {
+                                callee: source_callee.to_string(),
+                            },
+                        );
 
                         // Add evidence
                         candidate.add_evidence(Evidence::new(

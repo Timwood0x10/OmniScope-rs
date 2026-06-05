@@ -24,6 +24,7 @@ mod grouping;
 #[cfg(test)]
 mod tests;
 
+use omniscope_core::issue_candidate::FfiEvidence;
 use omniscope_core::{IssueCandidate, Result};
 use omniscope_semantics::resource::allocator_shim::AllocatorShimDetector;
 use omniscope_semantics::{FamilyRegistry, LanguageDetector, OwnershipState, ResourceInstance};
@@ -228,6 +229,16 @@ impl Pass for IssueCandidateBuilderPass {
                                 candidate = candidate.with_boundary(boundary);
                             }
 
+                            // Set FFI evidence for cross-language free
+                            let caller_lang =
+                                detector.detect_from_function(&graph.edges[ri].caller_name);
+                            let callee_lang = detector.detect_from_function(release_func);
+                            candidate =
+                                candidate.with_ffi_evidence(FfiEvidence::CrossLanguageCall {
+                                    caller_lang: format!("{:?}", caller_lang),
+                                    callee_lang: format!("{:?}", callee_lang),
+                                });
+
                             candidates.push(candidate);
                         } else {
                             // Regular cross-family free
@@ -297,6 +308,14 @@ impl Pass for IssueCandidateBuilderPass {
 
                             if let Some(boundary) = boundary_evidence {
                                 candidate = candidate.with_boundary(boundary);
+                                // Only set FFI evidence when a boundary is proven —
+                                // cross-family without a boundary is a resource mismatch,
+                                // not an FFI signal.
+                                candidate =
+                                    candidate.with_ffi_evidence(FfiEvidence::CrossFamilyRelease {
+                                        alloc_family: format!("{:?}", alloc_family),
+                                        release_family: format!("{:?}", release_family),
+                                    });
                             }
 
                             candidates.push(candidate);
@@ -402,6 +421,10 @@ impl Pass for IssueCandidateBuilderPass {
                                     )
                                     .with_confidence(0.7),
                                 );
+
+                                // Set FFI evidence for callback escape
+                                candidate =
+                                    candidate.with_ffi_evidence(FfiEvidence::CallbackEscape);
 
                                 candidates.push(candidate);
                             }
@@ -581,13 +604,22 @@ impl Pass for IssueCandidateBuilderPass {
                         Evidence::new(
                             EvidenceKind::OwnershipEscapeLeak,
                             format!(
-                                "instance {} escaped via into_raw ('{}') but never \
-                                 reclaimed via from_raw — potential leak",
+                                "instance {} escaped via into_raw ('{}') but never reclaimed via from_raw — potential leak",
                                 instance_id, escape_func
                             ),
                         )
                         .with_confidence(0.7),
                     );
+
+                    // Set FFI evidence for ownership transfer only when it
+                    // crosses a language boundary — into_raw within the same
+                    // language is not an FFI signal.
+                    let escape_caller = graph.edges[escape_idx].caller_name.as_str();
+                    let escape_lang = detector.detect_from_function(escape_func);
+                    let caller_lang = detector.detect_from_function(escape_caller);
+                    if escape_lang != caller_lang {
+                        candidate = candidate.with_ffi_evidence(FfiEvidence::OwnershipTransfer);
+                    }
 
                     candidates.push(candidate);
                 }
@@ -614,7 +646,7 @@ impl Pass for IssueCandidateBuilderPass {
                             let id = next_id;
                             next_id += 1;
 
-                            let candidate = IssueCandidate::new(
+                            let mut candidate = IssueCandidate::new(
                                 id,
                                 IssueCandidateKind::CrossFamilyFree,
                                 alloc_family,
@@ -630,6 +662,13 @@ impl Pass for IssueCandidateBuilderPass {
                                 graph.edges[ri].function_name,
                                 reclaim_family
                             ));
+
+                            // Set FFI evidence for cross-family reclaim
+                            candidate =
+                                candidate.with_ffi_evidence(FfiEvidence::CrossFamilyRelease {
+                                    alloc_family: format!("{:?}", alloc_family),
+                                    release_family: format!("{:?}", reclaim_family),
+                                });
 
                             candidates.push(candidate);
                         }

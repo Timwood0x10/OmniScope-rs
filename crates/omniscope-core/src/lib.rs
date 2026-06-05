@@ -41,7 +41,7 @@ pub use fact::{Fact, FactId, FactKind, FactLocation, FactStore};
 pub use issue::{
     BoundaryKind, Confidence, FFIBoundary, Issue, IssueId, IssueKind, IssueLocation, TraceEntry,
 };
-pub use issue_candidate::{CandidateId, IssueCandidate};
+pub use issue_candidate::{CandidateId, FfiEvidence, IssueCandidate};
 pub use memory_pool::MemoryPool;
 pub use profiler::{MemorySample, Profiler, ScopedTimer, Span, SpanId, SpanStats};
 pub use terminal_report::{

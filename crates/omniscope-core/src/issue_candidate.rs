@@ -18,6 +18,30 @@ use serde::{Deserialize, Serialize};
 use crate::diagnostics::Severity;
 use crate::issue::{IssueKind, IssueLocation};
 
+/// Evidence that a candidate is FFI-relevant.
+/// Used by the FFI Gate to decide whether to report or downgrade.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FfiEvidence {
+    /// Cross-language call detected (caller_lang != callee_lang).
+    CrossLanguageCall {
+        caller_lang: String,
+        callee_lang: String,
+    },
+    /// Cross-family resource release (e.g., C_HEAP freed by CPP_NEW).
+    CrossFamilyRelease {
+        alloc_family: String,
+        release_family: String,
+    },
+    /// Resource escapes through callback/userdata.
+    CallbackEscape,
+    /// Ownership transfer across FFI boundary (into_raw/from_raw).
+    OwnershipTransfer,
+    /// FFI return value unchecked (nullable pointer used without check).
+    FfiReturnUnchecked { callee: String },
+    /// Explicit FFI boundary configured by user (--cross).
+    ConfiguredBoundary,
+}
+
 /// An issue candidate produced by the candidate builder.
 ///
 /// Candidates carry the raw evidence and context for a potential issue.
@@ -70,6 +94,9 @@ pub struct IssueCandidate {
     /// Evidence of cross-boundary relationship (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary: Option<CrossBoundaryEvidence>,
+    /// FFI evidence supporting this candidate. None = no FFI signal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ffi_evidence: Option<FfiEvidence>,
 }
 
 /// Unique identifier for issue candidates.
@@ -101,6 +128,7 @@ impl IssueCandidate {
             alloc_caller: None,
             release_caller: None,
             boundary: None,
+            ffi_evidence: None,
         }
     }
 
@@ -167,6 +195,17 @@ impl IssueCandidate {
     pub fn with_boundary(mut self, boundary: CrossBoundaryEvidence) -> Self {
         self.boundary = Some(boundary);
         self
+    }
+
+    /// Sets FFI evidence for this candidate.
+    pub fn with_ffi_evidence(mut self, evidence: FfiEvidence) -> Self {
+        self.ffi_evidence = Some(evidence);
+        self
+    }
+
+    /// Returns true if this candidate has any FFI evidence.
+    pub fn has_ffi_evidence(&self) -> bool {
+        self.ffi_evidence.is_some()
     }
 
     /// Returns true if this candidate has been verified.
@@ -363,6 +402,38 @@ mod tests {
                 .to_issue_kind(),
             IssueKind::UseAfterFree,
             "UseAfterFree candidate should map to UseAfterFree issue kind"
+        );
+    }
+
+    #[test]
+    fn test_ffi_evidence_none_by_default() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+        assert!(
+            !candidate.has_ffi_evidence(),
+            "New candidate should have no FFI evidence"
+        );
+    }
+
+    #[test]
+    fn test_ffi_evidence_set() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossFamilyFree,
+            FamilyId::C_HEAP,
+            "malloc",
+        )
+        .with_ffi_evidence(FfiEvidence::CrossLanguageCall {
+            caller_lang: "Zig".to_string(),
+            callee_lang: "C".to_string(),
+        });
+        assert!(
+            candidate.has_ffi_evidence(),
+            "Candidate with FFI evidence should return true"
         );
     }
 }
