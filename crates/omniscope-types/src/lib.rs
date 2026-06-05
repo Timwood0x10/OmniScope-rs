@@ -39,14 +39,16 @@ pub use config::{
 // Re-exports — Resource contract types
 pub use effect::{ArgIndex, Effect, FunctionOrigin, LanguageHint, VerifierVerdict};
 pub use escape::EscapeKind;
-pub use evidence::{Evidence, EvidenceKind, IssueCandidateKind};
+pub use evidence::{
+    BoundaryDetectionMethod, CrossBoundaryEvidence, Evidence, EvidenceKind, IssueCandidateKind,
+};
 pub use pointer_contract::PointerContract;
 pub use resource_family::{
     FamilyId, FamilyKind, LifetimeDomain, ResourceFamily, BUILTIN_FAMILIES, FAMILY_CPP_NEW_ARRAY,
     FAMILY_CPP_NEW_SCALAR, FAMILY_CSHARP_COTASK, FAMILY_CSHARP_HGLOBAL, FAMILY_C_HEAP,
     FAMILY_GO_GC, FAMILY_JAVA_GLOBAL_REF, FAMILY_JAVA_LOCAL_REF, FAMILY_PYTHON_MEM,
     FAMILY_PYTHON_MEM_RAW, FAMILY_PYTHON_OBJECT, FAMILY_RUST_GLOBAL, FAMILY_RUST_RAW_OWNERSHIP,
-    FAMILY_ZIG_ALLOCATOR,
+    FAMILY_UNKNOWN, FAMILY_ZIG_ALLOCATOR,
 };
 
 /// Unique identifier for nodes in analysis graphs

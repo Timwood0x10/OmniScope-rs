@@ -17,8 +17,9 @@
 //! - Skips known non-null APIs (Rust runtime, allocators, drop glue)
 //! - Skips `Box::into_raw` / `from_raw` (Rust raw ownership, already tracked)
 
-use omniscope_core::{Issue, Result};
+use omniscope_core::{IssueCandidate, Result};
 use omniscope_ir::{IRInstruction, IRInstructionKind, IRModule};
+use omniscope_types::{Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 
@@ -50,7 +51,8 @@ impl Pass for FfiReturnCheckPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
-        let mut issues: Vec<Issue> = Vec::new();
+        let mut candidates: Vec<IssueCandidate> = Vec::new();
+        let mut next_id = 1u64;
 
         // Retrieve the IRModule from context
         let ir_module: Option<IRModule> = ctx.get("ir_module");
@@ -86,22 +88,24 @@ impl Pass for FfiReturnCheckPass {
 
             // Now scan function bodies without borrow conflicts
             for (func_name, instructions) in functions_to_scan {
-                scan_function_body(module, &func_name, &instructions, &mut issues, ctx);
+                scan_function_body(
+                    module,
+                    &func_name,
+                    &instructions,
+                    &mut candidates,
+                    &mut next_id,
+                );
             }
         }
 
-        let issue_count = issues.len();
+        let candidate_count = candidates.len();
         let mut result =
             PassResult::new(self.name()).with_duration(start.elapsed().as_millis() as u64);
 
-        for issue in issues {
-            let outcome = ctx.emit_issue(issue.clone());
-            if outcome.is_allowed() {
-                result.add_issue(issue);
-            }
-        }
+        // Store candidates in context for IssueVerifier
+        ctx.store("ffi_return_candidates", candidates);
 
-        result.add_stat("ffi_unchecked_returns", issue_count);
+        result.add_stat("ffi_unchecked_returns", candidate_count);
 
         Ok(result)
     }
@@ -118,14 +122,16 @@ fn scan_function_body(
     module: &IRModule,
     func_name: &str,
     instructions: &[IRInstruction],
-    issues: &mut Vec<Issue>,
-    ctx: &mut PassContext,
+    candidates: &mut Vec<IssueCandidate>,
+    next_id: &mut u64,
 ) {
     // Track which registers have been null-checked.
     let mut null_checked: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Track which registers are FFI call results (potential null).
-    let mut ffi_return_regs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Maps register name -> callee name (for evidence context).
+    let mut ffi_return_regs: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for inst in instructions {
         match inst.kind {
@@ -146,7 +152,7 @@ fn scan_function_body(
                             if !is_non_null_api(callee_name) && !is_system_allocator(callee_name) {
                                 // If the call returns into a register, track it
                                 if let Some(ref dest) = inst.dest {
-                                    ffi_return_regs.insert(dest.clone());
+                                    ffi_return_regs.insert(dest.clone(), callee_name.to_string());
                                 }
                             }
                         }
@@ -165,28 +171,34 @@ fn scan_function_body(
                             }) {
                                 let op = word.trim();
                                 if op.starts_with('%')
-                                    && ffi_return_regs.contains(op)
+                                    && ffi_return_regs.contains_key(op)
                                     && !null_checked.contains(op)
                                 {
-                                    let issue_id = ctx.next_issue_id();
-                                    let location = omniscope_core::IssueLocation::new(
-                                        std::path::PathBuf::from("<ffi>"),
-                                        0,
+                                    let id = *next_id;
+                                    *next_id += 1;
+                                    let callee_name = ffi_return_regs.get(op).unwrap();
+                                    let source_callee = callee_name.trim_start_matches('@');
+                                    let mut candidate = IssueCandidate::new(
+                                        id,
+                                        IssueCandidateKind::NullDereference,
+                                        FamilyId::UNKNOWN,  // Not necessarily heap
+                                        func_name,  // Enclosing function as alloc_function
                                     )
-                                    .with_function(func_name);
-                                    let issue = Issue::new(
-                                        issue_id,
-                                        omniscope_core::IssueKind::NullDereference,
-                                        omniscope_core::diagnostics::Severity::Error,
-                                        format!(
-                                            "FFI return value '{}' passed to null-sink '{}' without null check in '{}'",
-                                            op, callee, func_name
-                                        ),
-                                    )
-                                    .with_symbol(op.to_string())
-                                    .with_location(location);
+                                    .with_release_function(source_callee)  // FFI callee as release_function
+                                    .with_alloc_caller(func_name)
+                                    .with_description(format!(
+                                        "FFI return value '{}' from '{}' passed to null-sensitive function '{}' without check",
+                                        op, source_callee, callee
+                                    ));
 
-                                    issues.push(issue);
+                                    // Add evidence
+                                    candidate.add_evidence(Evidence::new(
+                                        EvidenceKind::FfiReturnNullCheck,
+                                        format!("Return value from '{}' at register '{}' passed to '{}' without null check",
+                                                source_callee, op, callee),
+                                    ));
+
+                                    candidates.push(candidate);
                                     null_checked.insert(op.to_string());
                                 }
                             }
@@ -202,7 +214,7 @@ fn scan_function_body(
                         // Check if one operand is the register and the other is null
                         for operand in &inst.operands {
                             let op = operand.trim();
-                            if op.starts_with('%') && ffi_return_regs.contains(op) {
+                            if op.starts_with('%') && ffi_return_regs.contains_key(op) {
                                 null_checked.insert(op.to_string());
                             }
                         }
@@ -217,29 +229,35 @@ fn scan_function_body(
                 for operand in &inst.operands {
                     let op = operand.trim();
                     if op.starts_with('%')
-                        && ffi_return_regs.contains(op)
+                        && ffi_return_regs.contains_key(op)
                         && !null_checked.contains(op)
                     {
-                        // Found an unchecked use! Emit an issue.
-                        let issue_id = ctx.next_issue_id();
-                        let location = omniscope_core::IssueLocation::new(
-                            std::path::PathBuf::from("<ffi>"),
-                            0,
+                        // Found an unchecked use! Create a candidate.
+                        let id = *next_id;
+                        *next_id += 1;
+                        let callee_name = ffi_return_regs.get(op).unwrap();
+                        let source_callee = callee_name.trim_start_matches('@');
+                        let mut candidate = IssueCandidate::new(
+                            id,
+                            IssueCandidateKind::UncheckedFfiReturn,
+                            FamilyId::UNKNOWN, // Not necessarily heap
+                            func_name,         // Enclosing function as alloc_function
                         )
-                        .with_function(func_name);
-                        let issue = Issue::new(
-                            issue_id,
-                            omniscope_core::IssueKind::UncheckedReturn,
-                            omniscope_core::diagnostics::Severity::Warning,
-                            format!(
-                                "FFI return value '{}' used without null check in '{}' ({:?})",
-                                op, func_name, inst.kind
-                            ),
-                        )
-                        .with_symbol(op.to_string())
-                        .with_location(location);
+                        .with_release_function(source_callee) // FFI callee as release_function
+                        .with_alloc_caller(func_name)
+                        .with_description(format!(
+                            "FFI return value '{}' from '{}' used without null check in '{}'",
+                            op, source_callee, func_name
+                        ));
 
-                        issues.push(issue);
+                        // Add evidence
+                        candidate.add_evidence(Evidence::new(
+                            EvidenceKind::FfiReturnNullCheck,
+                            format!("Return value from '{}' at register '{}' has no null check before use in '{}'", 
+                                    source_callee, op, func_name),
+                        ));
+
+                        candidates.push(candidate);
 
                         // Mark as checked to avoid duplicate reports for the same register
                         null_checked.insert(op.to_string());
@@ -598,7 +616,9 @@ mod tests {
     #[test]
     fn test_e2e_ffi_return_unchecked_load_tp() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         // Parse LLVM IR that simulates:
         // %p = call ptr @ffi_get()
@@ -617,17 +637,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            !unchecked_issues.is_empty(),
-            "FFI return value used in load without null check MUST produce UncheckedReturn issue, got {} issues",
-            result.get_issues().len()
+            !unchecked_candidates.is_empty(),
+            "FFI return value used in load without null check MUST produce UncheckedFfiReturn candidate, got {} candidates",
+            candidates.len()
         );
     }
 
@@ -635,7 +655,9 @@ mod tests {
     #[test]
     fn test_e2e_ffi_return_unchecked_strlen_tp() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         // Parse LLVM IR that simulates:
         // %p = call ptr @ffi_get()
@@ -655,17 +677,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let null_deref_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let null_deref_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::NullDereference)
+            .filter(|c| c.kind == IssueCandidateKind::NullDereference)
             .collect();
         assert!(
-            !null_deref_issues.is_empty(),
-            "FFI return value passed to strlen without null check MUST produce NullDereference issue, got {} issues",
-            result.get_issues().len()
+            !null_deref_candidates.is_empty(),
+            "FFI return value passed to strlen without null check MUST produce NullDereference candidate, got {} candidates",
+            candidates.len()
         );
     }
 
@@ -673,7 +695,9 @@ mod tests {
     #[test]
     fn test_e2e_ffi_return_null_checked_no_false_positive() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         // Parse LLVM IR that simulates:
         // %p = call ptr @ffi_get()
@@ -700,17 +724,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            unchecked_issues.is_empty(),
-            "Null-checked FFI return must NOT produce UncheckedReturn issues, got {} issues",
-            unchecked_issues.len()
+            unchecked_candidates.is_empty(),
+            "Null-checked FFI return must NOT produce UncheckedFfiReturn candidates, got {} candidates",
+            unchecked_candidates.len()
         );
     }
 
@@ -718,7 +742,9 @@ mod tests {
     #[test]
     fn test_e2e_box_into_raw_no_false_positive() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         // Box::into_raw should be skipped by is_non_null_api
         let ir = r#"
@@ -735,17 +761,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            unchecked_issues.is_empty(),
-            "Box::into_raw must NOT produce UncheckedReturn issues, got {} issues",
-            unchecked_issues.len()
+            unchecked_candidates.is_empty(),
+            "Box::into_raw must NOT produce UncheckedFfiReturn candidates, got {} candidates",
+            unchecked_candidates.len()
         );
     }
 
@@ -754,7 +780,9 @@ mod tests {
     #[test]
     fn test_e2e_system_allocator_suppressed() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         // malloc without null check — should NOT produce UncheckedReturn
         let ir = r#"
@@ -777,17 +805,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            unchecked_issues.is_empty(),
-            "System allocators (malloc/calloc/aligned_alloc) must NOT produce UncheckedReturn issues, got {} issues",
-            unchecked_issues.len()
+            unchecked_candidates.is_empty(),
+            "System allocators (malloc/calloc/aligned_alloc) must NOT produce UncheckedFfiReturn candidates, got {} candidates",
+            unchecked_candidates.len()
         );
     }
 
@@ -795,7 +823,9 @@ mod tests {
     #[test]
     fn test_e2e_custom_allocator_suppressed() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         let ir = r#"
             declare ptr @mi_malloc(i64)
@@ -817,17 +847,17 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            unchecked_issues.is_empty(),
-            "Custom allocators (mi_malloc/je_malloc/tc_malloc) must NOT produce UncheckedReturn issues, got {} issues",
-            unchecked_issues.len()
+            unchecked_candidates.is_empty(),
+            "Custom allocators (mi_malloc/je_malloc/tc_malloc) must NOT produce UncheckedFfiReturn candidates, got {} candidates",
+            unchecked_candidates.len()
         );
     }
 
@@ -835,7 +865,9 @@ mod tests {
     #[test]
     fn test_e2e_non_allocator_still_detected() {
         use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
         use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
 
         // fopen is NOT an allocator — should still be flagged
         let ir = r#"
@@ -852,16 +884,16 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
 
-        let unchecked_issues: Vec<_> = result
-            .get_issues()
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
             .iter()
-            .filter(|i| i.kind == omniscope_core::IssueKind::UncheckedReturn)
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
             .collect();
         assert!(
-            !unchecked_issues.is_empty(),
-            "Non-allocator FFI (fopen) must still produce UncheckedReturn issue, got 0 issues",
+            !unchecked_candidates.is_empty(),
+            "Non-allocator FFI (fopen) must still produce UncheckedFfiReturn candidate, got 0 candidates",
         );
     }
 }

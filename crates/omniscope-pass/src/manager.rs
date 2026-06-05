@@ -155,9 +155,22 @@ impl PassManager {
     ) -> Result<(Vec<PassResult>, Vec<PassTiming>, Vec<omniscope_core::Issue>)> {
         self.compute_order()?;
         let mut ctx = if let Some(config) = config {
-            PassContext::with_config(config)
+            // Build BoundaryContext from config and store it in PassContext
+            // so that IssueVerifierPass can access it for boundary-based verification.
+            let boundary_ctx =
+                omniscope_types::boundary::BoundaryContext::from_config(&config.ffi_boundary);
+            let mut ctx = PassContext::with_config(config);
+            ctx.store("boundary_context", boundary_ctx);
+            ctx
         } else {
-            PassContext::new()
+            // Always store BoundaryContext, even when config is None.
+            // This ensures IssueVerifierPass can find it for boundary-based verification.
+            let mut ctx = PassContext::new();
+            ctx.store(
+                "boundary_context",
+                omniscope_types::boundary::BoundaryContext::new(),
+            );
+            ctx
         };
         if let Some(module) = ir_module {
             // Build the shared instruction metadata cache before running passes.

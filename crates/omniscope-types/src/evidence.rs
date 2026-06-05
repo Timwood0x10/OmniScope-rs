@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::Language;
 use crate::effect::Effect;
 use crate::escape::EscapeKind;
 use crate::pointer_contract::PointerContract;
@@ -228,6 +229,30 @@ pub enum IssueCandidateKind {
     /// This is the FFI boundary variant of cross-family free.
     /// Example: Rust Box allocated, C free() called.
     CrossLanguageFree,
+}
+
+/// Evidence that a resource crosses a declared FFI boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossBoundaryEvidence {
+    /// Source language of the boundary.
+    pub from: Language,
+    /// Target language of the boundary.
+    pub to: Language,
+    /// How the boundary was detected.
+    pub detection_method: BoundaryDetectionMethod,
+}
+
+/// How a cross-boundary relationship was detected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BoundaryDetectionMethod {
+    /// Explicit function in declared boundary list.
+    ExplicitFunction,
+    /// Pattern match (e.g., c_*).
+    PatternMatch,
+    /// Language-pair match (empty functions list).
+    LanguagePairMatch,
+    /// Auto-inferred from naming conventions.
+    AutoInferred,
 }
 
 #[cfg(test)]

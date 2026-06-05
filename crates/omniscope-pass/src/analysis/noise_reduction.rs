@@ -62,6 +62,11 @@ impl NoiseReduction {
                 // Stack canary
                 "__stack_chk_fail",
                 "__stack_chk_guard",
+                // Zig runtime internals
+                "Io.Threaded",
+                "posix.mmap",
+                "Thread.PosixThreadImpl",
+                "zig_allocator_",
             ],
         }
     }

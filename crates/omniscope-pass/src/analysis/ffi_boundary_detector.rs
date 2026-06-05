@@ -631,12 +631,12 @@ mod tests {
             "Rust mangled name must be detected as Rust"
         );
 
-        // Go function
-        let lang = detector.detect_callee_lang("main.myFunction");
+        // Go function (using _Cfunc_ prefix, which is Go-specific)
+        let lang = detector.detect_callee_lang("_Cfunc_myFunction");
         assert_eq!(
             lang,
             Language::Go,
-            "Go function with main. prefix must be detected as Go"
+            "Go function with _Cfunc_ prefix must be detected as Go"
         );
 
         // Zig function
@@ -645,6 +645,14 @@ mod tests {
             lang,
             Language::Zig,
             "Zig function with zig. prefix must be detected as Zig"
+        );
+
+        // Zig function with main. prefix (Zig also uses main.)
+        let lang = detector.detect_callee_lang("main.doubleFreeDemo");
+        assert_eq!(
+            lang,
+            Language::Zig,
+            "Zig function with main. prefix must be detected as Zig"
         );
 
         // Python function

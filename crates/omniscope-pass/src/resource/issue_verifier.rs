@@ -140,7 +140,12 @@ impl Pass for IssueVerifierPass {
                                 } else {
                                     // For non-leak candidates (CrossFamilyFree, UseAfterFree, etc.),
                                     // continue with standard verification
-                                    verify_candidate(&candidate, &registry, config.as_ref())
+                                    verify_candidate(
+                                        &candidate,
+                                        &registry,
+                                        config.as_ref(),
+                                        boundary_ctx.as_ref(),
+                                    )
                                 }
                             }
                             _ => {
@@ -171,30 +176,61 @@ impl Pass for IssueVerifierPass {
                                                     &candidate,
                                                     &registry,
                                                     config.as_ref(),
+                                                    boundary_ctx.as_ref(),
                                                 )
                                             }
                                         } else {
-                                            verify_candidate(&candidate, &registry, config.as_ref())
+                                            verify_candidate(
+                                                &candidate,
+                                                &registry,
+                                                config.as_ref(),
+                                                boundary_ctx.as_ref(),
+                                            )
                                         }
                                     } else {
-                                        verify_candidate(&candidate, &registry, config.as_ref())
+                                        verify_candidate(
+                                            &candidate,
+                                            &registry,
+                                            config.as_ref(),
+                                            boundary_ctx.as_ref(),
+                                        )
                                     }
                                 } else {
-                                    verify_candidate(&candidate, &registry, config.as_ref())
+                                    verify_candidate(
+                                        &candidate,
+                                        &registry,
+                                        config.as_ref(),
+                                        boundary_ctx.as_ref(),
+                                    )
                                 }
                             }
                         }
                     } else {
                         // No node in MemoryGraph, use standard verification
-                        verify_candidate(&candidate, &registry, config.as_ref())
+                        verify_candidate(
+                            &candidate,
+                            &registry,
+                            config.as_ref(),
+                            boundary_ctx.as_ref(),
+                        )
                     }
                 } else {
                     // No MemoryGraph available, use standard verification
-                    verify_candidate(&candidate, &registry, config.as_ref())
+                    verify_candidate(
+                        &candidate,
+                        &registry,
+                        config.as_ref(),
+                        boundary_ctx.as_ref(),
+                    )
                 }
             } else {
                 // No resource_id, use standard verification
-                verify_candidate(&candidate, &registry, config.as_ref())
+                verify_candidate(
+                    &candidate,
+                    &registry,
+                    config.as_ref(),
+                    boundary_ctx.as_ref(),
+                )
             };
             candidate.verdict = Some(verdict);
 
@@ -206,10 +242,20 @@ impl Pass for IssueVerifierPass {
             // Layer 1: Fast string-based FP suppression — skip known
             // safe patterns (compiler intrinsics, allocator internals, etc.)
             // before even reaching the SRT gate.
-            let func_name = candidate
-                .release_function
-                .as_deref()
-                .unwrap_or(&candidate.alloc_function);
+            // For FfiReturn candidates, check alloc_caller (the enclosing function)
+            // instead of alloc_function (the FFI callee).
+            let func_name = match candidate.kind {
+                IssueCandidateKind::NullDereference | IssueCandidateKind::UncheckedFfiReturn => {
+                    candidate
+                        .alloc_caller
+                        .as_deref()
+                        .unwrap_or(&candidate.alloc_function)
+                }
+                _ => candidate
+                    .release_function
+                    .as_deref()
+                    .unwrap_or(&candidate.alloc_function),
+            };
             if noise.should_suppress(func_name) {
                 noise_suppressed += 1;
                 candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
@@ -234,12 +280,21 @@ impl Pass for IssueVerifierPass {
                 issue = issue.with_symbol(symbol);
 
                 // Set the issue location with the function name from the candidate.
-                // Use alloc_function as the primary location (where the resource
-                // was acquired), which is the most relevant for diagnostics.
-                if !candidate.alloc_function.is_empty() && candidate.alloc_function != "unknown" {
+                // For FFI return candidates, use alloc_caller (the enclosing function
+                // where the unchecked return occurs). For other candidates, use
+                // alloc_function (where the resource was acquired).
+                let location_func = match candidate.kind {
+                    IssueCandidateKind::NullDereference
+                    | IssueCandidateKind::UncheckedFfiReturn => candidate
+                        .alloc_caller
+                        .as_deref()
+                        .unwrap_or(&candidate.alloc_function),
+                    _ => &candidate.alloc_function,
+                };
+                if !location_func.is_empty() && location_func != "unknown" {
                     let location =
                         omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
-                            .with_function(&candidate.alloc_function);
+                            .with_function(location_func);
                     issue = issue.with_location(location);
                 }
 
@@ -327,10 +382,17 @@ fn is_leak_candidate(candidate: &IssueCandidate) -> bool {
 /// - Destructor/drop/cleanup release path
 /// - Runtime/compiler origin
 /// - Unknown family policy (NeedsModel → Diagnostic, not high severity)
+///
+/// # Arguments
+/// * `candidate` - The issue candidate to verify.
+/// * `registry` - Family registry for compatible-release checks.
+/// * `config` - Optional configuration for other checks.
+/// * `boundary_ctx` - Optional boundary context for FFI boundary verification.
 fn verify_candidate(
     candidate: &IssueCandidate,
     registry: &FamilyRegistry,
     config: Option<&OmniScopeConfig>,
+    boundary_ctx: Option<&omniscope_types::boundary::BoundaryContext>,
 ) -> VerifierVerdict {
     // First, check if this is a non-memory resource (e.g., file descriptors).
     // Non-memory resources should not be reported as memory leaks.
@@ -346,7 +408,7 @@ fn verify_candidate(
     }
     match candidate.kind {
         IssueCandidateKind::CrossFamilyFree => {
-            verify_cross_family_free(candidate, registry, config)
+            verify_cross_family_free(candidate, registry, config, boundary_ctx)
         }
         IssueCandidateKind::UseAfterRelease => {
             // Use-after-release is almost always a real issue,
@@ -404,16 +466,20 @@ fn verify_candidate(
         IssueCandidateKind::CrossLanguageFree => {
             // Cross-language free is similar to cross-family free
             // but across language boundaries. Usually a real issue.
-            verify_cross_family_free(candidate, registry, config)
+            verify_cross_family_free(candidate, registry, config, boundary_ctx)
         }
     }
 }
 
 /// Verifies a cross-family free candidate.
+///
+/// Uses BoundaryContext for FFI boundary verification when available,
+/// falling back to config for other checks.
 fn verify_cross_family_free(
     candidate: &IssueCandidate,
     registry: &FamilyRegistry,
     config: Option<&OmniScopeConfig>,
+    boundary_ctx: Option<&omniscope_types::boundary::BoundaryContext>,
 ) -> VerifierVerdict {
     let Some(release_family) = candidate.release_family else {
         // Release family unknown — probable issue but not confirmed.
@@ -423,11 +489,12 @@ fn verify_cross_family_free(
     // Check if this is a configured FFI boundary.
     // If the function is in a known FFI boundary, it's likely a real issue
     // because cross-family free across language boundaries is dangerous.
-    if let Some(config) = config {
-        let release_func = candidate.release_function.as_deref().unwrap_or("");
+    let release_func = candidate.release_function.as_deref().unwrap_or("");
 
-        // 先检查显式函数列表
-        if let Some((from, to)) = config.is_ffi_boundary(release_func) {
+    // Use BoundaryContext for boundary checking if available
+    if let Some(boundary_ctx) = boundary_ctx {
+        // Check exact function name and pattern matches
+        if let Some((from, to)) = boundary_ctx.is_declared_boundary(release_func) {
             // This is a known FFI boundary function. The cross-family free
             // across language boundaries is almost always a real issue.
             tracing::debug!(
@@ -439,15 +506,46 @@ fn verify_cross_family_free(
             return VerifierVerdict::ConfirmedIssue;
         }
 
-        // 如果没有显式函数列表，使用语言检测来检查语言对匹配
+        // Check language pair matching when functions list is empty.
+        // Use release_caller for caller language detection — this is where
+        // the release call happens, which is the correct semantic for
+        // cross-language detection (release_caller in language X calls
+        // release_function in language Y).
         let detector = LanguageDetector::new();
-        let caller_lang = detector.detect_from_function(&candidate.alloc_function);
-        let callee_lang = detector.detect_from_function(release_func);
+        let caller_lang =
+            detector.detect_from_function(candidate.release_caller.as_deref().unwrap_or(""));
+        let release_lang = detector.detect_from_function(release_func);
+
+        if boundary_ctx.matches_call(caller_lang, release_lang) {
+            // This is a known FFI boundary function via language detection.
+            tracing::debug!(
+                "Cross-family free in FFI boundary function '{}' via language detection ({:?} -> {:?})",
+                release_func,
+                caller_lang,
+                release_lang
+            );
+            return VerifierVerdict::ConfirmedIssue;
+        }
+    } else if let Some(config) = config {
+        // Fallback to config if BoundaryContext is not available
+        if let Some((from, to)) = config.is_ffi_boundary(release_func) {
+            tracing::debug!(
+                "Cross-family free in FFI boundary function '{}' ({:?} -> {:?})",
+                release_func,
+                from,
+                to
+            );
+            return VerifierVerdict::ConfirmedIssue;
+        }
+
+        let detector = LanguageDetector::new();
+        let caller_lang =
+            detector.detect_from_function(candidate.release_caller.as_deref().unwrap_or(""));
+        let release_lang = detector.detect_from_function(release_func);
 
         if let Some((from, to)) =
-            config.is_ffi_boundary_with_lang(release_func, caller_lang, callee_lang)
+            config.is_ffi_boundary_with_lang(release_func, caller_lang, release_lang)
         {
-            // This is a known FFI boundary function via language detection.
             tracing::debug!(
                 "Cross-family free in FFI boundary function '{}' via language detection ({:?} -> {:?})",
                 release_func,
@@ -496,15 +594,24 @@ fn verify_double_release(candidate: &IssueCandidate) -> VerifierVerdict {
     let has_null_store = has_evidence(candidate, EvidenceKind::NullStoreAfterRelease);
     let has_path_refinement = has_evidence(candidate, EvidenceKind::PathStateRefinement);
 
-    // All three: fully analyzed null-guarded pattern → safe
+    // All three: fully analyzed null-guarded pattern → safe.
+    // This means we know: (1) the release function guards against null,
+    // (2) the pointer was set to NULL after the first release, and
+    // (3) path analysis confirmed the second release only fires when
+    // the pointer is NULL. All conditions met → safe.
     if has_null_guard && has_null_store && has_path_refinement {
         return VerifierVerdict::ExplainedSafe;
     }
 
-    // Null-guarded only (no path analysis) → diagnostic, needs more analysis
-    if has_null_guard && !has_path_refinement {
-        return VerifierVerdict::Diagnostic;
-    }
+    // Null-guard alone does NOT make double-free safe.
+    // `free(NULL)` is safe, but `free(ptr); free(ptr)` with non-null
+    // ptr is undefined behavior (CWE-415). Without path analysis
+    // proving the pointer is null at the second release, this is
+    // still a confirmed issue.
+    //
+    // Note: we intentionally skip the old "null_guard only → Diagnostic"
+    // path because it incorrectly suppressed real double-frees where
+    // the release function happens to be null-guarded (e.g., `free`).
 
     // Default: double-free is a confirmed issue
     VerifierVerdict::ConfirmedIssue
@@ -747,7 +854,7 @@ mod tests {
         .with_release_family(FamilyId::CPP_NEW_SCALAR)
         .with_release_function("operator delete");
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -767,7 +874,7 @@ mod tests {
         .with_release_family(FamilyId::C_HEAP)
         .with_release_function("free");
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -785,7 +892,7 @@ mod tests {
             "custom_alloc",
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::Diagnostic,
@@ -803,7 +910,7 @@ mod tests {
             "free",
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -829,7 +936,7 @@ mod tests {
                 .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -853,7 +960,7 @@ mod tests {
                 .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -879,7 +986,7 @@ mod tests {
             .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -905,7 +1012,7 @@ mod tests {
             .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -923,7 +1030,7 @@ mod tests {
             "register_callback",
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::Diagnostic,
@@ -942,7 +1049,7 @@ mod tests {
             "malloc",
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ProbableIssue,
@@ -960,7 +1067,7 @@ mod tests {
             "malloc",
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -985,7 +1092,7 @@ mod tests {
             .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -1075,6 +1182,11 @@ mod tests {
         );
     }
 
+    /// Objective: Verify that null-guard alone does NOT suppress double-free.
+    /// Invariants: Double-free is confirmed even when release function is
+    /// null-guarded, because `free(ptr); free(ptr)` with non-null ptr is UB.
+    /// Only when path analysis proves the pointer is null at the second release
+    /// (via NullStoreAfterRelease + PathStateRefinement) can we suppress.
     #[test]
     fn test_verify_double_release_with_null_guard_evidence() {
         let registry = FamilyRegistry::new();
@@ -1085,17 +1197,18 @@ mod tests {
             "free",
         );
 
-        // Add null-guarded release evidence
+        // Add null-guarded release evidence only (no path analysis)
         candidate.add_evidence(
             Evidence::new(EvidenceKind::NullGuardedRelease, "free(NULL) is safe in C")
                 .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
-            VerifierVerdict::Diagnostic,
-            "Null-guarded release without path analysis should be diagnostic"
+            VerifierVerdict::ConfirmedIssue,
+            "Null-guarded release without path analysis should still be confirmed issue — \
+             double-free on non-null pointer is UB regardless of null-guard"
         );
     }
 
@@ -1126,7 +1239,7 @@ mod tests {
                 .with_confidence(0.85),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1144,7 +1257,7 @@ mod tests {
             "free",
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ConfirmedIssue,
@@ -1171,7 +1284,7 @@ mod tests {
             .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1195,7 +1308,7 @@ mod tests {
                 .with_confidence(0.95),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1222,7 +1335,7 @@ mod tests {
             .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1249,7 +1362,7 @@ mod tests {
             .with_confidence(0.9),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ExplainedSafe,
@@ -1273,7 +1386,7 @@ mod tests {
                 .with_confidence(0.85),
         );
 
-        let verdict = verify_candidate(&candidate, &registry, None);
+        let verdict = verify_candidate(&candidate, &registry, None, None);
         assert_eq!(
             verdict,
             VerifierVerdict::ProbableIssue,

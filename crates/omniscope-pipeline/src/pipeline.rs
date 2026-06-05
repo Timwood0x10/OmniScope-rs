@@ -148,43 +148,8 @@ impl Pipeline {
     /// # Returns
     /// `Result<PipelineResult>` containing analysis results.
     pub fn run_with_auto_inference(&mut self) -> Result<PipelineResult> {
-        // 如果没有显式配置，尝试自动推断
-        let boundary_ctx = if let Some(config) = &self.omniscope_config {
-            // 使用显式配置
-            omniscope_types::boundary::BoundaryContext::from_config(&config.ffi_boundary)
-        } else {
-            // 自动推断
-            if let Some(module) = &self.ir_module {
-                omniscope_pass::infer_boundaries(module)
-            } else {
-                omniscope_types::boundary::BoundaryContext::new()
-            }
-        };
-
-        // 如果推断出了边界，创建配置并设置
-        if !boundary_ctx.is_empty() {
-            let inferred_config = omniscope_types::config::OmniScopeConfig {
-                project: None,
-                ffi_boundary: boundary_ctx
-                    .function_boundaries()
-                    .iter()
-                    .map(
-                        |(func, (from, to))| omniscope_types::config::FFIBoundaryConfig {
-                            from: *from,
-                            to: *to,
-                            functions: vec![func.clone()],
-                            pattern: None,
-                            description: Some("Auto-inferred boundary".to_string()),
-                        },
-                    )
-                    .collect(),
-                resource_family: Vec::new(),
-                analysis: omniscope_types::config::AnalysisOptions::default(),
-            };
-            self.omniscope_config = Some(inferred_config);
-        }
-
-        // 运行标准 pipeline
+        // Config should already be set before calling this method.
+        // Just run the standard pipeline.
         self.run()
     }
 

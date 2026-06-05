@@ -338,31 +338,11 @@ impl Pass for StructuralInferencePass {
                     None
                 };
 
+                // First, mark explicitly declared boundary functions
                 for func_name in module.functions.keys() {
                     let func = func_name.trim_start_matches('@');
 
-                    let is_boundary = if boundary_set.contains(func) {
-                        // Function is explicitly declared in boundary list
-                        true
-                    } else if use_language_detection {
-                        // Use language detection to check if this function
-                        // crosses any declared language boundary
-                        if let Some(ref det) = detector {
-                            let func_lang = det.detect_from_function(func);
-                            // Check if function's language matches any boundary's
-                            // from or to language
-                            config.ffi_boundary.iter().any(|boundary| {
-                                func_lang == boundary.from || func_lang == boundary.to
-                            })
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    if is_boundary {
-                        // Function is in declared boundary (or detected as boundary)
+                    if boundary_set.contains(func) {
                         srt_resolutions
                             .entry(func.to_string())
                             .or_default()
@@ -374,10 +354,85 @@ impl Pass for StructuralInferencePass {
                             .or_default()
                             .push(SemanticKind::DeclaredCrossBoundary);
                     }
-                    // Do NOT mark functions not in boundary as NonBoundaryInternal
-                    // This allows the system to still detect cross-boundary issues
-                    // for functions that are not explicitly declared as boundaries
                 }
+
+                // Second, mark functions that have actual crossing call edges
+                // (only when using language detection without explicit function list)
+                if use_language_detection {
+                    if let Some(ref det) = detector {
+                        // Create a set to track already marked functions to avoid duplicates
+                        let mut marked_functions: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+
+                        for call in &module.calls {
+                            let caller = call.caller.trim_start_matches('@');
+                            let callee = call.callee.trim_start_matches('@');
+
+                            let caller_lang = det.detect_from_function(caller);
+                            let callee_lang = det.detect_from_function(callee);
+
+                            // Check if this call edge crosses any declared boundary
+                            for boundary in &config.ffi_boundary {
+                                let crosses = (caller_lang == boundary.from
+                                    && callee_lang == boundary.to)
+                                    || (caller_lang == boundary.to && callee_lang == boundary.from);
+
+                                // Also check explicit function list
+                                let in_list = boundary
+                                    .functions
+                                    .iter()
+                                    .any(|f| f == callee || f == caller);
+
+                                // Also check pattern
+                                let matches_pattern = boundary
+                                    .pattern
+                                    .as_ref()
+                                    .map(|p| {
+                                        omniscope_types::boundary::matches_pattern(callee, p)
+                                            || omniscope_types::boundary::matches_pattern(caller, p)
+                                    })
+                                    .unwrap_or(false);
+
+                                if crosses || in_list || matches_pattern {
+                                    // Mark the callee as a boundary function
+                                    if !marked_functions.contains(callee) {
+                                        srt_resolutions
+                                            .entry(callee.to_string())
+                                            .or_default()
+                                            .push(SemanticKind::DeclaredCrossBoundary);
+
+                                        let key = omniscope_semantics::SemanticKey::symbol(callee);
+                                        srt_key_resolutions
+                                            .entry(key)
+                                            .or_default()
+                                            .push(SemanticKind::DeclaredCrossBoundary);
+
+                                        marked_functions.insert(callee.to_string());
+                                    }
+
+                                    // Mark the caller as a boundary function
+                                    if !caller.is_empty() && !marked_functions.contains(caller) {
+                                        srt_resolutions
+                                            .entry(caller.to_string())
+                                            .or_default()
+                                            .push(SemanticKind::DeclaredCrossBoundary);
+
+                                        let key = omniscope_semantics::SemanticKey::symbol(caller);
+                                        srt_key_resolutions
+                                            .entry(key)
+                                            .or_default()
+                                            .push(SemanticKind::DeclaredCrossBoundary);
+
+                                        marked_functions.insert(caller.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Do NOT mark functions not in boundary as NonBoundaryInternal
+                // This allows the system to still detect cross-boundary issues
+                // for functions that are not explicitly declared as boundaries
             }
         }
 

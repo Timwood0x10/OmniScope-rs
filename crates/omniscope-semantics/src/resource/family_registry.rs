@@ -633,8 +633,8 @@ mod tests {
         );
         assert_eq!(
             registry.family_count(),
-            21,
-            "Must have 21 built-in families (including FILE_DESCRIPTOR)"
+            22,
+            "Must have 22 built-in families (including FILE_DESCRIPTOR and UNKNOWN)"
         );
     }
 

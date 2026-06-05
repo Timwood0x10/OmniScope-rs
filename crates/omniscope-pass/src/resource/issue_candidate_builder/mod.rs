@@ -26,9 +26,10 @@ mod tests;
 
 use omniscope_core::{IssueCandidate, Result};
 use omniscope_semantics::resource::allocator_shim::AllocatorShimDetector;
-use omniscope_semantics::{FamilyRegistry, OwnershipState, ResourceInstance};
+use omniscope_semantics::{FamilyRegistry, LanguageDetector, OwnershipState, ResourceInstance};
 use omniscope_types::{
-    Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
+    BoundaryContext, BoundaryDetectionMethod, CrossBoundaryEvidence, Effect, Evidence,
+    EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
 };
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -81,6 +82,10 @@ impl Pass for IssueCandidateBuilderPass {
             .get_ref::<FamilyRegistry>("family_registry")
             .cloned()
             .unwrap_or_default();
+
+        // Load boundary context for FFI boundary detection.
+        let boundary_ctx = ctx.get_ref::<BoundaryContext>("boundary_context").cloned();
+        let detector = LanguageDetector::new();
 
         if let Some(graph) = graph {
             // Build index-based edge groups (zero-clone).
@@ -154,6 +159,8 @@ impl Pass for IssueCandidateBuilderPass {
                             .with_release_family(release_family)
                             .with_release_function(release_func)
                             .with_resource_id(*instance_id)
+                            .with_alloc_caller(&graph.edges[ai].caller_name)
+                            .with_release_caller(&graph.edges[ri].caller_name)
                             .with_description(format!(
                                 "cross-language free: {} ({:?}) released by {} ({:?})",
                                 alloc_func, alloc_family, release_func, release_family
@@ -168,10 +175,63 @@ impl Pass for IssueCandidateBuilderPass {
                                 )
                                 .with_confidence(0.9),
                             );
+
+                            // Check boundary context for cross-boundary evidence
+                            let boundary_evidence = if let Some(ref ctx) = boundary_ctx {
+                                // Check explicit function match
+                                if let Some((from, to)) = ctx.is_declared_boundary(release_func) {
+                                    Some(CrossBoundaryEvidence {
+                                        from,
+                                        to,
+                                        detection_method: BoundaryDetectionMethod::ExplicitFunction,
+                                    })
+                                }
+                                // Check pattern match
+                                else if let Some(edge) = ctx.declared_edges().iter().find(|e| {
+                                    if let Some(ref pattern) = e.pattern {
+                                        omniscope_types::matches_pattern(release_func, pattern)
+                                    } else {
+                                        false
+                                    }
+                                }) {
+                                    Some(CrossBoundaryEvidence {
+                                        from: edge.from,
+                                        to: edge.to,
+                                        detection_method: BoundaryDetectionMethod::PatternMatch,
+                                    })
+                                }
+                                // Check language pair match.
+                                // Use release_caller for caller language — this is where the
+                                // release call happens, which is the correct semantic for
+                                // cross-language detection (release_caller in language X calls
+                                // release_function in language Y).
+                                else {
+                                    let caller_lang =
+                                        detector.detect_from_function(&graph.edges[ri].caller_name);
+                                    let callee_lang = detector.detect_from_function(release_func);
+                                    if ctx.matches_call(caller_lang, callee_lang) {
+                                        Some(CrossBoundaryEvidence {
+                                            from: caller_lang,
+                                            to: callee_lang,
+                                            detection_method:
+                                                BoundaryDetectionMethod::LanguagePairMatch,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
+                            if let Some(boundary) = boundary_evidence {
+                                candidate = candidate.with_boundary(boundary);
+                            }
+
                             candidates.push(candidate);
                         } else {
                             // Regular cross-family free
-                            let candidate = IssueCandidate::new(
+                            let mut candidate = IssueCandidate::new(
                                 id,
                                 IssueCandidateKind::CrossFamilyFree,
                                 alloc_family,
@@ -180,99 +240,134 @@ impl Pass for IssueCandidateBuilderPass {
                             .with_release_family(release_family)
                             .with_release_function(release_func)
                             .with_resource_id(*instance_id)
+                            .with_alloc_caller(&graph.edges[ai].caller_name)
+                            .with_release_caller(&graph.edges[ri].caller_name)
                             .with_description(format!(
                                 "cross-family release: {} ({:?}) released by {} ({:?})",
                                 alloc_func, alloc_family, release_func, release_family
                             ));
+
+                            // Check boundary context for cross-boundary evidence
+                            let boundary_evidence = if let Some(ref ctx) = boundary_ctx {
+                                // Check explicit function match
+                                if let Some((from, to)) = ctx.is_declared_boundary(release_func) {
+                                    Some(CrossBoundaryEvidence {
+                                        from,
+                                        to,
+                                        detection_method: BoundaryDetectionMethod::ExplicitFunction,
+                                    })
+                                }
+                                // Check pattern match
+                                else if let Some(edge) = ctx.declared_edges().iter().find(|e| {
+                                    if let Some(ref pattern) = e.pattern {
+                                        omniscope_types::matches_pattern(release_func, pattern)
+                                    } else {
+                                        false
+                                    }
+                                }) {
+                                    Some(CrossBoundaryEvidence {
+                                        from: edge.from,
+                                        to: edge.to,
+                                        detection_method: BoundaryDetectionMethod::PatternMatch,
+                                    })
+                                }
+                                // Check language pair match.
+                                // Use release_caller for caller language — this is where the
+                                // release call happens, which is the correct semantic for
+                                // cross-language detection (release_caller in language X calls
+                                // release_function in language Y).
+                                else {
+                                    let caller_lang =
+                                        detector.detect_from_function(&graph.edges[ri].caller_name);
+                                    let callee_lang = detector.detect_from_function(release_func);
+                                    if ctx.matches_call(caller_lang, callee_lang) {
+                                        Some(CrossBoundaryEvidence {
+                                            from: caller_lang,
+                                            to: callee_lang,
+                                            detection_method:
+                                                BoundaryDetectionMethod::LanguagePairMatch,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
+                            if let Some(boundary) = boundary_evidence {
+                                candidate = candidate.with_boundary(boundary);
+                            }
+
                             candidates.push(candidate);
                         }
                     }
                 }
 
                 // ── DoubleRelease: multiple release edges ──
-                // Check pointer state at each release point
+                // Create N-1 candidates (one per release beyond the first),
+                // each with MultipleRelease evidence. PathStateRefinement
+                // must come from MemoryGraph proof in the verifier, not from
+                // "all releases are null-guarded" heuristic.
                 if release_indices.len() > 1 {
-                    // Check if releases are null-guarded
-                    let null_guarded_releases: Vec<usize> = release_indices
+                    let all_null_guarded = release_indices
                         .iter()
-                        .filter(|&&ri| is_null_guarded_release(&graph.edges[ri].function_name))
-                        .copied()
-                        .collect();
+                        .all(|&ri| is_null_guarded_release(&graph.edges[ri].function_name));
 
-                    // If all releases are null-guarded, this is safe
-                    if null_guarded_releases.len() == release_indices.len() {
-                        // All releases are null-guarded - safe pattern
+                    for &ri in release_indices.iter().skip(1) {
+                        let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
                         let id = next_id;
                         next_id += 1;
 
                         let mut candidate = IssueCandidate::new(
                             id,
                             IssueCandidateKind::DoubleRelease,
-                            graph.edges[release_indices[0]]
-                                .family
-                                .unwrap_or(FamilyId::C_HEAP),
-                            &graph.edges[release_indices[0]].function_name,
+                            family,
+                            &graph.edges[ri].function_name,
                         )
                         .with_resource_id(*instance_id);
+
+                        // Add MultipleRelease evidence
                         candidate.add_evidence(
                             Evidence::new(
-                                EvidenceKind::NullGuardedRelease,
+                                EvidenceKind::MultipleRelease,
                                 format!(
-                                    "instance {} has {} null-guarded releases",
+                                    "instance {} released {} times",
                                     instance_id,
                                     release_indices.len()
                                 ),
                             )
                             .with_confidence(0.9),
                         );
-                        candidate.add_evidence(
-                            Evidence::new(
-                                EvidenceKind::PathStateRefinement,
-                                "all releases are null-guarded - safe pattern".to_string(),
-                            )
-                            .with_confidence(0.85),
-                        );
-                        candidates.push(candidate);
-                    } else {
-                        // Some releases are not null-guarded - potential double release
-                        for &ri in release_indices.iter().skip(1) {
-                            let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
-                            let id = next_id;
-                            next_id += 1;
 
-                            let mut candidate = IssueCandidate::new(
-                                id,
-                                IssueCandidateKind::DoubleRelease,
-                                family,
-                                &graph.edges[ri].function_name,
-                            )
-                            .with_resource_id(*instance_id);
+                        // Add NullGuardedRelease evidence if applicable
+                        if all_null_guarded {
                             candidate.add_evidence(
                                 Evidence::new(
-                                    EvidenceKind::MultipleRelease,
+                                    EvidenceKind::NullGuardedRelease,
                                     format!(
-                                        "instance {} released {} times",
+                                        "instance {} has {} null-guarded releases",
                                         instance_id,
                                         release_indices.len()
                                     ),
                                 )
                                 .with_confidence(0.9),
                             );
-
-                            // Check if NULL is stored after release
-                            if has_null_store_pattern(graph, instance_id) {
-                                candidate.add_evidence(
-                                    Evidence::new(
-                                        EvidenceKind::NullStoreAfterRelease,
-                                        "NULL stored after release - prevents dangling pointer"
-                                            .to_string(),
-                                    )
-                                    .with_confidence(0.8),
-                                );
-                            }
-
-                            candidates.push(candidate);
                         }
+
+                        // Check if NULL is stored after release
+                        if has_null_store_pattern(graph, instance_id) {
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::NullStoreAfterRelease,
+                                    "NULL stored after release - prevents dangling pointer"
+                                        .to_string(),
+                                )
+                                .with_confidence(0.8),
+                            );
+                        }
+
+                        candidates.push(candidate);
                     }
                 }
 

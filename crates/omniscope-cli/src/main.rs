@@ -305,16 +305,35 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     // Create and configure pipeline
     let mut pipeline = Pipeline::new();
     pipeline.set_parallel(cmd.parallel);
-    pipeline.set_ir_module(loaded.module);
 
     // Set configuration before registering passes so that
     // ContractGraphBuilderPass can pick up CLI --cross boundaries.
     let use_auto_inference = cmd.cross.is_empty() && config.ffi_boundary.is_empty();
     if use_auto_inference {
         tracing::info!("No explicit cross boundaries, using auto-inference");
+        // Auto-infer boundaries BEFORE registering passes so that
+        // ContractGraphBuilderPass and other passes see the config.
+        // Use a reference to the module before moving it into the pipeline.
+        let inferred_ctx = omniscope_pass::infer_boundaries(&loaded.module);
+        if !inferred_ctx.is_empty() {
+            let mut inferred_config = config;
+            for edge in inferred_ctx.declared_edges() {
+                inferred_config.ffi_boundary.push(FFIBoundaryConfig {
+                    from: edge.from,
+                    to: edge.to,
+                    functions: edge.functions.clone(),
+                    pattern: edge.pattern.clone(),
+                    description: Some("Auto-inferred boundary".to_string()),
+                });
+            }
+            pipeline.set_config(inferred_config);
+        }
     } else {
         pipeline.set_config(config);
     }
+
+    // Now set the IR module (after we've used it for inference)
+    pipeline.set_ir_module(loaded.module);
 
     // Register passes AFTER config is set so they can read it.
     pipeline.register_default_passes();
@@ -324,12 +343,8 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     tracing::info!("Running analysis pipeline");
     let pipeline_start = Instant::now();
 
-    // If no explicit configuration is specified, use automatic inference.
-    let result = if use_auto_inference {
-        pipeline.run_with_auto_inference()?
-    } else {
-        pipeline.run()?
-    };
+    // Always run the pipeline. Config is already set before pass registration.
+    let result = pipeline.run()?;
 
     let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
     tracing::info!(

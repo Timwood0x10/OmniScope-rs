@@ -80,6 +80,11 @@ impl FamilyId {
     /// pairing model but uses integer resource IDs instead of pointers.
     pub const FILE_DESCRIPTOR: FamilyId = FamilyId(21);
 
+    /// Unknown family: used when the resource family cannot be determined.
+    /// This is a placeholder for FFI returns or other cases where the
+    /// resource type is unknown and should not be assumed to be heap memory.
+    pub const UNKNOWN: FamilyId = FamilyId(22);
+
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 
@@ -131,6 +136,7 @@ impl FamilyId {
             FamilyId::CSHARP_COM => "CSHARP_COM",
             FamilyId::RUST_RAW_OWNERSHIP => "RUST_RAW_OWNERSHIP",
             FamilyId::FILE_DESCRIPTOR => "FILE_DESCRIPTOR",
+            FamilyId::UNKNOWN => "UNKNOWN",
             _ => "unknown",
         }
     }
@@ -441,6 +447,18 @@ pub static FAMILY_FILE_DESCRIPTOR: ResourceFamily = ResourceFamily {
     compatible_releases: &[],
 };
 
+/// Unknown family: used when the resource family cannot be determined.
+/// This is a placeholder for FFI returns or other cases where the
+/// resource type is unknown and should not be assumed to be heap memory.
+/// No compatible releases — unknown resources cannot be released safely.
+pub static FAMILY_UNKNOWN: ResourceFamily = ResourceFamily {
+    id: FamilyId::UNKNOWN,
+    name: "unknown",
+    kind: FamilyKind::ManualHeap, // Conservative default
+    lifetime: LifetimeDomain::Unknown,
+    compatible_releases: &[],
+};
+
 /// Serializable form of `ResourceFamily` for serde round-tripping.
 /// `ResourceFamily` uses `&'static str` and `&'static [FamilyId]` which
 /// cannot derive `Deserialize`, so we convert to this owned form.
@@ -490,6 +508,8 @@ pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_RUST_RAW_OWNERSHIP,
     // File descriptor family (OS resource handles)
     &FAMILY_FILE_DESCRIPTOR,
+    // Unknown family (placeholder for FFI returns)
+    &FAMILY_UNKNOWN,
 ];
 
 #[cfg(test)]
@@ -500,8 +520,8 @@ mod tests {
     fn test_builtin_families_count() {
         assert_eq!(
             BUILTIN_FAMILIES.len(),
-            21,
-            "Must have exactly 21 built-in families (including FILE_DESCRIPTOR)"
+            22,
+            "Must have exactly 22 built-in families (including FILE_DESCRIPTOR and UNKNOWN)"
         );
     }
 

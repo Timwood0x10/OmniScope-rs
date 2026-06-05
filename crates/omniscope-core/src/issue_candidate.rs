@@ -10,7 +10,9 @@
 //! intermediate artifacts that carry evidence but have not yet been
 //! verified.
 
-use omniscope_types::{Evidence, FamilyId, IssueCandidateKind, PointerContract, VerifierVerdict};
+use omniscope_types::{
+    CrossBoundaryEvidence, Evidence, FamilyId, IssueCandidateKind, PointerContract, VerifierVerdict,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::Severity;
@@ -59,6 +61,15 @@ pub struct IssueCandidate {
     /// Resource instance ID in the MemoryGraph (for MemoryGraph-based verification).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<u64>,
+    /// The enclosing function where allocation occurs (caller context).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alloc_caller: Option<String>,
+    /// The enclosing function where release occurs (caller context).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_caller: Option<String>,
+    /// Evidence of cross-boundary relationship (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<CrossBoundaryEvidence>,
 }
 
 /// Unique identifier for issue candidates.
@@ -87,6 +98,9 @@ impl IssueCandidate {
             release_location: None,
             description: None,
             resource_id: None,
+            alloc_caller: None,
+            release_caller: None,
+            boundary: None,
         }
     }
 
@@ -134,6 +148,24 @@ impl IssueCandidate {
     /// Sets the resource instance ID for MemoryGraph-based verification.
     pub fn with_resource_id(mut self, resource_id: u64) -> Self {
         self.resource_id = Some(resource_id);
+        self
+    }
+
+    /// Sets the enclosing function where allocation occurs (caller context).
+    pub fn with_alloc_caller(mut self, caller: impl Into<String>) -> Self {
+        self.alloc_caller = Some(caller.into());
+        self
+    }
+
+    /// Sets the enclosing function where release occurs (caller context).
+    pub fn with_release_caller(mut self, caller: impl Into<String>) -> Self {
+        self.release_caller = Some(caller.into());
+        self
+    }
+
+    /// Sets the cross-boundary evidence.
+    pub fn with_boundary(mut self, boundary: CrossBoundaryEvidence) -> Self {
+        self.boundary = Some(boundary);
         self
     }
 
