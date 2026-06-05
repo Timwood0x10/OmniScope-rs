@@ -52,6 +52,9 @@ impl NoiseReduction {
                 "__rust_dealloc",
                 "__rust_realloc",
                 "__rust_alloc_zeroed",
+                // Rust v0 mangled alloc/core internals
+                "_ZN5alloc",
+                "_ZN4core",
                 // C++ ABI internals
                 "__cxa_allocate_exception",
                 "__cxa_throw",

@@ -922,7 +922,11 @@ fn test_accuracy_with_cross() {
     eprintln!("  Precision:       {:.1}%", result.precision * 100.0);
 
     // TP can vary due to pipeline non-determinism and FFI Gate suppression
-    assert!(result.tp >= 11, "TP should be at least 11, got {}", result.tp);
+    assert!(
+        result.tp >= 11,
+        "TP should be at least 11, got {}",
+        result.tp
+    );
     info!("  [PASS] TP {} >= 11", result.tp);
 
     assert!(

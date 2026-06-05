@@ -20,11 +20,23 @@ use tracing::debug;
 
 /// Parse inline IR text and run the default pipeline on it.
 fn run_pipeline_on_ir(ir: &str) -> omniscope_pipeline::PipelineResult {
+    init_tracing();
     let module = IRModule::parse_from_text(ir);
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();
     pipeline.set_ir_module(module);
     pipeline.run().expect("Pipeline run must succeed")
+}
+
+/// Initialize tracing subscriber for debug output in tests.
+fn init_tracing() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
+    });
 }
 
 /// Load an external .ll fixture file and run the default pipeline on it.

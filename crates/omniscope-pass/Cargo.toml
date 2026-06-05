@@ -26,6 +26,7 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
 omniscope-ir = { path = "../omniscope-ir" }
+tracing-subscriber = { workspace = true }
 
 [[bench]]
 name = "analysis_passes"

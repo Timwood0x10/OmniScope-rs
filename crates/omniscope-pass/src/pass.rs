@@ -386,8 +386,22 @@ impl PassContext {
             );
 
         if let Some(resolutions) = srt_resolutions {
+            // Debug: log the key we're looking for
+            tracing::debug!(
+                "IssueGate check: kind={:?}, symbol='{}', has_key={}",
+                issue.kind,
+                issue.symbol,
+                resolutions.contains_key(&issue.symbol),
+            );
             let gate_verdict =
                 crate::resource::issue_gate::check_issue_with_kinds(&issue, resolutions);
+            tracing::debug!(
+                "IssueGate verdict: kind={:?}, symbol='{}', verdict={:?} ({})",
+                issue.kind,
+                issue.symbol,
+                gate_verdict,
+                gate_verdict.reason(),
+            );
             if !gate_verdict.is_allowed() {
                 tracing::debug!(
                     "IssueGate suppressed {:?}: {} [{}]",
@@ -401,6 +415,47 @@ impl PassContext {
                     reason: gate_verdict.reason().to_string(),
                 };
             }
+        }
+
+        // Fallback: if SRT has no entry for this symbol, check whether
+        // the symbol is a known runtime/compiler internal. This catches
+        // cases where the symbol was never added to the SRT (e.g., not
+        // in raw_facts, not in IR calls at FFI boundaries) but is still
+        // clearly a runtime-internal function that should not be reported
+        // as a user-code FFI violation.
+        //
+        // IMPORTANT: This fallback mirrors the issue_gate.rs RuntimeInternal
+        // suppression scope — it only applies to issue kinds where the gate
+        // already uses RuntimeInternal for suppression:
+        //   - FfiUnsafeCall, ConditionalLeak, DefiniteLeak,
+        //     OwnershipEscapeLeak, CrossLanguageFree, OwnershipViolation
+        // It does NOT suppress CrossFamilyFree, UseAfterFree, DoubleFree,
+        // or WriteToImmutable — those are about wrong allocator/real bugs,
+        // not about runtime-internal noise.
+        //
+        // Fixes: _ZN5alloc* FfiUnsafeCall, _Znam DefiniteLeak, etc.
+        if crate::resource::structural_inference_pass::is_runtime_internal(&issue.symbol)
+            && matches!(
+                issue.kind,
+                omniscope_core::IssueKind::FfiUnsafeCall
+                    | omniscope_core::IssueKind::ConditionalLeak
+                    | omniscope_core::IssueKind::DefiniteLeak
+                    | omniscope_core::IssueKind::OwnershipEscapeLeak
+                    | omniscope_core::IssueKind::CrossLanguageFree
+                    | omniscope_core::IssueKind::OwnershipViolation
+            )
+        {
+            tracing::debug!(
+                "IssueGate fallback: suppressing runtime-internal symbol '{}' for {:?}",
+                issue.symbol,
+                issue.kind,
+            );
+            self.suppressed_issues.push(issue);
+            return EmitOutcome::Suppressed {
+                id,
+                reason: "runtime/compiler internal symbol, not a user-code FFI violation"
+                    .to_string(),
+            };
         }
 
         self.issues.push(issue);
