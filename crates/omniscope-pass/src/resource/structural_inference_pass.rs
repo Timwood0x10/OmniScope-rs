@@ -266,6 +266,32 @@ impl Pass for StructuralInferencePass {
                 kinds.push(SemanticKind::FromParameter);
             }
 
+            // R-9+: Cross-language semantic inference via function name patterns.
+            //
+            // SemanticKind::from_function_name() uses API naming conventions to
+            // detect Python (Py_INCREF, Py_DECREF, PyList_GetItem, etc.),
+            // Go (defer+free, SetFinalizer, runtime.mallocgc, _Cgo_*),
+            // C++ (unique_ptr, shared_ptr, ~Destructor, __cxa_throw),
+            // C# (SafeHandle, Finalize, DllImport, Marshal.*),
+            // and Java (NewLocalRef, DeleteGlobalRef, etc.) patterns.
+            //
+            // This bridges the SRT data flow gap: IssueGate queries these
+            // SemanticKinds for Leak/BorrowEscape/UseAfterFree suppression,
+            // but without this mapping they were never written to srt_resolutions,
+            // making the suppression code dead code.
+            let fn_name_kind = SemanticKind::from_function_name(symbol);
+            if fn_name_kind != SemanticKind::Unknown && !kinds.contains(&fn_name_kind) {
+                kinds.push(fn_name_kind);
+            }
+
+            // R-12: RuntimeInternal — Zig runtime functions (std.*, builtin.*,
+            // compiler_rt.*, zig_allocator_*, zig.*, zig.heap.*, zig.mem.*)
+            // These are compiler/runtime-internal and should suppress
+            // WriteToImmutable and Leak issues.
+            if is_runtime_internal(symbol) && !kinds.contains(&SemanticKind::RuntimeInternal) {
+                kinds.push(SemanticKind::RuntimeInternal);
+            }
+
             if !kinds.is_empty() {
                 srt_resolutions.insert(symbol.clone(), kinds.clone());
 
@@ -535,6 +561,63 @@ fn is_ffi_boundary_function(name: &str) -> bool {
         if ffi_prefixes.iter().any(|prefix| name.starts_with(prefix)) {
             return true;
         }
+    }
+
+    false
+}
+
+/// Checks whether a function name indicates a runtime-internal function.
+///
+/// Runtime-internal functions are compiler/runtime-generated code that
+/// should not be flagged as user bugs. This includes:
+/// - Zig runtime: std.*, builtin.*, compiler_rt.*, zig_allocator_*, zig.*
+/// - Rust runtime: __rust_*, core::panicking, alloc::raw_vec, etc.
+/// - C runtime: __cxa_*, __llvm_*, compiler_builtins, etc.
+///
+/// These patterns mirror `is_zig_runtime_internal` in module_index.rs
+/// and the NoiseReduction safe_patterns list, but are applied at the
+/// SRT level so IssueGate can use RuntimeInternal for suppression.
+fn is_runtime_internal(name: &str) -> bool {
+    // ── Zig runtime internal ──
+    if name.starts_with("std.") {
+        return true;
+    }
+    if name.starts_with("builtin.") {
+        return true;
+    }
+    if name.starts_with("compiler_rt.") || name == "compiler_rt" {
+        return true;
+    }
+    if name.starts_with("zig_allocator_") || name.starts_with("zig.") {
+        return true;
+    }
+    // Zig heap/memory management
+    if name.starts_with("zig.heap.") || name.starts_with("zig.mem.") {
+        return true;
+    }
+
+    // ── Rust runtime internal ──
+    // __rust_dealloc, __rust_alloc, __rust_realloc, __rust_alloc_zeroed
+    if name.starts_with("__rust_") {
+        return true;
+    }
+    // Core panicking / alloc internals
+    if name.starts_with("core::panicking") || name.starts_with("alloc::raw_vec") {
+        return true;
+    }
+
+    // ── C/C++ runtime internal ──
+    // __cxa_atexit, __cxa_throw, __cxa_begin_catch, etc.
+    if name.starts_with("__cxa_") {
+        return true;
+    }
+    // LLVM intrinsics and compiler builtins
+    if name.starts_with("__llvm_") || name.starts_with("compiler_builtins") {
+        return true;
+    }
+    // heap.c_allocator_impl — NoiseReduction safe pattern
+    if name.contains("c_allocator_impl") {
+        return true;
     }
 
     false

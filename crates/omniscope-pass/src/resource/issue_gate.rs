@@ -34,6 +34,9 @@
 //! | FfiUnsafeCall         | PythonRefcount*/BorrowedRef/OwnedRef/GilProtected | Python |
 //! | FfiUnsafeCall         | CsharpSafeHandle/CsharpFinalizer | C# SafeHandle |
 //! | FfiUnsafeCall         | JavaLocalRef/GlobalRef/WeakRef | Java JNI |
+//! | ConditionalLeak       | RaiiDropRelease/CppDestructor/GoDeferCleanup/etc. | R-3+ |
+//! | DefiniteLeak          | RaiiDropRelease/CppDestructor/GoDeferCleanup/etc. | R-3+ |
+//! | OwnershipEscapeLeak   | RaiiDropRelease/IntoRawTransfer/RuntimeInternal | R-3/R-6 |
 
 use omniscope_core::Issue;
 use omniscope_semantics::{SemanticKey, SemanticKind};
@@ -290,6 +293,97 @@ where
                 || has_kind(key, SemanticKind::JavaGlobalRef)
                 || has_kind(key, SemanticKind::JavaWeakRef)
             {
+                return GateVerdict::SuppressRaii;
+            }
+        }
+
+        // ── ConditionalLeak / DefiniteLeak: suppress when SRT signals indicate
+        // the resource is managed by a cleanup mechanism (RAII, defer, GC, etc.)
+        // R-3: RAII drop/dealloc — compiler-inserted, resource will be freed
+        // C++ RAII: destructor/smart-ptr ensures cleanup
+        // Go: defer/finalizer ensures cleanup
+        // Python: refcount ensures cleanup
+        // C#: SafeHandle/finalizer ensures cleanup
+        // Java: JNI reference management ensures cleanup
+        // R-1: Heap/global provenance — runtime-managed, not a local leak
+        // RuntimeInternal: runtime wrapper (e.g., heap.c_allocator_impl) — bridge, not leak
+        omniscope_core::IssueKind::ConditionalLeak | omniscope_core::IssueKind::DefiniteLeak => {
+            // R-3: RAII drop — compiler will free, not a leak
+            if has_kind(key, SemanticKind::RaiiDropRelease) {
+                return GateVerdict::SuppressRaii;
+            }
+            // C++ RAII: destructor/smart-ptr ensures cleanup
+            if has_kind(key, SemanticKind::CppDestructor)
+                || has_kind(key, SemanticKind::CppUniquePtr)
+                || has_kind(key, SemanticKind::CppSharedPtr)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Go: defer/finalizer ensures cleanup
+            if has_kind(key, SemanticKind::GoDeferCleanup)
+                || has_kind(key, SemanticKind::GoFinalizer)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Python: refcount ensures cleanup
+            if has_kind(key, SemanticKind::PythonRefcountInc)
+                || has_kind(key, SemanticKind::PythonRefcountDec)
+                || has_kind(key, SemanticKind::PythonBorrowedRef)
+                || has_kind(key, SemanticKind::PythonOwnedRef)
+                || has_kind(key, SemanticKind::PythonGilProtected)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // C#: SafeHandle/finalizer ensures cleanup
+            if has_kind(key, SemanticKind::CsharpSafeHandle)
+                || has_kind(key, SemanticKind::CsharpFinalizer)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Java: JNI reference management ensures cleanup
+            if has_kind(key, SemanticKind::JavaLocalRef)
+                || has_kind(key, SemanticKind::JavaGlobalRef)
+                || has_kind(key, SemanticKind::JavaWeakRef)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // R-1: Heap/global provenance — runtime-managed resource
+            if has_kind(key, SemanticKind::HeapProvenance)
+                || has_kind(key, SemanticKind::GlobalProvenance)
+            {
+                return GateVerdict::SuppressHeapOrigin;
+            }
+            // RuntimeInternal: runtime wrapper bridges (e.g., heap.c_allocator_impl)
+            if has_kind(key, SemanticKind::RuntimeInternal) {
+                return GateVerdict::SuppressRaii;
+            }
+        }
+
+        // ── OwnershipEscapeLeak: suppress for RAII/cleanup patterns ──
+        omniscope_core::IssueKind::OwnershipEscapeLeak => {
+            // R-3: RAII drop
+            if has_kind(key, SemanticKind::RaiiDropRelease) {
+                return GateVerdict::SuppressRaii;
+            }
+            // C++ RAII
+            if has_kind(key, SemanticKind::CppDestructor)
+                || has_kind(key, SemanticKind::CppUniquePtr)
+                || has_kind(key, SemanticKind::CppSharedPtr)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // Go cleanup
+            if has_kind(key, SemanticKind::GoDeferCleanup)
+                || has_kind(key, SemanticKind::GoFinalizer)
+            {
+                return GateVerdict::SuppressRaii;
+            }
+            // R-6: Ownership transfer via into_raw — by design, not a leak
+            if has_kind(key, SemanticKind::IntoRawTransfer) {
+                return GateVerdict::SuppressOwnershipTransfer;
+            }
+            // RuntimeInternal: runtime wrapper
+            if has_kind(key, SemanticKind::RuntimeInternal) {
                 return GateVerdict::SuppressRaii;
             }
         }
@@ -574,6 +668,126 @@ mod tests {
             verdict,
             GateVerdict::Allow,
             "UncheckedReturn for non-allocator FFI (fopen) must pass the gate"
+        );
+    }
+
+    // ── Leak suppression tests ──────────────────────────────────────
+
+    /// Objective: Verify ConditionalLeak with RAII drop is suppressed.
+    /// Invariants: RAII-managed resources are not leaks.
+    #[test]
+    fn test_gate_suppresses_conditional_leak_raii() {
+        let issue = make_issue(IssueKind::ConditionalLeak, "drop_in_place");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "drop_in_place" && kind == SemanticKind::RaiiDropRelease
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "ConditionalLeak with RAII drop should be suppressed"
+        );
+    }
+
+    /// Objective: Verify ConditionalLeak with C++ destructor is suppressed.
+    /// Invariants: C++ RAII ensures cleanup, not a leak.
+    #[test]
+    fn test_gate_suppresses_conditional_leak_cpp_destructor() {
+        let issue = make_issue(IssueKind::ConditionalLeak, "~String");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "~String" && kind == SemanticKind::CppDestructor
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "ConditionalLeak with C++ destructor should be suppressed"
+        );
+    }
+
+    /// Objective: Verify DefiniteLeak with Go defer is suppressed.
+    /// Invariants: Go defer ensures cleanup, not a leak.
+    #[test]
+    fn test_gate_suppresses_definite_leak_go_defer() {
+        let issue = make_issue(IssueKind::DefiniteLeak, "defer_close");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "defer_close" && kind == SemanticKind::GoDeferCleanup
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "DefiniteLeak with Go defer cleanup should be suppressed"
+        );
+    }
+
+    /// Objective: Verify ConditionalLeak with RuntimeInternal is suppressed.
+    /// Invariants: Runtime internal wrappers (e.g., heap.c_allocator_impl) are bridges, not leaks.
+    #[test]
+    fn test_gate_suppresses_conditional_leak_runtime_internal() {
+        let issue = make_issue(IssueKind::ConditionalLeak, "c_allocator_impl");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "c_allocator_impl" && kind == SemanticKind::RuntimeInternal
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "ConditionalLeak with RuntimeInternal should be suppressed"
+        );
+    }
+
+    /// Objective: Verify ConditionalLeak with HeapProvenance is suppressed.
+    /// Invariants: Heap-provenance resources are runtime-managed, not local leaks.
+    #[test]
+    fn test_gate_suppresses_conditional_leak_heap_provenance() {
+        let issue = make_issue(IssueKind::ConditionalLeak, "alloc");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "alloc" && kind == SemanticKind::HeapProvenance
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressHeapOrigin,
+            "ConditionalLeak with heap provenance should be suppressed"
+        );
+    }
+
+    /// Objective: Verify OwnershipEscapeLeak with RAII drop is suppressed.
+    /// Invariants: RAII-managed ownership escape is not a real leak.
+    #[test]
+    fn test_gate_suppresses_ownership_escape_leak_raii() {
+        let issue = make_issue(IssueKind::OwnershipEscapeLeak, "drop_in_place");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "drop_in_place" && kind == SemanticKind::RaiiDropRelease
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "OwnershipEscapeLeak with RAII drop should be suppressed"
+        );
+    }
+
+    /// Objective: Verify OwnershipEscapeLeak with IntoRawTransfer is suppressed.
+    /// Invariants: into_raw transfers are by-design ownership escapes.
+    #[test]
+    fn test_gate_suppresses_ownership_escape_leak_into_raw() {
+        let issue = make_issue(IssueKind::OwnershipEscapeLeak, "into_raw");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "into_raw" && kind == SemanticKind::IntoRawTransfer
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressOwnershipTransfer,
+            "OwnershipEscapeLeak with into_raw transfer should be suppressed"
+        );
+    }
+
+    /// Objective: Verify ConditionalLeak without matching kind passes the gate.
+    /// Invariants: Leaks without cleanup signals should still be reported.
+    #[test]
+    fn test_gate_allows_conditional_leak_no_suppression() {
+        let issue = make_issue(IssueKind::ConditionalLeak, "raw_malloc");
+        let verdict = check_issue(&issue, |_, _| false);
+        assert_eq!(
+            verdict,
+            GateVerdict::Allow,
+            "ConditionalLeak without suppression signal must pass the gate"
         );
     }
 }

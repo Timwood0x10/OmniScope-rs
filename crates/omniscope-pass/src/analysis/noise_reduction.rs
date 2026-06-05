@@ -170,6 +170,57 @@ impl NoiseReduction {
                         | SemanticKind::JavaWeakRef
                 )
             }),
+            // Leak types: suppress when cleanup mechanism detected (RAII, defer, GC, etc.)
+            "conditional_leak" | "definite_leak" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    // R-3: RAII drop/dealloc — compiler will free
+                    SemanticKind::RaiiDropRelease
+                        // C++ RAII: destructor/smart-ptr ensures cleanup
+                        | SemanticKind::CppDestructor
+                        | SemanticKind::CppUniquePtr
+                        | SemanticKind::CppSharedPtr
+                        // Go: defer/finalizer ensures cleanup
+                        | SemanticKind::GoDeferCleanup
+                        | SemanticKind::GoFinalizer
+                        // Python: refcount ensures cleanup
+                        | SemanticKind::PythonRefcountInc
+                        | SemanticKind::PythonRefcountDec
+                        | SemanticKind::PythonBorrowedRef
+                        | SemanticKind::PythonOwnedRef
+                        | SemanticKind::PythonGilProtected
+                        // C#: SafeHandle/finalizer ensures cleanup
+                        | SemanticKind::CsharpSafeHandle
+                        | SemanticKind::CsharpFinalizer
+                        // Java: JNI reference management ensures cleanup
+                        | SemanticKind::JavaLocalRef
+                        | SemanticKind::JavaGlobalRef
+                        | SemanticKind::JavaWeakRef
+                        // R-1: Heap/global provenance — runtime-managed
+                        | SemanticKind::HeapProvenance
+                        | SemanticKind::GlobalProvenance
+                        // Runtime internal wrapper
+                        | SemanticKind::RuntimeInternal
+                )
+            }),
+            "ownership_escape_leak" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    // R-3: RAII drop
+                    SemanticKind::RaiiDropRelease
+                        // C++ RAII
+                        | SemanticKind::CppDestructor
+                        | SemanticKind::CppUniquePtr
+                        | SemanticKind::CppSharedPtr
+                        // Go cleanup
+                        | SemanticKind::GoDeferCleanup
+                        | SemanticKind::GoFinalizer
+                        // R-6: Ownership transfer via into_raw — by design
+                        | SemanticKind::IntoRawTransfer
+                        // Runtime internal wrapper
+                        | SemanticKind::RuntimeInternal
+                )
+            }),
             // R-9: Suppress unchecked_return for allocators (malloc_unchecked noise)
             "unchecked_return" => kinds.iter().any(|k| {
                 matches!(

@@ -281,10 +281,11 @@ mod tests {
     #[test]
     fn test_is_refcount_decrement() {
         let pass = RaiiDropPass::new();
-        // atomicrmw instruction prefix
+        // "atomicrmw" alone is NOT a refcount decrement — only atomicrmw.sub is.
+        // Other variants (add, xchg, and, or, xor, max, min) are NOT refcount ops.
         assert!(
-            pass.is_refcount_decrement("atomicrmw"),
-            "atomicrmw should be recognized as refcount decrement"
+            !pass.is_refcount_decrement("atomicrmw"),
+            "\"atomicrmw\" alone should NOT be recognized as refcount decrement (only atomicrmw.sub is)"
         );
         assert!(
             pass.is_refcount_decrement("atomicrmw.sub.i64"),
