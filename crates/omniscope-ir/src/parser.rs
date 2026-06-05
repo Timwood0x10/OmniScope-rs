@@ -6,7 +6,7 @@
 //! [`instruction_parser`] submodule.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // Re-export instruction-level types so that external consumers can still
 // access them via `omniscope_ir::IRInstructionKind` etc.
@@ -138,6 +138,8 @@ pub struct IRModule {
     pub calling_conventions: Vec<CallingConvention>,
     /// Debug metadata: maps metadata ID (e.g., "123" from !123) to source location.
     pub debug_metadata: HashMap<String, SourceLocation>,
+    /// Debug file metadata: maps metadata ID to file path (from !DIFile entries).
+    debug_files: HashMap<String, PathBuf>,
 }
 
 impl IRModule {
@@ -157,6 +159,7 @@ impl IRModule {
             },
             calling_conventions: Vec::new(),
             debug_metadata: HashMap::new(),
+            debug_files: HashMap::new(),
         }
     }
 
@@ -178,7 +181,10 @@ impl IRModule {
             }
 
             // Parse global variables: @name = global ... or @name = constant ...
-            if line.starts_with('@') && line.contains(" = global ") || line.contains(" = constant ")
+            // Parentheses required: `&&` binds tighter than `||`, so without them
+            // any line containing " = constant " would match regardless of `@` prefix.
+            if line.starts_with('@')
+                && (line.contains(" = global ") || line.contains(" = constant "))
             {
                 let name = line
                     .split_whitespace()
@@ -193,9 +199,11 @@ impl IRModule {
                 }
             }
 
-            // Collect debug metadata definitions: !N = !DILocation(...)
+            // Collect debug metadata definitions: !N = !DIFile(...) or !N = !DILocation(...)
             if line.starts_with('!') {
-                if let Some((id, loc)) = parse_debug_metadata(line) {
+                if let Some((id, path)) = parse_debug_file(line) {
+                    module.debug_files.insert(id, path);
+                } else if let Some((id, loc)) = parse_debug_metadata(line, &module.debug_files) {
                     module.debug_metadata.insert(id, loc);
                 }
                 // Skip other metadata lines inside function bodies
@@ -624,7 +632,11 @@ fn parse_call_result_from_raw(raw: &str) -> Option<String> {
 ///
 /// Format: `!N = !DILocation(line: 42, column: 5, scope: !1, file: !2)`
 /// Returns (metadata_id, SourceLocation) if the line is a DILocation.
-fn parse_debug_metadata(line: &str) -> Option<(String, SourceLocation)> {
+/// The `file` field is resolved from `debug_files` when a `file: !M` reference is found.
+fn parse_debug_metadata(
+    line: &str,
+    debug_files: &HashMap<String, PathBuf>,
+) -> Option<(String, SourceLocation)> {
     // Match: !N = !DILocation(...)
     let eq_pos = line.find(" = ")?;
     let id_part = &line[..eq_pos];
@@ -668,9 +680,86 @@ fn parse_debug_metadata(line: &str) -> Option<(String, SourceLocation)> {
         }
     }
 
-    let mut loc = SourceLocation::new(std::path::PathBuf::new(), src_line);
+    // Extract file reference: "file: !N"
+    let file_path = if let Some(file_start) = def_part.find("file:") {
+        let after = &def_part[file_start + 5..];
+        let trimmed = after.trim_start();
+        if let Some(bang_pos) = trimmed.find('!') {
+            let ref_num: String = trimmed[bang_pos + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !ref_num.is_empty() {
+                debug_files.get(&ref_num).cloned().unwrap_or_default()
+            } else {
+                PathBuf::new()
+            }
+        } else {
+            PathBuf::new()
+        }
+    } else {
+        PathBuf::new()
+    };
+
+    let mut loc = SourceLocation::new(file_path, src_line);
     loc.column = src_column;
     Some((id_num, loc))
+}
+
+/// Parse a debug file metadata definition line.
+///
+/// Format: `!N = !DIFile(filename: "foo.c", directory: "/path")`
+/// Returns (metadata_id, PathBuf) if the line is a DIFile.
+fn parse_debug_file(line: &str) -> Option<(String, PathBuf)> {
+    let eq_pos = line.find(" = ")?;
+    let id_part = &line[..eq_pos];
+    if !id_part.starts_with('!') {
+        return None;
+    }
+    let id_num: String = id_part[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if id_num.is_empty() {
+        return None;
+    }
+
+    let def_part = &line[eq_pos + 3..];
+    if !def_part.starts_with("!DIFile") {
+        return None;
+    }
+
+    // Extract filename: "filename: \"name\""
+    let filename = extract_quoted_field(def_part, "filename:")?;
+    // Extract directory: "directory: \"/path\"" (optional)
+    let directory = extract_quoted_field(def_part, "directory:");
+
+    let path = match directory {
+        Some(dir) if !dir.is_empty() => {
+            let mut p = PathBuf::from(dir);
+            p.push(filename);
+            p
+        }
+        _ => PathBuf::from(filename),
+    };
+
+    Some((id_num, path))
+}
+
+/// Extract a quoted string value for a named field in debug metadata.
+///
+/// E.g., `extract_quoted_field("filename: \"foo.c\", ...", "filename:")`
+/// returns `Some("foo.c")`.
+fn extract_quoted_field(text: &str, field_name: &str) -> Option<String> {
+    let start = text.find(field_name)?;
+    let after = &text[start + field_name.len()..];
+    let trimmed = after.trim_start();
+    // Expect a quoted string
+    if !trimmed.starts_with('"') {
+        return None;
+    }
+    let content = &trimmed[1..];
+    content.find('"').map(|end| content[..end].to_string())
 }
 
 /// Extract target triple from IR line.

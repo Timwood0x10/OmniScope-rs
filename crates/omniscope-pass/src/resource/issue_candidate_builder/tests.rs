@@ -1274,3 +1274,360 @@ fn test_same_family_not_cross_language() {
         "Same family release must NOT be detected as cross-language mismatch"
     );
 }
+
+/// Objective: Verify that a ConsumesArg edge after a Release edge
+/// produces a UseAfterRelease (UseAfterFree) candidate. This covers
+/// the `free(ptr); ffi_call(ptr)` pattern where the freed pointer
+/// is consumed by another FFI call.
+/// Invariants: ConsumesArg after Release = UseAfterRelease candidate.
+#[test]
+fn test_consumes_arg_after_release_produces_use_after_free() {
+    let mut graph = ContractGraph::new();
+    let instance_id = graph.alloc_instance();
+
+    // Acquire edge
+    graph.add_edge(ContractEdge {
+        source: 0,
+        target: instance_id,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance_id,
+        },
+        function: 0,
+        function_name: "malloc".to_string(),
+        caller_name: "buggy_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    // Release edge (free)
+    graph.add_edge(ContractEdge {
+        source: instance_id,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "buggy_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    // ConsumesArg edge after release — the freed pointer is consumed
+    // by another function (use-after-free pattern).
+    graph.add_edge(ContractEdge {
+        source: instance_id,
+        target: 0,
+        effect: Effect::ConsumesArg {
+            arg: 0,
+            family: Some(FamilyId::C_HEAP),
+        },
+        function: 2,
+        function_name: "ffi_process".to_string(),
+        caller_name: "buggy_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    let groups = InstanceEdgeGroups::new(&graph);
+
+    // Create ownership state in Released state
+    let mut ownership_states = Vec::new();
+    let mut instance = ResourceInstance::new(instance_id, FamilyId::C_HEAP, PointerContract::Owned);
+    instance
+        .transition(omniscope_semantics::OwnershipEvent::Release { function: 1 })
+        .unwrap();
+    ownership_states.push(instance);
+
+    let state_index: std::collections::HashMap<u64, usize> = ownership_states
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id, i))
+        .collect();
+
+    let mut has_use_after_free = false;
+
+    for inst_id in groups.instance_ids() {
+        let edge_indices = groups.edges_of(*inst_id);
+        let release_indices: Vec<usize> = edge_indices
+            .iter()
+            .copied()
+            .filter(|&idx| {
+                matches!(
+                    graph.edges[idx].effect,
+                    Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                )
+            })
+            .collect();
+
+        if !release_indices.is_empty() {
+            let last_release_idx = *release_indices.last().unwrap();
+
+            let post_release_uses: Vec<usize> = edge_indices
+                .iter()
+                .filter(|&&idx| {
+                    idx > last_release_idx
+                        && matches!(
+                            graph.edges[idx].effect,
+                            Effect::EscapesToCallback { .. }
+                                | Effect::ReturnsBorrowed
+                                | Effect::ConsumesArg { .. }
+                                | Effect::StoresArgToOwner { .. }
+                                | Effect::StoresArgToGlobal { .. }
+                        )
+                })
+                .copied()
+                .collect();
+
+            if !post_release_uses.is_empty() {
+                if let Some(&sidx) = state_index.get(inst_id) {
+                    let inst = &ownership_states[sidx];
+                    if inst.state == omniscope_semantics::OwnershipState::Released
+                        && inst.contract != PointerContract::Borrowed
+                    {
+                        has_use_after_free = true;
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        has_use_after_free,
+        "ConsumesArg after Release MUST produce UseAfterRelease candidate"
+    );
+}
+
+/// Objective: Verify that a StoresArgToGlobal edge after a Release edge
+/// produces a UseAfterRelease candidate. This covers the pattern where
+/// a freed pointer is stored into a global variable after release.
+/// Invariants: StoresArgToGlobal after Release = UseAfterRelease candidate.
+#[test]
+fn test_stores_arg_to_global_after_release_produces_use_after_free() {
+    let mut graph = ContractGraph::new();
+    let instance_id = graph.alloc_instance();
+
+    // Acquire edge
+    graph.add_edge(ContractEdge {
+        source: 0,
+        target: instance_id,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance_id,
+        },
+        function: 0,
+        function_name: "malloc".to_string(),
+        caller_name: "buggy_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    // Release edge
+    graph.add_edge(ContractEdge {
+        source: instance_id,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "buggy_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    // StoresArgToGlobal after release — freed pointer stored to global
+    graph.add_edge(ContractEdge {
+        source: instance_id,
+        target: 0,
+        effect: Effect::StoresArgToGlobal { arg: 0 },
+        function: 2,
+        function_name: "set_global_ptr".to_string(),
+        caller_name: "buggy_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    let groups = InstanceEdgeGroups::new(&graph);
+
+    let mut ownership_states = Vec::new();
+    let mut instance = ResourceInstance::new(instance_id, FamilyId::C_HEAP, PointerContract::Owned);
+    instance
+        .transition(omniscope_semantics::OwnershipEvent::Release { function: 1 })
+        .unwrap();
+    ownership_states.push(instance);
+
+    let state_index: std::collections::HashMap<u64, usize> = ownership_states
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id, i))
+        .collect();
+
+    let mut has_use_after_free = false;
+
+    for inst_id in groups.instance_ids() {
+        let edge_indices = groups.edges_of(*inst_id);
+        let release_indices: Vec<usize> = edge_indices
+            .iter()
+            .copied()
+            .filter(|&idx| {
+                matches!(
+                    graph.edges[idx].effect,
+                    Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                )
+            })
+            .collect();
+
+        if !release_indices.is_empty() {
+            let last_release_idx = *release_indices.last().unwrap();
+
+            let post_release_uses: Vec<usize> = edge_indices
+                .iter()
+                .filter(|&&idx| {
+                    idx > last_release_idx
+                        && matches!(
+                            graph.edges[idx].effect,
+                            Effect::EscapesToCallback { .. }
+                                | Effect::ReturnsBorrowed
+                                | Effect::ConsumesArg { .. }
+                                | Effect::StoresArgToOwner { .. }
+                                | Effect::StoresArgToGlobal { .. }
+                        )
+                })
+                .copied()
+                .collect();
+
+            if !post_release_uses.is_empty() {
+                if let Some(&sidx) = state_index.get(inst_id) {
+                    let inst = &ownership_states[sidx];
+                    if inst.state == omniscope_semantics::OwnershipState::Released
+                        && inst.contract != PointerContract::Borrowed
+                    {
+                        has_use_after_free = true;
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        has_use_after_free,
+        "StoresArgToGlobal after Release MUST produce UseAfterRelease candidate"
+    );
+}
+
+/// Objective: Verify that a ConsumesArg edge BEFORE a Release edge
+/// does NOT produce a UseAfterRelease candidate. Using a pointer
+/// before freeing it is normal and safe.
+/// Invariants: ConsumesArg before Release = no UseAfterRelease candidate.
+#[test]
+fn test_consumes_arg_before_release_no_false_positive() {
+    let mut graph = ContractGraph::new();
+    let instance_id = graph.alloc_instance();
+
+    // Acquire edge
+    graph.add_edge(ContractEdge {
+        source: 0,
+        target: instance_id,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance_id,
+        },
+        function: 0,
+        function_name: "malloc".to_string(),
+        caller_name: "safe_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    // ConsumesArg edge BEFORE release — normal use
+    graph.add_edge(ContractEdge {
+        source: instance_id,
+        target: 0,
+        effect: Effect::ConsumesArg {
+            arg: 0,
+            family: Some(FamilyId::C_HEAP),
+        },
+        function: 1,
+        function_name: "ffi_process".to_string(),
+        caller_name: "safe_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    // Release edge (free) — after use, normal pattern
+    graph.add_edge(ContractEdge {
+        source: instance_id,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 2,
+        function_name: "free".to_string(),
+        caller_name: "safe_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+    });
+
+    let groups = InstanceEdgeGroups::new(&graph);
+
+    let mut ownership_states = Vec::new();
+    let mut instance = ResourceInstance::new(instance_id, FamilyId::C_HEAP, PointerContract::Owned);
+    instance
+        .transition(omniscope_semantics::OwnershipEvent::Release { function: 2 })
+        .unwrap();
+    ownership_states.push(instance);
+
+    let state_index: std::collections::HashMap<u64, usize> = ownership_states
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id, i))
+        .collect();
+
+    let mut has_use_after_free = false;
+
+    for inst_id in groups.instance_ids() {
+        let edge_indices = groups.edges_of(*inst_id);
+        let release_indices: Vec<usize> = edge_indices
+            .iter()
+            .copied()
+            .filter(|&idx| {
+                matches!(
+                    graph.edges[idx].effect,
+                    Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                )
+            })
+            .collect();
+
+        if !release_indices.is_empty() {
+            let last_release_idx = *release_indices.last().unwrap();
+
+            let post_release_uses: Vec<usize> = edge_indices
+                .iter()
+                .filter(|&&idx| {
+                    idx > last_release_idx
+                        && matches!(
+                            graph.edges[idx].effect,
+                            Effect::EscapesToCallback { .. }
+                                | Effect::ReturnsBorrowed
+                                | Effect::ConsumesArg { .. }
+                                | Effect::StoresArgToOwner { .. }
+                                | Effect::StoresArgToGlobal { .. }
+                        )
+                })
+                .copied()
+                .collect();
+
+            if !post_release_uses.is_empty() {
+                if let Some(&sidx) = state_index.get(inst_id) {
+                    let inst = &ownership_states[sidx];
+                    if inst.state == omniscope_semantics::OwnershipState::Released
+                        && inst.contract != PointerContract::Borrowed
+                    {
+                        has_use_after_free = true;
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        !has_use_after_free,
+        "ConsumesArg BEFORE Release must NOT produce UseAfterRelease candidate"
+    );
+}

@@ -146,7 +146,7 @@ where
             }
         }
 
-        // ── CrossLanguageFree: R-4 + R-6 + R-7 ──
+        // ── CrossLanguageFree: R-4 + R-6 + R-7 + Zig runtime ──
         omniscope_core::IssueKind::CrossLanguageFree => {
             if has_kind(key, SemanticKind::IntoRawTransfer) {
                 return GateVerdict::SuppressOwnershipTransfer;
@@ -162,6 +162,32 @@ where
             }
             if has_kind(key, SemanticKind::LibraryRelease) {
                 return GateVerdict::SuppressLibraryRelease;
+            }
+            // Zig runtime internal wrappers (e.g., heap.c_allocator_impl)
+            // are legitimate bridges between Zig and C allocators — not FFI violations.
+            if has_kind(key, SemanticKind::RuntimeInternal) {
+                return GateVerdict::SuppressRaii;
+            }
+        }
+
+        // ── OwnershipViolation: same suppression signals as CrossLanguageFree ──
+        // Zig runtime wrappers (heap.c_allocator_impl.alloc/free) are legitimate
+        // ownership bridges, not violations.
+        omniscope_core::IssueKind::OwnershipViolation => {
+            if has_kind(key, SemanticKind::IntoRawTransfer) {
+                return GateVerdict::SuppressOwnershipTransfer;
+            }
+            if has_kind(key, SemanticKind::FileOperation)
+                || has_kind(key, SemanticKind::NetworkOperation)
+                || has_kind(key, SemanticKind::ProcessOperation)
+            {
+                return GateVerdict::SuppressNonMemorySyscall;
+            }
+            if has_kind(key, SemanticKind::LibraryRelease) {
+                return GateVerdict::SuppressLibraryRelease;
+            }
+            if has_kind(key, SemanticKind::RuntimeInternal) {
+                return GateVerdict::SuppressRaii;
             }
         }
 

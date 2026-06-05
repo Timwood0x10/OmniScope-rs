@@ -85,8 +85,8 @@ impl TypeSemantic {
         if name.contains("4cell7RefCell") {
             return TypeSemantic::InteriorMutability;
         }
-        // OnceCell<T> — one-time write
-        if name.contains("4cell9OnceCell") || name.contains("4cell11OnceLock") {
+        // OnceCell<T> — one-time write ("OnceCell" = 8 bytes, "OnceLock" = 8 bytes)
+        if name.contains("4cell8OnceCell") || name.contains("4cell8OnceLock") {
             return TypeSemantic::Once;
         }
         // sync::mutex::Mutex — interior mutability via lock
@@ -97,9 +97,9 @@ impl TypeSemantic {
         if name.contains("4sync6rwlock") {
             return TypeSemantic::InteriorMutability;
         }
-        // sync::once — one-time initialization
+        // sync::once — one-time initialization ("OnceLock" = 8 bytes, "once" = 4 bytes)
         if name.contains("4sync4once")
-            || name.contains("4sync7OnceLock")
+            || name.contains("4sync8OnceLock")
             || name.contains("8once_box")
         {
             return TypeSemantic::Once;

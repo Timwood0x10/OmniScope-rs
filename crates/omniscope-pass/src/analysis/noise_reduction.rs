@@ -67,6 +67,8 @@ impl NoiseReduction {
                 "posix.mmap",
                 "Thread.PosixThreadImpl",
                 "zig_allocator_",
+                // Zig C allocator wrapper — legitimate Zig→C malloc/free bridge
+                "heap.c_allocator_impl",
             ],
         }
     }
@@ -268,10 +270,8 @@ impl PrecisionMetrics {
         if issues_before_filter == 0 {
             return 1.0;
         }
-        let reduced = issues_before_filter as i32 - self.total_issues as i32;
-        if reduced < 0 {
-            return 0.0;
-        }
+        // Use u32 arithmetic to avoid i32 overflow when values exceed i32::MAX.
+        let reduced = issues_before_filter.saturating_sub(self.total_issues);
         reduced as f32 / issues_before_filter as f32
     }
 

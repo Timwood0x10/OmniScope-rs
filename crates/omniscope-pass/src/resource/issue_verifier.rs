@@ -589,6 +589,7 @@ fn verify_cross_family_free(
 /// - Null-guarded release functions (release(NULL) is safe)
 /// - NULL stored after release (prevents dangling pointer)
 /// - Path state refinement (control flow analysis)
+/// - Multiple free calls in different callers (not same-instance double-free)
 fn verify_double_release(candidate: &IssueCandidate) -> VerifierVerdict {
     let has_null_guard = has_evidence(candidate, EvidenceKind::NullGuardedRelease);
     let has_null_store = has_evidence(candidate, EvidenceKind::NullStoreAfterRelease);
@@ -601,6 +602,21 @@ fn verify_double_release(candidate: &IssueCandidate) -> VerifierVerdict {
     // the pointer is NULL. All conditions met → safe.
     if has_null_guard && has_null_store && has_path_refinement {
         return VerifierVerdict::ExplainedSafe;
+    }
+
+    // Null-guarded release in different callers: if the alloc and release
+    // happen in different enclosing functions, the releases are from
+    // separate call sites (e.g., error paths in different callers) —
+    // not a same-pointer double-free.
+    if has_null_guard {
+        if let (Some(ref alloc_caller), Some(ref release_caller)) = (
+            candidate.alloc_caller.as_ref(),
+            candidate.release_caller.as_ref(),
+        ) {
+            if alloc_caller != release_caller {
+                return VerifierVerdict::ExplainedSafe;
+            }
+        }
     }
 
     // Null-guard alone does NOT make double-free safe.

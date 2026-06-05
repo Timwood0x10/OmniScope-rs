@@ -457,14 +457,22 @@ impl Pass for IssueCandidateBuilderPass {
                         .expect("issue_candidate_builder: release_indices should not be empty");
 
                     // Check for use edges after the last release.
+                    // Covers: EscapesToCallback, ReturnsBorrowed, ConsumesArg,
+                    // StoresArgToOwner, StoresArgToGlobal — any edge that passes
+                    // the released pointer to another function or storage location
+                    // constitutes a use-after-free (CWE-416).
                     let post_release_uses: Vec<usize> = edge_indices
                         .iter()
                         .filter(|&&idx| {
                             idx > last_release_idx
-                                && (matches!(
+                                && matches!(
                                     graph.edges[idx].effect,
                                     Effect::EscapesToCallback { .. }
-                                ) || matches!(graph.edges[idx].effect, Effect::ReturnsBorrowed))
+                                        | Effect::ReturnsBorrowed
+                                        | Effect::ConsumesArg { .. }
+                                        | Effect::StoresArgToOwner { .. }
+                                        | Effect::StoresArgToGlobal { .. }
+                                )
                         })
                         .copied()
                         .collect();

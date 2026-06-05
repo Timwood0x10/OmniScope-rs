@@ -465,14 +465,18 @@ impl JavaAdapter {
                         patterns.push(JavaSemanticPattern::JNIObjectCreation);
                         patterns.push(JavaSemanticPattern::JNICall);
                     }
-                    // JNI reference management
-                    else if callee.contains("DeleteLocalRef")
-                        || callee.contains("DeleteGlobalRef")
-                        || callee.contains("NewGlobalRef")
-                        || callee.contains("NewWeakGlobalRef")
-                    {
+                    // JNI reference management — classify by actual ref type
+                    else if callee.contains("DeleteLocalRef") {
                         patterns.push(JavaSemanticPattern::JNILocalReference);
+                        patterns.push(JavaSemanticPattern::JNICall);
+                    } else if callee.contains("NewGlobalRef") || callee.contains("DeleteGlobalRef")
+                    {
                         patterns.push(JavaSemanticPattern::JNIGlobalReference);
+                        patterns.push(JavaSemanticPattern::JNICall);
+                    } else if callee.contains("NewWeakGlobalRef")
+                        || callee.contains("DeleteWeakGlobalRef")
+                    {
+                        patterns.push(JavaSemanticPattern::JNIWeakGlobalReference);
                         patterns.push(JavaSemanticPattern::JNICall);
                     }
                     // JNI class loading
@@ -569,16 +573,24 @@ impl JavaAdapter {
             .any(|p| matches!(p, JavaSemanticPattern::JNIExceptionHandling));
 
         // Priority 2: JNI reference management
-        // Balanced reference management prevents memory leaks
+        // Balanced reference management prevents memory leaks.
+        // Cleanup includes DeleteLocalRef, DeleteGlobalRef, or DeleteWeakGlobalRef.
         let has_reference_creation = patterns.iter().any(|p| {
             matches!(
                 p,
-                JavaSemanticPattern::JNILocalReference | JavaSemanticPattern::JNIGlobalReference
+                JavaSemanticPattern::JNILocalReference
+                    | JavaSemanticPattern::JNIGlobalReference
+                    | JavaSemanticPattern::JNIWeakGlobalReference
             )
         });
-        let has_reference_cleanup = patterns
-            .iter()
-            .any(|p| matches!(p, JavaSemanticPattern::JNILocalReference));
+        let has_reference_cleanup = patterns.iter().any(|p| {
+            matches!(
+                p,
+                JavaSemanticPattern::JNILocalReference
+                    | JavaSemanticPattern::JNIGlobalReference
+                    | JavaSemanticPattern::JNIWeakGlobalReference
+            )
+        });
 
         // Priority 3: JNI native method analysis
         if patterns

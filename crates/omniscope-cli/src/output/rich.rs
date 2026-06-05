@@ -355,35 +355,36 @@ fn lang_label(lang: omniscope_types::Language) -> &'static str {
 ///
 /// Replaces `%call`, `%call2`, etc. with "return value" and
 /// `%0`, `%1` with "<ir-reg>" so end users don't see raw IR.
+/// Preserves multi-byte UTF-8 characters by iterating over chars
+/// instead of raw bytes.
 fn sanitize_ir_vars(text: &str) -> String {
-    let result = text.to_string();
-    // Replace %call, %call2, %call3, etc. → return value
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
     let mut i = 0;
-    let mut out = String::with_capacity(result.len());
-    let bytes = result.as_bytes();
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 1 < bytes.len() {
+    while i < chars.len() {
+        if chars[i] == '%' && i + 1 < chars.len() {
             // Check for %call pattern
-            if result[i..].starts_with("%call") {
+            let remaining: String = chars[i..].iter().collect();
+            if remaining.starts_with("%call") {
                 out.push_str("return value");
-                i += 5;
-                // Skip optional trailing digits
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 5; // skip '%' + "call"
+                        // Skip optional trailing digits
+                while i < chars.len() && chars[i].is_ascii_digit() {
                     i += 1;
                 }
                 continue;
             }
             // Check for %digit pattern (SSA register like %0, %42)
-            if bytes[i + 1].is_ascii_digit() {
+            if chars[i + 1].is_ascii_digit() {
                 out.push_str("<ir-reg>");
                 i += 2;
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                while i < chars.len() && chars[i].is_ascii_digit() {
                     i += 1;
                 }
                 continue;
             }
         }
-        out.push(bytes[i] as char);
+        out.push(chars[i]);
         i += 1;
     }
     out

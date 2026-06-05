@@ -163,8 +163,11 @@ impl RaiiDropPass {
     /// Uses word-boundary-aware matching to avoid false positives from
     /// names containing "atomic" that aren't refcount operations.
     fn is_refcount_decrement(&self, callee: &str) -> bool {
-        // LLVM atomicrmw instruction — exact match
-        if callee.starts_with("atomicrmw") {
+        // LLVM atomicrmw sub instruction — exact match for refcount decrement.
+        // Only atomicrmw.sub (used by Arc/Rc) represents a refcount decrement.
+        // Other variants (add, xchg, and, or, xor, max, min, umax, umin) are
+        // NOT refcount operations and must not be treated as tail deallocs.
+        if callee.starts_with("atomicrmw.sub") {
             return true;
         }
 

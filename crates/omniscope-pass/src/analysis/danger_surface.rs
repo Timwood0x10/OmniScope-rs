@@ -92,7 +92,7 @@ impl Pass for DangerSurfacePass {
         );
 
         let mut result = PassResult::new(self.name())
-            .with_issues(known_family_count)
+            .with_issues(0)
             .with_nodes(danger_count)
             .with_duration(start.elapsed().as_millis() as u64);
         result.add_stat("known_family", known_family_count);

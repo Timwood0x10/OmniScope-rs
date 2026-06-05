@@ -198,10 +198,14 @@ pub fn is_runtime_intrinsic(name: &str, language: Language) -> bool {
                 || name.starts_with("_Unwind_")
                 || name.starts_with("_tlv_")
         }
-        // Note: `_Z` prefix is standard C++ Itanium name mangling and covers ALL
-        // C++ functions (not just intrinsics). Only specific ABI/runtime patterns
-        // should be flagged as intrinsics.
-        Language::Cpp => name.starts_with("__cxxabiv1"),
+        // Only filter actual compiler runtime support, not all _Z mangled names.
+        // __cxa_* = C++ ABI support (exception handling, guard variables, etc.)
+        // __gxx_* = GNU C++ runtime (personality routines, etc.)
+        Language::Cpp => {
+            name.starts_with("__cxxabiv1")
+                || name.starts_with("__cxa_")
+                || name.starts_with("__gxx_")
+        }
         _ => false,
     }
 }
