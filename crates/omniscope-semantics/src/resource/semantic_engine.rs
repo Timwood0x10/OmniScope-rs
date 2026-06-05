@@ -659,10 +659,14 @@ fn derive_from_caller_context(callee: &str, caller_behavior: &FunctionBehavior) 
         return FFIVerdict::SafeConditionalRelease;
     }
 
-    // If the caller has PureComputation pattern
+    // If the caller has PureComputation pattern.
+    // Exception: C++ mangled callees (_Z prefix) are cross-language FFI boundaries
+    // that should NOT be suppressed by caller-side patterns — a pure computation
+    // caller can still call unsafe FFI functions.
     if caller_behavior
         .patterns
         .contains(&BehaviorPattern::PureComputation)
+        && !callee.starts_with("_Z")
     {
         return FFIVerdict::SafeNoOwnership;
     }

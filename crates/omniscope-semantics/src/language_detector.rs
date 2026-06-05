@@ -82,6 +82,8 @@ impl LanguageDetector {
         vec![
             // Rust patterns — Rust v0 mangling (_R prefix, used by modern Rust)
             LanguagePattern::new(Language::Rust, "_R").prefix(),
+            // Rust allocator runtime (__rust_alloc, __rust_dealloc, etc.)
+            LanguagePattern::new(Language::Rust, "__rust_").prefix(),
             // Rust Itanium mangling (older Rust, less common now)
             LanguagePattern::new(Language::Rust, "_ZN4core").prefix(),
             LanguagePattern::new(Language::Rust, "_ZN5alloc").prefix(),

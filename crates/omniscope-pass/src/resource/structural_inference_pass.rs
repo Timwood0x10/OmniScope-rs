@@ -200,6 +200,33 @@ impl Pass for StructuralInferencePass {
                     EvidenceKind::RaiiDropRelease => {
                         kinds.push(SemanticKind::RaiiDropRelease);
                     }
+                    // R-3+: Destructor release — map to language-specific SemanticKind
+                    // based on DestructorKind in the evidence description.
+                    // Description format: "function '...' inferred as <Kind> destructor ..."
+                    EvidenceKind::DestructorRelease => {
+                        if evidence.description.contains("CppDestructor") {
+                            if !kinds.contains(&SemanticKind::CppDestructor) {
+                                kinds.push(SemanticKind::CppDestructor);
+                            }
+                        } else if evidence.description.contains("CSharpDispose") {
+                            if !kinds.contains(&SemanticKind::CsharpSafeHandle) {
+                                kinds.push(SemanticKind::CsharpSafeHandle);
+                            }
+                        } else if evidence.description.contains("PythonFinalizer") {
+                            if !kinds.contains(&SemanticKind::PythonRefcountDec) {
+                                kinds.push(SemanticKind::PythonRefcountDec);
+                            }
+                        } else if evidence.description.contains("JavaFinalizer") {
+                            if !kinds.contains(&SemanticKind::JavaLocalRef) {
+                                kinds.push(SemanticKind::JavaLocalRef);
+                            }
+                        } else {
+                            // RustDrop, CDestroy, GenericCleanup → RaiiDropRelease
+                            if !kinds.contains(&SemanticKind::RaiiDropRelease) {
+                                kinds.push(SemanticKind::RaiiDropRelease);
+                            }
+                        }
+                    }
                     // R-6: Ownership transfer — distinguish subtypes by description.
                     // Not all OwnershipTransfer is into_raw; box_leak and
                     // manually_drop are also ownership escape patterns.
@@ -241,6 +268,35 @@ impl Pass for StructuralInferencePass {
                     // R-7: Library allocator release
                     EvidenceKind::SymbolPattern if evidence.description.contains("library") => {
                         kinds.push(SemanticKind::LibraryRelease);
+                    }
+                    // R-3+: Refcount conditional release — indicates reference counting.
+                    // If the description mentions Python, map to PythonRefcountDec;
+                    // otherwise map to RuntimeManagedResource (GC/refcount managed).
+                    EvidenceKind::RefcountConditional => {
+                        if evidence.description.contains("Py")
+                            || evidence.description.contains("python")
+                            || evidence.description.contains("Python")
+                        {
+                            if !kinds.contains(&SemanticKind::PythonRefcountDec) {
+                                kinds.push(SemanticKind::PythonRefcountDec);
+                            }
+                        } else if !kinds.contains(&SemanticKind::RuntimeManagedResource) {
+                            kinds.push(SemanticKind::RuntimeManagedResource);
+                        }
+                    }
+                    // R-3+: Null-guarded release — indicates safe release (free(NULL) is no-op).
+                    // This is a strong signal that the release function is well-behaved.
+                    EvidenceKind::NullGuardedRelease
+                        if !kinds.contains(&SemanticKind::ReleaseOnAllExitPaths) =>
+                    {
+                        kinds.push(SemanticKind::ReleaseOnAllExitPaths);
+                    }
+                    // R-3+: OwnershipEscapeLeak — resource intentionally leaked via
+                    // into_raw / ManuallyDrop / box_leak across FFI boundary.
+                    EvidenceKind::OwnershipEscapeLeak
+                        if !kinds.contains(&SemanticKind::IntoRawTransfer) =>
+                    {
+                        kinds.push(SemanticKind::IntoRawTransfer);
                     }
                     _ => {}
                 }
@@ -595,14 +651,37 @@ fn is_runtime_internal(name: &str) -> bool {
     if name.starts_with("zig.heap.") || name.starts_with("zig.mem.") {
         return true;
     }
+    // Zig runtime threading / I/O (mirrors NoiseReduction safe_patterns)
+    if name.contains("Io.Threaded") {
+        return true;
+    }
+    // Zig POSIX wrappers (mirrors NoiseReduction safe_patterns)
+    if name.contains("posix.mmap") {
+        return true;
+    }
+    if name.contains("Thread.PosixThreadImpl") {
+        return true;
+    }
 
     // ── Rust runtime internal ──
     // __rust_dealloc, __rust_alloc, __rust_realloc, __rust_alloc_zeroed
     if name.starts_with("__rust_") {
         return true;
     }
-    // Core panicking / alloc internals
+    // Core panicking / alloc internals (demangled and v0-mangled forms)
     if name.starts_with("core::panicking") || name.starts_with("alloc::raw_vec") {
+        return true;
+    }
+    // Rust v0 mangled alloc/core internals: _ZN5alloc..., _ZN4core...
+    if name.starts_with("_ZN5alloc") || name.starts_with("_ZN4core") {
+        return true;
+    }
+    // Panic infrastructure (mirrors NoiseReduction safe_patterns)
+    if name.contains("panic_fmt") || name.contains("begin_panic") {
+        return true;
+    }
+    // Compiler-generated drop glue (mirrors NoiseReduction safe_patterns)
+    if name.contains("drop_in_place") {
         return true;
     }
 
@@ -611,8 +690,15 @@ fn is_runtime_internal(name: &str) -> bool {
     if name.starts_with("__cxa_") {
         return true;
     }
-    // LLVM intrinsics and compiler builtins
-    if name.starts_with("__llvm_") || name.starts_with("compiler_builtins") {
+    // LLVM intrinsics (mirrors NoiseReduction safe_patterns)
+    if name.starts_with("llvm.") || name.starts_with("__llvm_") {
+        return true;
+    }
+    if name.starts_with("compiler_builtins") {
+        return true;
+    }
+    // Stack canary (mirrors NoiseReduction safe_patterns)
+    if name.starts_with("__stack_chk_") {
         return true;
     }
     // heap.c_allocator_impl — NoiseReduction safe pattern
