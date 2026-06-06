@@ -127,8 +127,12 @@ impl FFIBoundaryDetector {
         // Cross-language call (both langs known and different)
         let is_cross_lang = self.is_cross_language(caller_lang, callee_lang);
 
-        // C++ mangled name called from C — definite FFI boundary
-        let is_cpp_ffi = callee_name.starts_with("_Z") && caller_lang == Language::C;
+        // C++ mangled name called from C -- definite FFI boundary.
+        // BUT: Rust also uses _ZN Itanium mangling. If the _ZN symbol
+        // is Rust (dollar-sign encodings or hash suffix), it is NOT C++ FFI.
+        let is_cpp_ffi = callee_name.starts_with("_Z")
+            && caller_lang == Language::C
+            && !omniscope_semantics::is_rust_zn_mangling(callee_name);
 
         // Non-C language calling external unknown function (likely C)
         let is_ffi_to_c = caller_lang != Language::Unknown

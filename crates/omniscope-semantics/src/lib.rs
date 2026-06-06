@@ -13,7 +13,7 @@ pub mod resource;
 pub mod surface_classifier;
 
 // Re-exports
-pub use language_detector::LanguageDetector;
+pub use language_detector::{is_rust_zn_mangling, LanguageDetector};
 pub use surface_classifier::{Confidence, FunctionSurface, SurfaceClassifier, SurfaceHint};
 
 // Re-exports — Resource contract modules

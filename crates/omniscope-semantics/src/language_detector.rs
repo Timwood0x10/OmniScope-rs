@@ -22,6 +22,15 @@ impl LanguageDetector {
 
     /// Detects the source language from function name patterns
     pub fn detect_from_function(&self, function_name: &str) -> Language {
+        // Pre-check: Rust Itanium (_ZN) mangling has distinctive features
+        // that distinguish it from C++ Itanium mangling. Rust _ZN names
+        // use special dollar-sign encodings ($LT$, $u20$, $RF$, etc.)
+        // and have a hash suffix pattern (17h<hex>E). Check these before
+        // the generic _ZN->Cpp pattern to avoid false language classification.
+        if function_name.starts_with("_ZN") && is_rust_zn_mangling(function_name) {
+            return Language::Rust;
+        }
+
         for pattern in &self.patterns {
             if pattern.matches(function_name) {
                 return pattern.language;
@@ -161,6 +170,49 @@ impl LanguagePattern {
             MatchType::Contains => text.contains(&self.pattern),
         }
     }
+}
+
+/// Check if a _ZN-prefixed mangled name is Rust (not C++).
+///
+/// Rust Itanium mangling (_ZN) has distinctive features that C++ does not:
+/// - Dollar-sign encodings: $LT$ (angle bracket), $u20$ (space),
+///   $RF$ (ampersand), $BP$ (star), $u5b$ (open bracket), $u5d$ (close bracket)
+/// - Hash suffix: 17h followed by hex digits and E (e.g., 17h45b67272fd153021E)
+///
+/// C++ Itanium mangling uses St for std::, N for nested names, and
+/// never uses dollar-sign encodings or hash suffixes.
+pub fn is_rust_zn_mangling(name: &str) -> bool {
+    // Rust-specific dollar-sign encodings (never appear in C++ mangling)
+    if name.contains("$LT$")
+        || name.contains("$GT$")
+        || name.contains("$u20$")
+        || name.contains("$RF$")
+        || name.contains("$BP$")
+        || name.contains("$u5b$")
+        || name.contains("$u5d$")
+    {
+        return true;
+    }
+
+    // Rust hash suffix pattern: 17h<hex>E at the end.
+    // The hash is typically 16 hex digits (64-bit) followed by E.
+    if let Some(rest) = name.strip_prefix("_ZN") {
+        if let Some(pos) = rest.find("17h") {
+            let after_hash_start = &rest[pos + 3..];
+            let hex_len = after_hash_start
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .count();
+            if hex_len >= 16 {
+                let after_hex = &after_hash_start[hex_len..];
+                if after_hex.starts_with('E') {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 /// Match type for patterns

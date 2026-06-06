@@ -84,6 +84,19 @@ impl Pass for IssueVerifierPass {
             candidates.extend(leak_candidates.iter().cloned());
         }
 
+        // ── Deduplicate leak candidates ──
+        // When IssueCandidateBuilder and LeakDetectionPass both detect the same
+        // allocation as leaking, we may get duplicate candidates. Deduplication
+        // uses two strategies:
+        // 1. resource_id overlap: candidates sharing the same resource_id are
+        //    duplicates (same allocation instance). Keep the strongest.
+        // 2. alloc_caller overlap: LeakDetectionPass uses runtime function names
+        //    (malloc, _Znam) as alloc_function but sets alloc_caller to the user
+        //    function. When a runtime candidate's alloc_caller matches a user
+        //    candidate's alloc_function (same alloc_family), they refer to the
+        //    same allocation. Keep the more precise one (user function name).
+        deduplicate_leak_candidates(&mut candidates);
+
         let registry = ctx
             .get_ref::<FamilyRegistry>("family_registry")
             .cloned()
@@ -378,6 +391,132 @@ fn is_memory_resource(family_id: FamilyId) -> bool {
         family_to_resource_class(family_id),
         ResourceClass::HeapMemory | ResourceClass::RuntimeManaged
     )
+}
+
+/// Deduplicate leak candidates that share the same resource_id.
+///
+/// When IssueCandidateBuilder and LeakDetectionPass both detect the same
+/// allocation as leaking, we may get duplicate candidates with the same
+/// resource_id. This keeps only the strongest leak type per resource_id:
+///   DefiniteLeak > ConditionalLeak > OwnershipEscapeLeak
+///
+/// Non-leak candidates and candidates without resource_id are never removed.
+fn deduplicate_leak_candidates(candidates: &mut Vec<IssueCandidate>) {
+    fn leak_priority(kind: &IssueCandidateKind) -> u8 {
+        match kind {
+            IssueCandidateKind::DefiniteLeak => 3,
+            IssueCandidateKind::ConditionalLeak => 2,
+            IssueCandidateKind::OwnershipEscapeLeak => 1,
+            _ => 0,
+        }
+    }
+
+    /// Returns true if this candidate's alloc_function is a runtime/allocator
+    /// function (malloc, _Znam, etc.) — detected by alloc_caller != alloc_function.
+    fn is_runtime_alloc_candidate(candidate: &IssueCandidate) -> bool {
+        candidate.alloc_caller.is_some()
+            && candidate.alloc_caller.as_deref() != Some(&candidate.alloc_function)
+    }
+
+    let mut to_remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    // ── Strategy 1: resource_id overlap ──
+    let mut best_per_rid: std::collections::HashMap<u64, usize> =
+        std::collections::HashMap::new();
+    for (i, candidate) in candidates.iter().enumerate() {
+        if !is_leak_candidate(candidate) {
+            continue;
+        }
+        let Some(rid) = candidate.resource_id else {
+            continue;
+        };
+        let priority = leak_priority(&candidate.kind);
+        let entry = best_per_rid.entry(rid).or_insert(i);
+        let existing_priority = leak_priority(&candidates[*entry].kind);
+        if priority > existing_priority {
+            *entry = i;
+        }
+    }
+    for (i, candidate) in candidates.iter().enumerate() {
+        if !is_leak_candidate(candidate) {
+            continue;
+        }
+        let Some(rid) = candidate.resource_id else {
+            continue;
+        };
+        if let Some(&best_idx) = best_per_rid.get(&rid) {
+            if best_idx != i {
+                to_remove.insert(i);
+            }
+        }
+    }
+
+    // ── Strategy 2: alloc_caller overlap ──
+    // LeakDetectionPass candidates have alloc_function = runtime function (malloc)
+    // and alloc_caller = user function. IssueCandidateBuilder candidates have
+    // alloc_function = user function. When a runtime candidate's alloc_caller
+    // matches a user candidate's alloc_function (same alloc_family), they refer
+    // to the same allocation. Remove the runtime candidate if the user candidate
+    // is at least as strong (equal or higher priority).
+    let mut user_leak_by_func: std::collections::HashMap<(String, FamilyId), usize> =
+        std::collections::HashMap::new();
+    for (i, candidate) in candidates.iter().enumerate() {
+        if !is_leak_candidate(candidate) || to_remove.contains(&i) {
+            continue;
+        }
+        if is_runtime_alloc_candidate(candidate) {
+            continue; // skip runtime candidates for this map
+        }
+        let key = (candidate.alloc_function.clone(), candidate.alloc_family);
+        let priority = leak_priority(&candidate.kind);
+        let entry = user_leak_by_func.entry(key).or_insert(i);
+        let existing_priority = leak_priority(&candidates[*entry].kind);
+        if priority > existing_priority {
+            *entry = i;
+        }
+    }
+
+    // Check runtime candidates against the user map.
+    for (i, candidate) in candidates.iter().enumerate() {
+        if !is_leak_candidate(candidate) || to_remove.contains(&i) {
+            continue;
+        }
+        if !is_runtime_alloc_candidate(candidate) {
+            continue;
+        }
+        let Some(ref caller) = candidate.alloc_caller else {
+            continue;
+        };
+        let key = (caller.clone(), candidate.alloc_family);
+        if let Some(&user_idx) = user_leak_by_func.get(&key) {
+            let runtime_priority = leak_priority(&candidate.kind);
+            let user_priority = leak_priority(&candidates[user_idx].kind);
+            // Remove the runtime candidate if the user candidate is at least as
+            // strong. The user candidate has a more precise alloc_function name
+            // and is better for issue reporting.
+            if runtime_priority <= user_priority {
+                tracing::debug!(
+                    "Dedup (caller overlap): removing runtime #{} ({:?} in '{}', caller='{}') — keeping user #{} ({:?} in '{}')",
+                    i, candidate.kind, candidate.alloc_function, caller,
+                    user_idx, candidates[user_idx].kind, candidates[user_idx].alloc_function
+                );
+                to_remove.insert(i);
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    tracing::debug!("Deduplicating {} leak candidates", to_remove.len());
+
+    // Remove in reverse order to preserve indices.
+    let mut indices: Vec<usize> = to_remove.into_iter().collect();
+    indices.sort();
+    for idx in indices.iter().rev() {
+        candidates.remove(*idx);
+    }
 }
 
 /// Checks if a candidate is a leak type issue.

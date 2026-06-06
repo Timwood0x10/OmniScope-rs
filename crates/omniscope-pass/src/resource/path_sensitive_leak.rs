@@ -183,6 +183,9 @@ impl Pass for LeakDetectionPass {
                         &alloc.function_name,
                     );
                     candidate = candidate.with_alloc_contract(alloc.contract);
+                    if !alloc.caller_name.is_empty() {
+                        candidate = candidate.with_alloc_caller(&alloc.caller_name);
+                    }
                     candidate = candidate.with_description(format!(
                         "allocation in '{}' of family {} has no same-family release on any analyzed path (definite leak)",
                         alloc.function_name, family.display_name()
@@ -218,6 +221,9 @@ impl Pass for LeakDetectionPass {
                         &alloc.function_name,
                     );
                     candidate = candidate.with_alloc_contract(alloc.contract);
+                    if !alloc.caller_name.is_empty() {
+                        candidate = candidate.with_alloc_caller(&alloc.caller_name);
+                    }
                     candidate = candidate.with_description(format!(
                         "allocation in '{}' of family {} has partial same-family release ({} alloc, {} release) on analyzed paths (conditional leak)",
                         alloc.function_name, family.display_name(), alloc_count, release_count

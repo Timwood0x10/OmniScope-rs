@@ -60,17 +60,20 @@ const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 /// Updated baseline after FFI Gate refinement:
 /// - FFI Gate suppresses runtime-internal leak candidates without FFI evidence
 /// - Preserves FFI-boundary leak candidates (cross-language, cross-family, etc.)
-/// - Observed: TP=11-13, FP=24-25, Precision=30.6%-35.1%
+/// - P0: Rust _ZN language-mangling fix (FP reduced from 25 to ~16)
+/// - P1: Leak candidate deduplication (ConditionalLeak+DefiniteLeak overlap)
+/// - Observed: TP=12-13, FP=16-17, Precision=41.4%-46.4%
 const BASELINE_TP: usize = 13;
-const BASELINE_FP: usize = 25;
+const BASELINE_FP: usize = 17;
 const BASELINE_FN: usize = 11;
-const BASELINE_PRECISION: f64 = 0.342; // 34.2%
+const BASELINE_PRECISION: f64 = 0.434; // 43.4% (typical: TP=13, FP=17, total=30)
 const BASELINE_RECALL: f64 = 0.542; // 54.2%
-const BASELINE_F1: f64 = 0.419; // 41.9%
+const BASELINE_F1: f64 = 0.481; // 48.1%
 
 /// Tolerance for non-deterministic pipeline output.
-/// TP varies 11-13 across runs, causing precision to range 30.6%-35.1%.
-/// Tolerance of 4% covers the full observed variance (34.2% - 4% = 30.2%).
+/// TP varies 12-13 across runs (post-P1 dedup).
+/// FP varies 15-17 with dedup removing ConditionalLeak(malloc) overlap.
+/// Tolerance of 4% covers the full observed variance (43.4% ± 4%).
 const METRICS_TOLERANCE: f64 = 0.04;
 
 // ─── Golden expectations ────────────────────────────────────────────
@@ -419,11 +422,11 @@ fn is_bug_missed(issues: &[omniscope_core::Issue], expected: &ExpectedMiss) -> b
 
 /// Objective: Verify accuracy regression against golden baseline.
 /// Invariants:
-///   - Precision must not drop below 33.6%
-///   - Recall must not drop below 51.7%
-///   - F1 must not drop below 40.8%
+///   - Precision must not drop below 40.8%
+///   - Recall must not drop below 50.2%
+///   - F1 must not drop below 44.9%
 ///   - TP must not drop below 11
-///   - FP must not increase above 24
+///   - FP must not increase above 17
 ///   - FN must not increase above 13
 #[test]
 fn test_accuracy_regression() {
