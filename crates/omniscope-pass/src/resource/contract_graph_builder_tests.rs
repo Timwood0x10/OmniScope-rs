@@ -42,6 +42,7 @@ fn test_contract_graph_edge_building() {
         function_name: "free".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     assert_eq!(
@@ -68,6 +69,7 @@ fn test_acquire_release_pair_in_same_function() {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: true,
             contract: PointerContract::Owned,
             arg_index: Some(0),
@@ -77,6 +79,7 @@ fn test_acquire_release_pair_in_same_function() {
             function_name: "free".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: false,
             contract: PointerContract::Unknown,
             arg_index: Some(0),
@@ -155,6 +158,7 @@ fn test_cross_family_release_detection() {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: true,
             contract: PointerContract::Owned,
             arg_index: Some(0),
@@ -164,6 +168,7 @@ fn test_cross_family_release_detection() {
             function_name: "operator delete".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::CPP_NEW_SCALAR),
+            boundary_evidence: None,
             is_acquire: false,
             contract: PointerContract::Unknown,
             arg_index: Some(0),
@@ -467,6 +472,7 @@ fn test_release_without_matching_acquire() {
         function_name: "free".to_string(),
         caller_name: "cleanup_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
         is_acquire: false,
         contract: PointerContract::Unknown,
         arg_index: Some(0),
@@ -559,6 +565,7 @@ fn test_multiple_function_independent_pairing() {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: true,
             contract: PointerContract::Owned,
             arg_index: Some(0),
@@ -568,6 +575,7 @@ fn test_multiple_function_independent_pairing() {
             function_name: "free".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: false,
             contract: PointerContract::Unknown,
             arg_index: Some(0),
@@ -578,6 +586,7 @@ fn test_multiple_function_independent_pairing() {
             function_name: "PyObject_New".to_string(),
             caller_name: "py_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
             is_acquire: true,
             contract: PointerContract::Owned,
             arg_index: Some(0),
@@ -587,6 +596,7 @@ fn test_multiple_function_independent_pairing() {
             function_name: "Py_DECREF".to_string(),
             caller_name: "py_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
             is_acquire: false,
             contract: PointerContract::Unknown,
             arg_index: Some(0),
@@ -659,6 +669,7 @@ fn test_two_orphan_releases_get_distinct_instances() {
             function_name: "free".to_string(),
             caller_name: "cleanup_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: false,
             contract: PointerContract::Unknown,
             arg_index: Some(0),
@@ -668,6 +679,7 @@ fn test_two_orphan_releases_get_distinct_instances() {
             function_name: "free".to_string(),
             caller_name: "cleanup_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: false,
             contract: PointerContract::Unknown,
             arg_index: Some(1),
@@ -721,5 +733,333 @@ fn test_two_orphan_releases_get_distinct_instances() {
         release_edges[0].source, release_edges[1].source,
         "Two orphan releases must get distinct standalone instances, but both got source={}",
         release_edges[0].source
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Phase 2: Controlled cross-family matching tests
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Objective: Verify that controlled cross-family matching works when
+/// there is exactly one incompatible acquire in the same function scope.
+/// This models the real pattern: malloc(C_HEAP) + operator delete(CPP_NEW_SCALAR)
+/// in the same function — the release should match the acquire.
+/// Invariants: ConditionalRelease edge is produced (not orphan release).
+#[test]
+fn test_controlled_cross_family_single_viable() {
+    let pass = ContractGraphBuilderPass::new();
+    let mut ctx = PassContext::new();
+
+    // malloc (C_HEAP acquire) + operator delete (CPP_NEW_SCALAR release)
+    // in the same function. C_HEAP and CPP_NEW_SCALAR are incompatible
+    // (not in each other's compatible_releases). Only one viable candidate
+    // → controlled cross-family match should succeed.
+    let facts = vec![
+        RawResourceFact {
+            function: 1,
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
+            is_acquire: true,
+            contract: PointerContract::Owned,
+            arg_index: Some(0),
+        },
+        RawResourceFact {
+            function: 1,
+            function_name: "_ZdlPv".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::CPP_NEW_SCALAR),
+            boundary_evidence: None,
+            is_acquire: false,
+            contract: PointerContract::Unknown,
+            arg_index: Some(0),
+        },
+    ];
+    ctx.store("raw_resource_facts", facts);
+
+    let _ = pass.run(&mut ctx);
+
+    let graph: ContractGraph = ctx
+        .get("contract_graph")
+        .expect("ContractGraph must be stored in context");
+
+    // The CPP_NEW_SCALAR release should have matched the C_HEAP acquire
+    // via controlled cross-family fallback, producing a ConditionalRelease edge.
+    let conditional_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.effect,
+                Effect::ConditionalRelease { family, .. }
+                if family == FamilyId::CPP_NEW_SCALAR
+            )
+        })
+        .collect();
+    assert!(
+        !conditional_edges.is_empty(),
+        "Controlled cross-family match should produce ConditionalRelease edge \
+         for CPP_NEW_SCALAR release matched to C_HEAP acquire, found {} edges total",
+        graph.edges.len()
+    );
+
+    // The ConditionalRelease source must be the C_HEAP acquire's instance ID
+    // (not 0, which would indicate an orphan release).
+    let acquire_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
+        .collect();
+    assert_eq!(
+        acquire_edges.len(),
+        1,
+        "Must have exactly one Acquire edge for malloc"
+    );
+    assert_eq!(
+        conditional_edges[0].source, acquire_edges[0].target,
+        "ConditionalRelease source must match the Acquire instance (cross-family pairing)"
+    );
+}
+
+/// Objective: Verify that controlled cross-family matching is REJECTED
+/// when there are multiple incompatible acquires in the same function.
+/// This prevents FP in functions managing multiple independent resources.
+/// Invariants: No cross-family match — release becomes orphan.
+#[test]
+fn test_controlled_cross_family_multiple_viable_rejected() {
+    let pass = ContractGraphBuilderPass::new();
+    let mut ctx = PassContext::new();
+
+    // Two acquires with different incompatible families + one release
+    // in the same function. Multiple viable candidates → controlled
+    // cross-family match should be REJECTED to avoid FP.
+    let facts = vec![
+        RawResourceFact {
+            function: 1,
+            function_name: "malloc".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
+            is_acquire: true,
+            contract: PointerContract::Owned,
+            arg_index: Some(0),
+        },
+        RawResourceFact {
+            function: 1,
+            function_name: "PyObject_New".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
+            is_acquire: true,
+            contract: PointerContract::Owned,
+            arg_index: Some(0),
+        },
+        RawResourceFact {
+            function: 1,
+            function_name: "_ZdlPv".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::CPP_NEW_SCALAR),
+            boundary_evidence: None,
+            is_acquire: false,
+            contract: PointerContract::Unknown,
+            arg_index: Some(0),
+        },
+    ];
+    ctx.store("raw_resource_facts", facts);
+
+    let _ = pass.run(&mut ctx);
+
+    let graph: ContractGraph = ctx
+        .get("contract_graph")
+        .expect("ContractGraph must be stored in context");
+
+    // The CPP_NEW_SCALAR release should NOT match any acquire —
+    // both C_HEAP and PYTHON_OBJECT are incompatible, but having
+    // two viable candidates means the match is ambiguous and should
+    // be rejected. The release becomes an orphan.
+    let release_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.effect,
+                Effect::Release { family, .. } | Effect::ConditionalRelease { family, .. }
+                if family == FamilyId::CPP_NEW_SCALAR
+            )
+        })
+        .collect();
+
+    assert!(
+        !release_edges.is_empty(),
+        "Must have a release edge for CPP_NEW_SCALAR"
+    );
+
+    // The release should be orphan (source = standalone instance, not
+    // matching any acquire instance). The two acquires should remain
+    // unmatched in the graph.
+    let acquire_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
+        .collect();
+    assert_eq!(
+        acquire_edges.len(),
+        2,
+        "Must have two Acquire edges (C_HEAP and PYTHON_OBJECT)"
+    );
+
+    // The release source should NOT match either acquire target
+    // (because cross-family match was rejected due to ambiguity).
+    let acquire_targets: Vec<u64> = acquire_edges.iter().map(|e| e.target).collect();
+    assert!(
+        !acquire_targets.contains(&release_edges[0].source),
+        "Release source ({}) should not match any acquire target {:?} \
+         — cross-family match rejected due to multiple viable candidates",
+        release_edges[0].source,
+        acquire_targets
+    );
+}
+
+/// Objective: Verify that compatible families (e.g., PYTHON_MEM_RAW and C_HEAP)
+/// are NOT matched via the cross-family fallback — they should use the
+/// compatible_releases path instead.
+/// Invariants: PYTHON_MEM_RAW acquire + C_HEAP release — compatible,
+/// so cross-family conditions (condition 4: incompatible) should NOT trigger.
+///
+/// TODO(compatible-cross-family): When compatible cross-family matching is
+/// implemented in the same-family or a dedicated path, this test should be
+/// updated to assert that the release IS matched (producing a proper
+/// ConditionalRelease or SameFamilyRelease edge). For now, the current
+/// assertion ensures no FALSE ConditionalRelease from the cross-family path.
+#[test]
+fn test_compatible_families_not_cross_family_matched() {
+    let pass = ContractGraphBuilderPass::new();
+    let mut ctx = PassContext::new();
+
+    // PYTHON_MEM_RAW acquire + C_HEAP release in same function.
+    // PYTHON_MEM_RAW has compatible_releases: &[FamilyId::C_HEAP],
+    // so they are COMPATIBLE — not a cross-family mismatch.
+    // However, since they have different FamilyIds, the same-family
+    // FIFO path won't find a match. The cross-family path should
+    // also not match because condition 4 (incompatible) fails.
+    let facts = vec![
+        RawResourceFact {
+            function: 1,
+            function_name: "PyMem_RawMalloc".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::PYTHON_MEM_RAW),
+            boundary_evidence: None,
+            is_acquire: true,
+            contract: PointerContract::Owned,
+            arg_index: Some(0),
+        },
+        RawResourceFact {
+            function: 1,
+            function_name: "free".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
+            is_acquire: false,
+            contract: PointerContract::Unknown,
+            arg_index: Some(0),
+        },
+    ];
+    ctx.store("raw_resource_facts", facts);
+
+    let _ = pass.run(&mut ctx);
+
+    let graph: ContractGraph = ctx
+        .get("contract_graph")
+        .expect("ContractGraph must be stored in context");
+
+    // Since PYTHON_MEM_RAW and C_HEAP are compatible, the cross-family
+    // fallback should NOT trigger (condition 4: families must be
+    // incompatible). The release currently becomes an orphan.
+    //
+    // Known gap: compatible cross-family matching is not yet implemented
+    // (same-family FIFO doesn't handle it, and cross-family fallback
+    // correctly rejects it because they're compatible, not incompatible).
+    // When a dedicated compatible cross-family path is added, this test
+    // should be updated to assert a proper match edge exists instead.
+    let conditional_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.effect,
+                Effect::ConditionalRelease { family, .. }
+                if family == FamilyId::C_HEAP
+            )
+        })
+        .collect();
+    assert!(
+        conditional_edges.is_empty(),
+        "Compatible families (PYTHON_MEM_RAW + C_HEAP) should currently NOT \
+         produce ConditionalRelease edge via cross-family path — they are in \
+         compatible_releases. Update this test when compatible cross-family \
+         matching is implemented. Got {} edges",
+        conditional_edges.len()
+    );
+}
+
+/// Objective: Verify that UNKNOWN family is excluded from cross-family matching.
+/// UNKNOWN family indicates the resource type cannot be determined, so
+/// matching it would be speculative and error-prone.
+/// Invariants: UNKNOWN acquire + C_HEAP release → no cross-family match.
+#[test]
+fn test_unknown_family_excluded_from_cross_family() {
+    let pass = ContractGraphBuilderPass::new();
+    let mut ctx = PassContext::new();
+
+    // UNKNOWN acquire + C_HEAP release in same function.
+    // Condition 3 requires both families to be known (not UNKNOWN).
+    let facts = vec![
+        RawResourceFact {
+            function: 1,
+            function_name: "ffi_return".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::UNKNOWN),
+            boundary_evidence: None,
+            is_acquire: true,
+            contract: PointerContract::Owned,
+            arg_index: Some(0),
+        },
+        RawResourceFact {
+            function: 1,
+            function_name: "free".to_string(),
+            caller_name: "test_func".to_string(),
+            family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
+            is_acquire: false,
+            contract: PointerContract::Unknown,
+            arg_index: Some(0),
+        },
+    ];
+    ctx.store("raw_resource_facts", facts);
+
+    let _ = pass.run(&mut ctx);
+
+    let graph: ContractGraph = ctx
+        .get("contract_graph")
+        .expect("ContractGraph must be stored in context");
+
+    // No ConditionalRelease should be produced — UNKNOWN is excluded
+    // from cross-family matching (condition 3: both families must be known).
+    let conditional_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.effect,
+                Effect::ConditionalRelease { .. } | Effect::CrossLanguageFree { .. }
+            )
+        })
+        .collect();
+    assert!(
+        conditional_edges.is_empty(),
+        "UNKNOWN family should be excluded from cross-family matching, \
+         but found {} conditional/cross-language edges",
+        conditional_edges.len()
     );
 }

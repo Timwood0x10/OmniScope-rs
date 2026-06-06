@@ -1,5 +1,6 @@
 //! IR behavior summary pass — extracts function behaviors from IR
-//! instruction patterns and converts them into ResourceSummary entries.
+//! instruction patterns and converts them into ResourceSummary entries
+//! and SemanticFact records.
 //!
 //! This is the M1 milestone: the key bridge from "IR pattern analysis"
 //! to "resource contract pipeline". Before this pass, the pipeline
@@ -15,11 +16,20 @@
 //! in pass context are consumed by:
 //! - SummaryBuilderPass (M2): to build summaries from behaviors
 //! - StructuralInferencePass (M2): to prefer behavior-based inference
+//! - IssueCandidateBuilderPass: to attach semantic facts as evidence
+//!
+//! # Semantic Fact Emission (Phase 3)
+//!
+//! Each detected BehaviorPattern is mapped to one or more SemanticFact
+//! records with appropriate confidence and evidence strings. These facts
+//! are stored in the pass context under "semantic_facts" for downstream
+//! consumption by issue candidate builders.
 
 use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_semantics::{
-    behavior_to_summary, extract_behavior, BehaviorPattern, FunctionBehavior, SummaryStore,
+    behavior_to_summary, extract_behavior, BehaviorPattern, EscapeType, FactConfidence, FactSource,
+    FunctionBehavior, PosixOpCategory, SemanticFact, SemanticKey, SemanticKind, SummaryStore,
 };
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -68,9 +78,15 @@ impl Pass for IRBehaviorSummaryPass {
 
         let mut behaviors: Vec<FunctionBehavior> = Vec::new();
         let mut summary_store: SummaryStore = ctx.get("summary_store").unwrap_or_default();
+        let mut semantic_facts: Vec<SemanticFact> = Vec::new();
 
-        // Iterate over all function bodies and extract behaviors
-        for (func_id, body) in module.function_bodies.values().enumerate() {
+        // Iterate over all function bodies in stable order.
+        // HashMap iteration order is non-deterministic, so we sort by
+        // function name first to produce stable func_id assignments.
+        let mut func_bodies: Vec<_> = module.function_bodies.iter().collect();
+        func_bodies.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (func_id, (_name, body)) in func_bodies.iter().enumerate() {
             let func_id = func_id as u64;
             let behavior = extract_behavior(body);
             behaviors.push(behavior.clone());
@@ -79,12 +95,20 @@ impl Pass for IRBehaviorSummaryPass {
             if !behavior.patterns.is_empty() {
                 let summary = behavior_to_summary(&behavior, func_id, func_id);
                 summary_store.insert(summary);
+
+                // Emit semantic facts from detected patterns (Phase 3)
+                for pattern in &behavior.patterns {
+                    let facts = pattern_to_facts(pattern, &behavior.name, func_id);
+                    semantic_facts.extend(facts);
+                }
             }
         }
 
         // Store behaviors for downstream passes (M2 integration)
         ctx.store("function_behaviors", behaviors.clone());
         ctx.store("ir_behavior_summary_store", summary_store.clone());
+        // Store semantic facts for downstream issue candidate builders (Phase 3)
+        ctx.store("semantic_facts", semantic_facts.clone());
 
         // Merge into the main summary_store if it exists
         // (so downstream passes see both registry-based and behavior-based summaries)
@@ -125,6 +149,7 @@ impl Pass for IRBehaviorSummaryPass {
 
         result.add_stat("behaviors_extracted", behaviors.len());
         result.add_stat("summaries_from_behavior", summary_store.len());
+        result.add_stat("semantic_facts_emitted", semantic_facts.len());
         result.add_stat("conditional_release", conditional_release_count);
         result.add_stat("ownership_transfer", ownership_transfer_count);
         result.add_stat("pure_computation", pure_computation_count);
@@ -139,6 +164,276 @@ impl Pass for IRBehaviorSummaryPass {
 impl Default for IRBehaviorSummaryPass {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Maps a detected behavior pattern to semantic fact(s).
+///
+/// Each BehaviorPattern produces one or more SemanticFact records
+/// with the appropriate SemanticKind, confidence, and evidence.
+/// The key is constructed from the function name so downstream
+/// consumers can look up facts by function symbol.
+fn pattern_to_facts(
+    pattern: &BehaviorPattern,
+    func_name: &str,
+    _func_id: u64,
+) -> Vec<SemanticFact> {
+    // Use Symbol key keyed by function name, NOT Resource(func_id).
+    // func_id is an unstable enumeration index (HashMap::values().enumerate()),
+    // while Resource IDs in the contract graph are instance allocation IDs.
+    // Mixing these domains causes facts to attach to wrong candidates.
+    let key = SemanticKey::Symbol(func_name.to_string());
+    match pattern {
+        BehaviorPattern::ConditionalRelease {
+            atomic_op,
+            threshold,
+        } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::ReleaseOnAllExitPaths,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "ConditionalRelease: atomicrmw {} with threshold {} in {}",
+                    atomic_op, threshold, func_name
+                ),
+            )]
+        }
+        BehaviorPattern::PureComputation => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::NonMemoryResource,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "PureComputation: {} has no ownership side effects",
+                    func_name
+                ),
+            )]
+        }
+        BehaviorPattern::OwnershipTransfer { is_acquire } => {
+            let kind = if *is_acquire {
+                SemanticKind::HeapProvenance
+            } else {
+                SemanticKind::IntoRawTransfer
+            };
+            vec![SemanticFact::new(
+                key,
+                kind,
+                FactConfidence::Medium,
+                FactSource::IRPattern,
+                format!(
+                    "OwnershipTransfer: {} (is_acquire={})",
+                    func_name, is_acquire
+                ),
+            )]
+        }
+        BehaviorPattern::PointerProjection => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::FromParameter,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "PointerProjection: {} borrows pointer without ownership change",
+                    func_name
+                ),
+            )]
+        }
+        BehaviorPattern::Initialization => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::NonMemoryResource,
+                FactConfidence::Medium,
+                FactSource::IRPattern,
+                format!(
+                    "Initialization: {} writes to struct fields, no leak",
+                    func_name
+                ),
+            )]
+        }
+        BehaviorPattern::InternalBridge => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::DeclaredCrossBoundary,
+                FactConfidence::Medium,
+                FactSource::IRPattern,
+                format!(
+                    "InternalBridge: {} calls only same-project functions",
+                    func_name
+                ),
+            )]
+        }
+        BehaviorPattern::BorrowedReturn {
+            from_readonly_param,
+        } => {
+            let kind = if *from_readonly_param {
+                SemanticKind::ReadonlyParam
+            } else {
+                SemanticKind::FromParameter
+            };
+            vec![SemanticFact::new(
+                key,
+                kind,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "BorrowedReturn: {} returns derived pointer (readonly={})",
+                    func_name, from_readonly_param
+                ),
+            )]
+        }
+        BehaviorPattern::RAiiDropRelease { is_drop_in_place } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::RaiiDropRelease,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "RAiiDropRelease: {} (drop_in_place={})",
+                    func_name, is_drop_in_place
+                ),
+            )]
+        }
+        BehaviorPattern::IntoRawTransfer => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::IntoRawTransfer,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "IntoRawTransfer: {} transfers ownership via into_raw",
+                    func_name
+                ),
+            )]
+        }
+        BehaviorPattern::PosixNonMemoryOp { category } => {
+            let kind = match category {
+                PosixOpCategory::File => SemanticKind::FileOperation,
+                PosixOpCategory::Network => SemanticKind::NetworkOperation,
+                PosixOpCategory::Process => SemanticKind::ProcessOperation,
+                PosixOpCategory::Other => SemanticKind::NonMemoryResource,
+            };
+            vec![SemanticFact::new(
+                key,
+                kind,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!("PosixNonMemoryOp: {} (category={:?})", func_name, category),
+            )]
+        }
+        BehaviorPattern::NullGuardedRelease { arg_index } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::NullOnErrorPath,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "NullGuardedRelease: {} checks arg {} before release",
+                    func_name, arg_index
+                ),
+            )]
+        }
+        BehaviorPattern::NullStoreAfterRelease { arg_index } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::AliasOfReleased,
+                FactConfidence::Medium,
+                FactSource::IRPattern,
+                format!(
+                    "NullStoreAfterRelease: {} nulls slot after releasing arg {}",
+                    func_name, arg_index
+                ),
+            )]
+        }
+        BehaviorPattern::FallibleOutParamInit { out_arg_index } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::FallibleOutParamInit,
+                FactConfidence::Medium,
+                FactSource::IRPattern,
+                format!(
+                    "FallibleOutParamInit: {} initializes out-param arg {}",
+                    func_name, out_arg_index
+                ),
+            )]
+        }
+        BehaviorPattern::OutParamNullOnError { out_arg_index } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::NullOnErrorPath,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "OutParamNullOnError: {} nulls out-param arg {} on error",
+                    func_name, out_arg_index
+                ),
+            )]
+        }
+        BehaviorPattern::OutParamOwnedOnSuccess { out_arg_index } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::EscapedToOutParam,
+                FactConfidence::Medium,
+                FactSource::IRPattern,
+                format!(
+                    "OutParamOwnedOnSuccess: {} gives ownership via out-param arg {}",
+                    func_name, out_arg_index
+                ),
+            )]
+        }
+        BehaviorPattern::StoreToOwner { owner_field } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::StoredToOwner,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "StoreToOwner: {} stores resource to field '{}'",
+                    func_name, owner_field
+                ),
+            )]
+        }
+        BehaviorPattern::StoreToRuntime { runtime_target } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::StoredToRuntime,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "StoreToRuntime: {} stores resource to runtime target '{}'",
+                    func_name, runtime_target
+                ),
+            )]
+        }
+        BehaviorPattern::ResourceEscape { escape_type } => {
+            let kind = match escape_type {
+                EscapeType::ReturnValue => SemanticKind::EscapedToCaller,
+                EscapeType::OutParameter => SemanticKind::EscapedToOutParam,
+            };
+            vec![SemanticFact::new(
+                key,
+                kind,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "ResourceEscape: {} escapes via {:?}",
+                    func_name, escape_type
+                ),
+            )]
+        }
+        BehaviorPattern::ReleaseOnAllExitPaths { release_function } => {
+            vec![SemanticFact::new(
+                key,
+                SemanticKind::ReleaseOnAllExitPaths,
+                FactConfidence::High,
+                FactSource::IRPattern,
+                format!(
+                    "ReleaseOnAllExitPaths: {} releases via {} on all paths",
+                    func_name, release_function
+                ),
+            )]
+        }
     }
 }
 

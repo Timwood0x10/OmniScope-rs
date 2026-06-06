@@ -26,7 +26,10 @@ pub mod resource_family;
 
 // Re-exports
 pub use abi::{AbiType, CallingConvention};
-pub use boundary::{matches_pattern, BoundaryContext, CrossBoundary};
+pub use boundary::{
+    matches_pattern, BoundaryConfidence, BoundaryContext, BoundaryEvidence, CrossBoundary,
+    FfiSliceInfo, SeedClassification,
+};
 pub use call_graph_types::{
     is_dangerous, is_libc, is_sink, is_source, CallGraphEdge, CallGraphNode, CrossLangEdge,
     FunctionKind,
@@ -40,15 +43,16 @@ pub use config::{
 pub use effect::{ArgIndex, Effect, FunctionOrigin, LanguageHint, VerifierVerdict};
 pub use escape::EscapeKind;
 pub use evidence::{
-    BoundaryDetectionMethod, CrossBoundaryEvidence, Evidence, EvidenceKind, IssueCandidateKind,
+    is_boundary_evidence, is_resource_evidence, BoundaryDetectionMethod, BoundaryEvidenceKind,
+    CrossBoundaryEvidence, Evidence, EvidenceKind, IssueCandidateKind, ResourceEvidenceKind,
 };
 pub use pointer_contract::PointerContract;
 pub use resource_family::{
-    FamilyId, FamilyKind, LifetimeDomain, ResourceFamily, BUILTIN_FAMILIES, FAMILY_CPP_NEW_ARRAY,
-    FAMILY_CPP_NEW_SCALAR, FAMILY_CSHARP_COTASK, FAMILY_CSHARP_HGLOBAL, FAMILY_C_HEAP,
-    FAMILY_GO_GC, FAMILY_JAVA_GLOBAL_REF, FAMILY_JAVA_LOCAL_REF, FAMILY_PYTHON_MEM,
-    FAMILY_PYTHON_MEM_RAW, FAMILY_PYTHON_OBJECT, FAMILY_RUST_GLOBAL, FAMILY_RUST_RAW_OWNERSHIP,
-    FAMILY_UNKNOWN, FAMILY_ZIG_ALLOCATOR,
+    are_families_compatible, FamilyId, FamilyKind, LifetimeDomain, ResourceFamily,
+    BUILTIN_FAMILIES, FAMILY_CPP_NEW_ARRAY, FAMILY_CPP_NEW_SCALAR, FAMILY_CSHARP_COTASK,
+    FAMILY_CSHARP_HGLOBAL, FAMILY_C_HEAP, FAMILY_GO_GC, FAMILY_JAVA_GLOBAL_REF,
+    FAMILY_JAVA_LOCAL_REF, FAMILY_PYTHON_MEM, FAMILY_PYTHON_MEM_RAW, FAMILY_PYTHON_OBJECT,
+    FAMILY_RUST_GLOBAL, FAMILY_RUST_RAW_OWNERSHIP, FAMILY_UNKNOWN, FAMILY_ZIG_ALLOCATOR,
 };
 
 /// Unique identifier for nodes in analysis graphs

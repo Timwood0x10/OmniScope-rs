@@ -34,6 +34,7 @@ fn test_ownership_solver_escape_reclaim_optimization() {
         function_name: "__rust_alloc".to_string(),
         caller_name: "box_new".to_string(),
         family: Some(FamilyId::RUST_GLOBAL),
+        boundary_evidence: None,
     });
 
     // Escape (into_raw)
@@ -48,6 +49,7 @@ fn test_ownership_solver_escape_reclaim_optimization() {
         function_name: "into_raw".to_string(),
         caller_name: "box_new".to_string(),
         family: Some(FamilyId::RUST_GLOBAL),
+        boundary_evidence: None,
     });
 
     // Reclaim (from_raw)
@@ -62,6 +64,7 @@ fn test_ownership_solver_escape_reclaim_optimization() {
         function_name: "from_raw".to_string(),
         caller_name: "box_new".to_string(),
         family: Some(FamilyId::RUST_GLOBAL),
+        boundary_evidence: None,
     });
 
     // Final release of reclaimed instance
@@ -76,6 +79,7 @@ fn test_ownership_solver_escape_reclaim_optimization() {
         function_name: "__rust_dealloc".to_string(),
         caller_name: "box_new".to_string(),
         family: Some(FamilyId::RUST_GLOBAL),
+        boundary_evidence: None,
     });
 
     ctx.store("contract_graph", graph);
@@ -176,6 +180,7 @@ fn test_ownership_solver_multiple_escape_reclaim_cycles() {
             function_name: "__rust_alloc".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
 
         // Escape (into_raw)
@@ -190,6 +195,7 @@ fn test_ownership_solver_multiple_escape_reclaim_cycles() {
             function_name: "into_raw".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
 
         // Reclaim (from_raw)
@@ -204,6 +210,7 @@ fn test_ownership_solver_multiple_escape_reclaim_cycles() {
             function_name: "from_raw".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
 
         // Final release of reclaimed instance
@@ -218,6 +225,7 @@ fn test_ownership_solver_multiple_escape_reclaim_cycles() {
             function_name: "__rust_dealloc".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
     }
 

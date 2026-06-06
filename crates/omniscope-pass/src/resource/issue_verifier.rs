@@ -421,8 +421,7 @@ fn deduplicate_leak_candidates(candidates: &mut Vec<IssueCandidate>) {
     let mut to_remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     // ── Strategy 1: resource_id overlap ──
-    let mut best_per_rid: std::collections::HashMap<u64, usize> =
-        std::collections::HashMap::new();
+    let mut best_per_rid: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for (i, candidate) in candidates.iter().enumerate() {
         if !is_leak_candidate(candidate) {
             continue;

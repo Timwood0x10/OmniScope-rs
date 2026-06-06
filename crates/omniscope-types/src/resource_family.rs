@@ -483,6 +483,23 @@ impl From<ResourceFamily> for SerializableResourceFamily {
     }
 }
 
+/// Checks whether two family IDs are compatible for release.
+///
+/// Two families are compatible if they are the same, or if the
+/// release family is listed in the acquire family's `compatible_releases`.
+/// Returns false for unknown family IDs not found in `BUILTIN_FAMILIES`.
+pub fn are_families_compatible(acquire: FamilyId, release: FamilyId) -> bool {
+    if acquire == release {
+        return true;
+    }
+    for family in BUILTIN_FAMILIES {
+        if family.id == acquire {
+            return family.compatible_releases.contains(&release);
+        }
+    }
+    false
+}
+
 /// All built-in resource families.
 pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_C_HEAP,

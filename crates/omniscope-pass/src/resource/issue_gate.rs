@@ -175,7 +175,7 @@ where
             // Zig runtime internal wrappers (e.g., heap.c_allocator_impl)
             // are legitimate bridges between Zig and C allocators — not FFI violations.
             if has_kind(key, SemanticKind::RuntimeInternal) {
-                return GateVerdict::SuppressRaii;
+                return GateVerdict::SuppressRuntimeInternal;
             }
         }
 
@@ -196,7 +196,7 @@ where
                 return GateVerdict::SuppressLibraryRelease;
             }
             if has_kind(key, SemanticKind::RuntimeInternal) {
-                return GateVerdict::SuppressRaii;
+                return GateVerdict::SuppressRuntimeInternal;
             }
         }
 
@@ -395,7 +395,7 @@ where
             }
             // RuntimeInternal: runtime wrapper
             if has_kind(key, SemanticKind::RuntimeInternal) {
-                return GateVerdict::SuppressRaii;
+                return GateVerdict::SuppressRuntimeInternal;
             }
         }
 
@@ -646,6 +646,7 @@ mod tests {
             GateVerdict::SuppressLibraryRelease,
             GateVerdict::SuppressFromParameter,
             GateVerdict::SuppressAllocatorReturn,
+            GateVerdict::SuppressRuntimeInternal,
         ] {
             assert!(
                 !verdict.reason().is_empty(),
@@ -799,6 +800,72 @@ mod tests {
             verdict,
             GateVerdict::Allow,
             "ConditionalLeak without suppression signal must pass the gate"
+        );
+    }
+
+    // ── RuntimeInternal verdict tests ────────────────────────────────
+
+    /// Objective: Verify CrossLanguageFree with RuntimeInternal returns
+    /// SuppressRuntimeInternal (NOT SuppressRaii).
+    /// Invariants: RuntimeInternal is distinct from RAII — it covers
+    /// compiler/runtime glue with no user boundary path.
+    #[test]
+    fn test_gate_suppresses_cross_language_free_runtime_internal() {
+        let issue = make_issue(IssueKind::CrossLanguageFree, "c_allocator_impl");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "c_allocator_impl" && kind == SemanticKind::RuntimeInternal
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRuntimeInternal,
+            "CrossLanguageFree with RuntimeInternal must return SuppressRuntimeInternal, not SuppressRaii"
+        );
+    }
+
+    /// Objective: Verify OwnershipViolation with RuntimeInternal returns
+    /// SuppressRuntimeInternal.
+    /// Invariants: Runtime glue is not an ownership violation.
+    #[test]
+    fn test_gate_suppresses_ownership_violation_runtime_internal() {
+        let issue = make_issue(IssueKind::OwnershipViolation, "heap_alloc_impl");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "heap_alloc_impl" && kind == SemanticKind::RuntimeInternal
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRuntimeInternal,
+            "OwnershipViolation with RuntimeInternal must return SuppressRuntimeInternal"
+        );
+    }
+
+    /// Objective: Verify OwnershipEscapeLeak with RuntimeInternal returns
+    /// SuppressRuntimeInternal.
+    /// Invariants: Runtime bridges are not user-level ownership escapes.
+    #[test]
+    fn test_gate_suppresses_ownership_escape_leak_runtime_internal() {
+        let issue = make_issue(IssueKind::OwnershipEscapeLeak, "runtime_bridge");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "runtime_bridge" && kind == SemanticKind::RuntimeInternal
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRuntimeInternal,
+            "OwnershipEscapeLeak with RuntimeInternal must return SuppressRuntimeInternal"
+        );
+    }
+
+    /// Objective: Verify SuppressRuntimeInternal reason is informative.
+    /// Invariants: The reason must clearly distinguish from SuppressRaii.
+    #[test]
+    fn test_runtime_internal_verdict_reason() {
+        let reason = GateVerdict::SuppressRuntimeInternal.reason();
+        assert!(
+            !reason.is_empty(),
+            "SuppressRuntimeInternal reason must not be empty"
+        );
+        assert!(
+            reason.contains("runtime") || reason.contains("internal"),
+            "SuppressRuntimeInternal reason must mention runtime/internal, got: {reason}"
         );
     }
 }

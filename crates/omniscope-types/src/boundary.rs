@@ -8,6 +8,8 @@
 //! for flexible boundary declaration (e.g., `c_*`, `*_init`, `*malloc*`).
 
 use crate::config::{FFIBoundaryConfig, Language};
+use crate::evidence::BoundaryEvidenceKind;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tracing::trace;
 
@@ -179,7 +181,7 @@ impl BoundaryContext {
     /// `true` if the call crosses a declared boundary.
     pub fn matches_call(&self, caller_lang: Language, callee_lang: Language) -> bool {
         for edge in &self.declared_edges {
-            // 如果 functions 为空，表示匹配该语言对的所有函数
+            // Empty functions list means match all functions for this language pair
             if edge.functions.is_empty()
                 && edge.pattern.is_none()
                 && edge.from == caller_lang
@@ -211,12 +213,12 @@ impl BoundaryContext {
         caller_lang: Language,
         callee_lang: Language,
     ) -> bool {
-        // 先检查显式函数列表和模式匹配
+        // Check explicit function list and pattern match first
         if self.is_declared_boundary(function).is_some() {
             return true;
         }
 
-        // 再检查语言对匹配
+        // Then check language pair match
         self.matches_call(caller_lang, callee_lang)
     }
 
@@ -302,6 +304,174 @@ pub fn matches_pattern(function: &str, pattern: &str) -> bool {
 
     // Exact match (no wildcards).
     function == pattern
+}
+
+/// Confidence level for boundary evidence.
+///
+/// Strong: direct, unambiguous evidence (e.g., cross-language call with
+/// both languages known, user-configured boundary, C++ Itanium symbol
+/// called from C).
+///
+/// Weak: indirect or heuristic evidence (e.g., same-language FFI contract
+/// symbol, dangerous libc inside a wrapper, runtime bridge connected to
+/// a user boundary flow).
+///
+/// None: no evidence or explicit suppression (e.g., LLVM intrinsic,
+/// compiler glue with no user boundary path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum BoundaryConfidence {
+    /// Strong, unambiguous evidence of a cross-language boundary.
+    Strong,
+    /// Indirect or heuristic evidence of a boundary.
+    Weak,
+    /// No evidence or explicitly suppressed.
+    #[default]
+    None,
+}
+
+/// A single piece of evidence supporting an FFI boundary classification.
+///
+/// Each `BoundaryEvidence` captures *why* a particular call or function
+/// was classified as an FFI boundary. Multiple evidence items can be
+/// attached to a single call site, enabling downstream passes to make
+/// informed decisions about issue severity and suppression.
+///
+/// # Example
+///
+/// ```
+/// use omniscope_types::boundary::{BoundaryConfidence, BoundaryEvidence};
+/// use omniscope_types::evidence::BoundaryEvidenceKind;
+/// use omniscope_types::config::Language;
+///
+/// let evidence = BoundaryEvidence {
+///     kind: BoundaryEvidenceKind::CrossLanguageCall,
+///     caller_lang: Some(Language::Rust),
+///     callee_lang: Some(Language::C),
+///     confidence: BoundaryConfidence::Strong,
+///     reason: "Rust calling C via extern \"C\"".to_string(),
+/// };
+/// assert_eq!(evidence.confidence, BoundaryConfidence::Strong);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BoundaryEvidence {
+    /// What kind of boundary evidence this is.
+    pub kind: BoundaryEvidenceKind,
+    /// Inferred language of the caller function (if known).
+    pub caller_lang: Option<Language>,
+    /// Inferred language of the callee function (if known).
+    pub callee_lang: Option<Language>,
+    /// Confidence level for this evidence.
+    pub confidence: BoundaryConfidence,
+    /// Human-readable explanation of why this evidence was produced.
+    pub reason: String,
+}
+
+impl BoundaryEvidence {
+    /// Creates a new boundary evidence with the given kind and reason.
+    pub fn new(kind: BoundaryEvidenceKind, reason: impl Into<String>) -> Self {
+        Self {
+            kind,
+            caller_lang: None,
+            callee_lang: None,
+            confidence: BoundaryConfidence::None,
+            reason: reason.into(),
+        }
+    }
+
+    /// Sets the caller language.
+    pub fn with_caller_lang(mut self, lang: Language) -> Self {
+        self.caller_lang = Some(lang);
+        self
+    }
+
+    /// Sets the callee language.
+    pub fn with_callee_lang(mut self, lang: Language) -> Self {
+        self.callee_lang = Some(lang);
+        self
+    }
+
+    /// Sets the confidence level.
+    pub fn with_confidence(mut self, confidence: BoundaryConfidence) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    /// Returns true if this evidence is strong-confidence.
+    pub fn is_strong(&self) -> bool {
+        self.confidence == BoundaryConfidence::Strong
+    }
+
+    /// Returns true if this evidence is weak-confidence.
+    pub fn is_weak(&self) -> bool {
+        self.confidence == BoundaryConfidence::Weak
+    }
+}
+
+/// Metadata for FFI slice membership — how a function or call site
+/// belongs to the expanded FFI slice around a boundary seed.
+///
+/// The FFI slice is the set of functions/calls that are "near" an
+/// FFI boundary (within N hops). Functions inside the slice are
+/// candidates for ownership tracking; functions outside are not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FfiSliceInfo {
+    /// Distance from the nearest strong seed (0 = seed itself, 1 = 1 hop, etc.).
+    /// `None` means not yet computed or outside the slice.
+    pub ffi_slice_depth: Option<u32>,
+    /// Relevance to the FFI boundary (Strong = seed or 1-hop, Weak = 2-hop,
+    /// None = outside the slice).
+    pub ffi_relevance: BoundaryConfidence,
+    /// Short explainable reason why this function/call is in the slice.
+    pub ffi_reason: Option<String>,
+}
+
+impl FfiSliceInfo {
+    /// Creates an FfiSliceInfo indicating the item is outside the slice.
+    pub fn outside() -> Self {
+        Self {
+            ffi_slice_depth: None,
+            ffi_relevance: BoundaryConfidence::None,
+            ffi_reason: None,
+        }
+    }
+
+    /// Creates an FfiSliceInfo for a boundary seed (depth 0, strong relevance).
+    pub fn seed(reason: impl Into<String>) -> Self {
+        Self {
+            ffi_slice_depth: Some(0),
+            ffi_relevance: BoundaryConfidence::Strong,
+            ffi_reason: Some(reason.into()),
+        }
+    }
+
+    /// Creates an FfiSliceInfo for an expanded node at the given depth.
+    pub fn expanded(depth: u32, relevance: BoundaryConfidence, reason: impl Into<String>) -> Self {
+        Self {
+            ffi_slice_depth: Some(depth),
+            ffi_relevance: relevance,
+            ffi_reason: Some(reason.into()),
+        }
+    }
+
+    /// Returns true if this item is inside the FFI slice.
+    pub fn is_in_slice(&self) -> bool {
+        self.ffi_slice_depth.is_some()
+    }
+}
+
+/// Classification of a boundary seed — why a call is a boundary seed.
+///
+/// Seeds are the starting points for FFI slice expansion. They are
+/// classified as strong (definite boundary), weak (possible boundary),
+/// or suppression (should be excluded from boundary analysis).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SeedClassification {
+    /// Strong seed: definite cross-language boundary.
+    Strong,
+    /// Weak seed: possible boundary with indirect evidence.
+    Weak,
+    /// Suppression seed: should be excluded from boundary analysis.
+    Suppression,
 }
 
 #[cfg(test)]

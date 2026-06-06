@@ -12,7 +12,7 @@ use crate::escape::EscapeKind;
 use crate::pointer_contract::PointerContract;
 use crate::resource_family::FamilyId;
 
-/// Kind of evidence supporting a conclusion.
+/// Kind of evidence supporting a conclusion about a resource or issue.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EvidenceKind {
     /// Same-family release evidence (alloc and free from same family).
@@ -102,8 +102,108 @@ pub enum EvidenceKind {
     /// An FFI function returned a pointer that was used without
     /// a null check (load/store/gep/call-sink).
     FfiReturnNullCheck,
+    /// Semantic fact derived from IR behavior analysis.
+    /// Records a SemanticKind classification with source and confidence,
+    /// enabling downstream verifiers to weight or suppress issues based
+    /// on semantic understanding rather than just structural patterns.
+    SemanticFactEvidence,
     /// Unknown or insufficient evidence.
     Insufficient,
+}
+
+/// Kind of boundary evidence supporting FFI boundary detection conclusions.
+///
+/// This enum is separate from `EvidenceKind` because boundary detection
+/// and resource contract analysis are distinct concerns:
+/// - Boundary evidence answers: "Is this a cross-language boundary?"
+/// - Resource evidence answers: "Is this a resource misuse?"
+///
+/// Separating them enables independent evolution of FFI boundary
+/// detection accuracy metrics from resource contract metrics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BoundaryEvidenceKind {
+    /// Direct cross-language call detected (caller and callee have
+    /// different source languages inferred from symbol mangling or
+    /// debug info).
+    CrossLanguageCall,
+    /// Function explicitly listed in FFI boundary configuration
+    /// (via --cross CLI or config file).
+    ConfiguredBoundary,
+    /// Call uses a non-default ABI convention (e.g., C call from
+    /// Rust via extern "C", stdcall, fastcall).
+    ExternalAbiCall,
+    /// Function pointer or callback passed across a language boundary,
+    /// creating a callback invocation path from one language into another.
+    CallbackAcrossBoundary,
+    /// Function pointer with ABI-annotated type (e.g., Option<extern "C" fn()>)
+    /// indicating an intentional cross-language interface.
+    FunctionPointerAbi,
+    /// Wrapper function that exports functionality across a language
+    /// boundary (e.g., #[no_mangle] extern "C" fn in Rust).
+    ExportedWrapper,
+    /// Runtime or compiler-generated bridge function that mediates
+    /// between languages (e.g., Rust __rust_alloc, Zig c_allocator_impl).
+    RuntimeBridge,
+}
+
+/// Kind of resource evidence supporting resource contract analysis conclusions.
+///
+/// This enum captures resource-specific evidence that indicates ownership
+/// or lifetime violations. These are distinct from boundary evidence because
+/// they describe what went wrong with resource management, not whether a
+/// boundary was crossed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ResourceEvidenceKind {
+    /// Resource released by a different family than the one that allocated it
+    /// (e.g., malloc + operator delete).
+    CrossFamilyRelease,
+    /// Ownership transferred across a boundary without proper cleanup
+    /// on the receiving side (e.g., Box::into_raw without from_raw).
+    OwnershipTransfer,
+    /// Borrowed reference used in a context that requires ownership
+    /// (e.g., PyList_GetItem result decremented by caller).
+    BorrowedAsOwned,
+    /// Reference count increment/decrement mismatch — the number of
+    /// INCREF calls does not match the number of DECREF calls.
+    RetainReleaseMismatch,
+    /// FFI function return value used without null check — potential
+    /// null pointer dereference if the FFI function fails.
+    FfiReturnUnchecked,
+}
+
+/// Returns true if an `EvidenceKind` variant is a boundary-related evidence.
+///
+/// Boundary evidence answers: "Is this a cross-language boundary?" Only
+/// kinds that directly indicate a boundary crossing are included here.
+/// Resource/pointer facts (OwnershipTransfer, OwnershipEscapeLeak,
+/// FfiReturnNullCheck) are NOT boundary evidence — they describe what
+/// went wrong with resource management, not whether a boundary exists.
+/// Including them would recreate the design bug where resource evidence
+/// alone satisfies FFI evidence requirements.
+pub fn is_boundary_evidence(kind: &EvidenceKind) -> bool {
+    matches!(
+        kind,
+        EvidenceKind::CrossLanguageFree | EvidenceKind::CallbackEscape
+    )
+}
+
+/// Returns true if an `EvidenceKind` variant is a resource-related evidence.
+///
+/// This helper supports gradual migration from the unified `EvidenceKind`
+/// to the separated `BoundaryEvidenceKind` / `ResourceEvidenceKind` model.
+pub fn is_resource_evidence(kind: &EvidenceKind) -> bool {
+    matches!(
+        kind,
+        EvidenceKind::SameFamilyRelease
+            | EvidenceKind::CrossFamilyMismatch
+            | EvidenceKind::DestructorRelease
+            | EvidenceKind::RaiiDropRelease
+            | EvidenceKind::MultipleRelease
+            | EvidenceKind::UseAfterFree
+            | EvidenceKind::InvalidBorrowedFree
+            | EvidenceKind::RawOwnershipReclaim
+            | EvidenceKind::RefcountConditional
+    )
 }
 
 /// An evidence item supporting a conclusion about a resource or issue.
@@ -298,6 +398,8 @@ mod tests {
     #[test]
     fn test_issue_candidate_kinds() {
         // Verify all candidate kinds from the architecture doc are present.
+        // When adding new variants, update this list — do NOT assert a
+        // hardcoded count, as it silently breaks when variants are added.
         let kinds = [
             IssueCandidateKind::CrossFamilyFree,
             IssueCandidateKind::UseAfterRelease,
@@ -311,11 +413,123 @@ mod tests {
             IssueCandidateKind::OwnershipEscapeLeak,
             IssueCandidateKind::UseAfterFree,
             IssueCandidateKind::InvalidBorrowedFree,
+            IssueCandidateKind::UncheckedFfiReturn,
+            IssueCandidateKind::NullDereference,
+            IssueCandidateKind::CrossLanguageFree,
+        ];
+        // Verify no duplicates (each variant appears exactly once)
+        let unique_count = {
+            let mut seen = std::collections::HashSet::new();
+            kinds.iter().filter(|k| seen.insert(**k)).count()
+        };
+        assert_eq!(
+            unique_count,
+            kinds.len(),
+            "Duplicate IssueCandidateKind variants in test list"
+        );
+    }
+
+    #[test]
+    fn test_boundary_evidence_kind_variants() {
+        // Verify all BoundaryEvidenceKind variants exist and are distinct.
+        let kinds = [
+            BoundaryEvidenceKind::CrossLanguageCall,
+            BoundaryEvidenceKind::ConfiguredBoundary,
+            BoundaryEvidenceKind::ExternalAbiCall,
+            BoundaryEvidenceKind::CallbackAcrossBoundary,
+            BoundaryEvidenceKind::FunctionPointerAbi,
+            BoundaryEvidenceKind::ExportedWrapper,
+            BoundaryEvidenceKind::RuntimeBridge,
         ];
         assert_eq!(
             kinds.len(),
-            12,
-            "Must have 12 candidate kinds as specified in architecture doc"
+            7,
+            "Must have 7 BoundaryEvidenceKind variants as specified in FFI plan"
+        );
+    }
+
+    #[test]
+    fn test_resource_evidence_kind_variants() {
+        // Verify all ResourceEvidenceKind variants exist and are distinct.
+        let kinds = [
+            ResourceEvidenceKind::CrossFamilyRelease,
+            ResourceEvidenceKind::OwnershipTransfer,
+            ResourceEvidenceKind::BorrowedAsOwned,
+            ResourceEvidenceKind::RetainReleaseMismatch,
+            ResourceEvidenceKind::FfiReturnUnchecked,
+        ];
+        assert_eq!(
+            kinds.len(),
+            5,
+            "Must have 5 ResourceEvidenceKind variants as specified in FFI plan"
+        );
+    }
+
+    #[test]
+    fn test_is_boundary_evidence_classification() {
+        // Only kinds that directly indicate a cross-language boundary
+        // crossing should be classified as boundary evidence.
+        // Resource/pointer facts (OwnershipTransfer, OwnershipEscapeLeak,
+        // FfiReturnNullCheck) are NOT boundary evidence — they describe
+        // what went wrong with resource management, not whether a boundary
+        // exists.
+        assert!(
+            is_boundary_evidence(&EvidenceKind::CrossLanguageFree),
+            "CrossLanguageFree must be classified as boundary evidence"
+        );
+        assert!(
+            is_boundary_evidence(&EvidenceKind::CallbackEscape),
+            "CallbackEscape must be classified as boundary evidence"
+        );
+        // OwnershipTransfer is a resource fact, not boundary evidence.
+        assert!(
+            !is_boundary_evidence(&EvidenceKind::OwnershipTransfer),
+            "OwnershipTransfer must NOT be classified as boundary evidence"
+        );
+        // OwnershipEscapeLeak is a resource fact, not boundary evidence.
+        assert!(
+            !is_boundary_evidence(&EvidenceKind::OwnershipEscapeLeak),
+            "OwnershipEscapeLeak must NOT be classified as boundary evidence"
+        );
+        // FfiReturnNullCheck is a call-safety fact, not boundary evidence.
+        assert!(
+            !is_boundary_evidence(&EvidenceKind::FfiReturnNullCheck),
+            "FfiReturnNullCheck must NOT be classified as boundary evidence"
+        );
+        // Non-boundary evidence should not be classified as boundary.
+        assert!(
+            !is_boundary_evidence(&EvidenceKind::SameFamilyRelease),
+            "SameFamilyRelease must NOT be classified as boundary evidence"
+        );
+        assert!(
+            !is_boundary_evidence(&EvidenceKind::RaiiDropRelease),
+            "RaiiDropRelease must NOT be classified as boundary evidence"
+        );
+    }
+
+    #[test]
+    fn test_is_resource_evidence_classification() {
+        // Resource-related EvidenceKind variants should be classified as resource.
+        assert!(
+            is_resource_evidence(&EvidenceKind::SameFamilyRelease),
+            "SameFamilyRelease must be classified as resource evidence"
+        );
+        assert!(
+            is_resource_evidence(&EvidenceKind::CrossFamilyMismatch),
+            "CrossFamilyMismatch must be classified as resource evidence"
+        );
+        assert!(
+            is_resource_evidence(&EvidenceKind::UseAfterFree),
+            "UseAfterFree must be classified as resource evidence"
+        );
+        // Non-resource evidence should not be classified as resource.
+        assert!(
+            !is_resource_evidence(&EvidenceKind::CrossLanguageFree),
+            "CrossLanguageFree must NOT be classified as resource evidence"
+        );
+        assert!(
+            !is_resource_evidence(&EvidenceKind::SymbolPattern),
+            "SymbolPattern must NOT be classified as resource evidence"
         );
     }
 }

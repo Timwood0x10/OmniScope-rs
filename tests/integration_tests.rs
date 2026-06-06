@@ -943,6 +943,121 @@ fn test_c_cpp_bridge_clean() {
     assert_no_issue_kind(&result, IssueKind::CrossFamilyFree, "C→C++ bridge clean");
 }
 
+/// Build a large self-contained C++/Rust FFI IR corpus.
+///
+/// The test intentionally uses `IRModule::parse_from_text` rather than
+/// file loading so it cannot invoke the C++ IR loader. This protects the
+/// expected Rust-side fast path for large inline semantic regression tests.
+fn build_large_inline_cpp_rust_ffi_ir(groups: usize) -> String {
+    let mut ir = String::from(
+        r#"
+target triple = "x86_64-unknown-linux-gnu"
+"#,
+    );
+
+    for i in 0..groups {
+        ir.push_str(&format!(
+            r#"
+define i32 @rust_to_c_passthrough_{i}(ptr %data, i64 %len) {{
+entry:
+  %rc = call i32 @c_process_buffer(ptr %data, i64 %len)
+  ret i32 %rc
+}}
+
+define void @c_cpp_bridge_clean_{i}(ptr %data, i64 %len, ptr %out) {{
+entry:
+  %size = add i64 %len, 1
+  %buf = call ptr @malloc(i64 %size)
+  call void @_ZN8cpp_hash4HashEPKhmPh(ptr %buf, i64 %len, ptr %out)
+  call void @free(ptr %buf)
+  ret void
+}}
+
+define void @rust_alloc_dealloc_clean_{i}(i64 %size, i64 %align) {{
+entry:
+  %ptr = call ptr @__rust_alloc(i64 %size, i64 %align)
+  call void @__rust_dealloc(ptr %ptr, i64 %size, i64 %align)
+  ret void
+}}
+
+define void @cpp_new_delete_clean_{i}(i64 %size) {{
+entry:
+  %ptr = call ptr @_Znwm(i64 %size)
+  call void @_ZdlPv(ptr %ptr)
+  ret void
+}}
+"#
+        ));
+    }
+
+    ir.push_str(
+        r#"
+define void @cpp_rust_boundary_mismatch(ptr %out) {
+entry:
+  %buf = call ptr @malloc(i64 64)
+  call void @_ZdlPv(ptr %buf)
+  ret void
+}
+
+define ptr @rust_boundary_leak(i64 %size, i64 %align) {
+entry:
+  %ptr = call ptr @__rust_alloc(i64 %size, i64 %align)
+  ret ptr %ptr
+}
+
+declare i32 @c_process_buffer(ptr, i64)
+declare void @_ZN8cpp_hash4HashEPKhmPh(ptr, i64, ptr)
+declare ptr @malloc(i64)
+declare void @free(ptr)
+declare ptr @__rust_alloc(i64, i64)
+declare void @__rust_dealloc(ptr, i64, i64)
+declare ptr @_Znwm(i64)
+declare void @_ZdlPv(ptr)
+"#,
+    );
+
+    ir
+}
+
+/// Objective: Verify large embedded C++/Rust FFI IR can be parsed and analyzed
+/// without using the slow C++ file loader path.
+/// Invariants: high-volume inline IR has many functions/calls, clean bridge
+/// patterns stay clean, and deliberate mismatches are still detected.
+#[test]
+fn test_large_inline_cpp_rust_ffi_semantics() {
+    let ir = build_large_inline_cpp_rust_ffi_ir(64);
+    let module = IRModule::parse_from_text(&ir);
+    assert!(
+        module.functions.len() >= 258,
+        "large inline IR should contain all generated functions plus bug fixtures, got {}",
+        module.functions.len()
+    );
+    assert!(
+        module.calls.len() >= 386,
+        "large inline IR should contain all generated calls, got {}",
+        module.calls.len()
+    );
+
+    let mut pipeline = Pipeline::new();
+    pipeline.register_default_passes();
+    pipeline.set_ir_module(module);
+    let result = pipeline
+        .run()
+        .expect("large inline C++/Rust FFI pipeline run must succeed");
+
+    assert!(result.pass_count() > 0, "Pipeline must execute passes");
+    assert_has_issue_kind(
+        &result,
+        IssueKind::CrossFamilyFree,
+        "large inline C++/Rust corpus malloc+operator delete mismatch",
+    );
+    assert_has_issue_kind(
+        &result,
+        IssueKind::ConditionalLeak,
+        "large inline C++/Rust corpus rust alloc leak",
+    );
+}
+
 /// Objective: Verify zlib init+end is not flagged as a leak.
 /// Invariants: No ConditionalLeak.
 #[test]

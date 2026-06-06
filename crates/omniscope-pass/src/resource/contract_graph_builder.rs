@@ -19,6 +19,7 @@ use omniscope_semantics::ffi_contract::{ContractType, FFIContractDB};
 use omniscope_semantics::resource::memory_graph::MemoryGraph;
 use omniscope_semantics::resource::summary::SummaryStore;
 use omniscope_semantics::LanguageDetector;
+use omniscope_types::boundary::BoundaryEvidence;
 
 /// FIFO queue entry: (instance_id, optional_alloc_family).
 type AcquireEntry = (u64, Option<FamilyId>);
@@ -41,6 +42,10 @@ pub struct ContractEdge {
     pub caller_name: String,
     /// The resource family (if known).
     pub family: Option<FamilyId>,
+    /// Boundary evidence attached to this edge (if near an FFI boundary).
+    /// Enables downstream verifiers to assess whether the edge crosses
+    /// a language boundary, affecting issue severity and FP filtering.
+    pub boundary_evidence: Option<Vec<BoundaryEvidence>>,
 }
 
 /// FFI boundary definition.
@@ -287,6 +292,7 @@ impl Pass for ContractGraphBuilderPass {
                     function_name: fact.function_name.clone(),
                     caller_name: fact.caller_name.clone(),
                     family: Some(family),
+                    boundary_evidence: None,
                 });
                 // Track this instance by (func_id, family) for matching with releases
                 acquire_instances
@@ -305,15 +311,84 @@ impl Pass for ContractGraphBuilderPass {
                         (0, None)
                     }
                 } else {
-                    // No same-family acquire found — try cross-family matching.
-                    // Look for any acquire in the same function but different family.
-                    // This enables CrossFamilyFree detection (e.g., malloc + sqlite3_free).
+                    // No same-family acquire found — try controlled cross-family matching.
+                    //
+                    // Cross-family matching is a fallback for real patterns like:
+                    //   malloc → operator delete   (C ↔ C++ scalar)
+                    //   new[]   → free              (C++ array ↔ C)
+                    //   Zig allocator → raw free    (Zig ↔ C)
+                    //
+                    // BUT it must NOT blindly pair every different-family acquire,
+                    // which would create FP in functions managing multiple resources
+                    // of different families (e.g., open fd + malloc in same function).
+                    //
+                    // Controlled conditions (all must be true):
+                    //  1. Same function scope          — guaranteed by the loop structure
+                    //  2. Release after acquire        — guaranteed by fact ordering
+                    //  3. Both families are known      — neither is UNKNOWN
+                    //  4. Families are incompatible    — not in each other's compatible_releases
+                    //  5. Same-family match unavailable— we are in this branch
+                    //  6. Single unmatched acquire, or nearest unmatched acquire is
+                    //     the only one in a different family (to avoid multi-resource FP)
                     let mut found = (0, None);
+                    // Collect candidates: acquires in the same function with different family
+                    let mut candidates: Vec<(
+                        &mut std::collections::VecDeque<AcquireEntry>,
+                        FamilyId,
+                    )> = Vec::new();
                     for ((other_func, other_family), instances) in acquire_instances.iter_mut() {
-                        if *other_func == fact.function && *other_family != family {
-                            if let Some((sid, af)) = instances.pop_front() {
-                                found = (sid, af);
-                                break;
+                        if *other_func == fact.function
+                            && *other_family != family
+                            && !instances.is_empty()
+                        {
+                            candidates.push((instances, *other_family));
+                        }
+                    }
+
+                    // Apply controlled conditions
+                    if !candidates.is_empty() {
+                        // Condition 3: release family must be known (not UNKNOWN)
+                        if family != FamilyId::UNKNOWN {
+                            // Filter candidates by condition 3 & 4:
+                            // - candidate acquire family must be known
+                            // - families must be incompatible
+                            let mut viable: Vec<_> = candidates
+                                .into_iter()
+                                .filter(|(_, other_family)| {
+                                    // Condition 3: acquire family is known
+                                    if *other_family == FamilyId::UNKNOWN {
+                                        return false;
+                                    }
+                                    // Condition 4: families are incompatible
+                                    // (not same, and not in compatible_releases)
+                                    !omniscope_types::are_families_compatible(*other_family, family)
+                                })
+                                .collect();
+
+                            // Condition 6: single unmatched acquire, or only one viable
+                            if viable.len() == 1 {
+                                // Only one viable candidate — safe to match
+                                if let Some((sid, af)) = viable[0].0.pop_front() {
+                                    found = (sid, af);
+                                }
+                            } else if viable.len() > 1 {
+                                // Multiple viable candidates — only match if exactly one
+                                // unmatched acquire exists total in this function scope,
+                                // to avoid FP in multi-resource functions.
+                                let total_unmatched: usize =
+                                    viable.iter().map(|(q, _)| q.len()).sum();
+                                if total_unmatched == 1 {
+                                    // Exactly one unmatched acquire across all viable
+                                    // candidates — match it
+                                    for (instances, _) in viable {
+                                        if let Some((sid, af)) = instances.pop_front() {
+                                            found = (sid, af);
+                                            break;
+                                        }
+                                    }
+                                }
+                                // else: multiple unmatched acquires — too ambiguous,
+                                // create orphan release instead of risking FP
                             }
                         }
                     }
@@ -368,6 +443,7 @@ impl Pass for ContractGraphBuilderPass {
                     function_name: fact.function_name.clone(),
                     caller_name: fact.caller_name.clone(),
                     family: Some(family),
+                    boundary_evidence: None,
                 });
             }
         }
@@ -502,12 +578,13 @@ impl Pass for ContractGraphBuilderPass {
                         function_name: callee_name.to_string(),
                         caller_name: caller_name.to_string(),
                         family: Some(*family),
+                        boundary_evidence: None,
                     });
                 }
 
                 // Create edges for each release, consuming matched acquires (FIFO)
                 for (family, callee_name, is_conditional) in &func_releases {
-                    // Find and consume a matching acquire (same family preferred, else any)
+                    // Find and consume a matching acquire (same family preferred)
                     let source_id = if let Some(pos) =
                         func_acquires.iter().position(|(_, f, _)| *f == *family)
                     {
@@ -515,11 +592,42 @@ impl Pass for ContractGraphBuilderPass {
                             .remove(pos)
                             .expect("contract_graph_builder: position should be valid after find");
                         id
-                    } else if let Some((id, _, _)) = func_acquires.pop_front() {
-                        // Cross-family fallback: consume oldest unmatched acquire
-                        id
                     } else {
-                        0
+                        // No same-family acquire — try controlled cross-family matching.
+                        // Apply the same conditions as the raw_facts path:
+                        //  1. Both families must be known (not UNKNOWN)
+                        //  2. Families must be incompatible (not in compatible_releases)
+                        //  3. Only match if exactly one unmatched acquire exists,
+                        //     or only one viable cross-family candidate
+                        if *family != FamilyId::UNKNOWN {
+                            let viable_indices: Vec<usize> = func_acquires
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, (_, acq_family, _))| {
+                                    *acq_family != FamilyId::UNKNOWN
+                                        && *acq_family != *family
+                                        && !omniscope_types::are_families_compatible(
+                                            *acq_family,
+                                            *family,
+                                        )
+                                })
+                                .map(|(i, _)| i)
+                                .collect();
+
+                            if viable_indices.len() == 1 {
+                                // Exactly one viable cross-family candidate — safe to match
+                                func_acquires
+                                    .remove(viable_indices[0])
+                                    .map(|(id, _, _)| id)
+                                    .unwrap_or(0)
+                            } else {
+                                // Multiple or no viable candidates — create orphan release
+                                // to avoid FP in multi-resource functions
+                                0
+                            }
+                        } else {
+                            0
+                        }
                     };
 
                     let effect = if *is_conditional {
@@ -542,6 +650,7 @@ impl Pass for ContractGraphBuilderPass {
                         function_name: callee_name.to_string(),
                         caller_name: caller_name.to_string(),
                         family: Some(*family),
+                        boundary_evidence: None,
                     });
                 }
 
@@ -572,6 +681,7 @@ impl Pass for ContractGraphBuilderPass {
                         function_name: callee_name.to_string(),
                         caller_name: caller_name.to_string(),
                         family: Some(*family),
+                        boundary_evidence: None,
                     });
                 }
 
@@ -640,6 +750,7 @@ impl Pass for ContractGraphBuilderPass {
                         function_name: callee_name.to_string(),
                         caller_name: caller_name.to_string(),
                         family: Some(*family),
+                        boundary_evidence: None,
                     });
                 }
 
@@ -690,6 +801,7 @@ impl Pass for ContractGraphBuilderPass {
                             function_name: callee.to_string(),
                             caller_name: caller_name.to_string(),
                             family: None,
+                            boundary_evidence: None,
                         });
                     }
                 }
@@ -714,6 +826,15 @@ impl Pass for ContractGraphBuilderPass {
                 &calls_by_caller,
                 &func_id_map,
             );
+
+            // ── Post-free call use detection ──
+            // When a function contains a malloc→free→call pattern (direct or
+            // indirect), the freed pointer (or a GEP-derived alias) passed to
+            // a subsequent call is a use-after-free. This handles FFI UAF
+            // patterns like:
+            //   malloc → free → call @ffi_process_buffer(freed_ptr, ...)
+            //   malloc → free → call void %callback(freed_ptr, ...)
+            detect_post_free_call_use(&mut graph, module, &func_id_map);
 
             // Keep the IRModule in context
             ctx.store("ir_module", module.clone());
@@ -1001,6 +1122,7 @@ fn propagate_ptr_lifetime_across_functions(
                         function_name: acquire_callee.to_string(),
                         caller_name: caller_name.to_string(),
                         family: Some(*acquire_family),
+                        boundary_evidence: None,
                     });
 
                     // Add release edge in callee (pointing to the same instance)
@@ -1025,6 +1147,7 @@ fn propagate_ptr_lifetime_across_functions(
                         function_name: release_callee.to_string(),
                         caller_name: func_name.to_string(),
                         family: Some(release_family),
+                        boundary_evidence: None,
                     });
 
                     // Remove the matched acquire from caller_acquires to avoid double-matching
@@ -1208,6 +1331,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: Some(*family),
+                boundary_evidence: None,
             }
         }
         Effect::Release { family, arg } => ContractEdge {
@@ -1221,6 +1345,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: Some(*family),
+            boundary_evidence: None,
         },
         Effect::ConditionalRelease { family, arg } => ContractEdge {
             source: context.instance_id.unwrap_or(0),
@@ -1233,6 +1358,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: Some(*family),
+            boundary_evidence: None,
         },
         Effect::NullGuardedRelease { family, arg } => ContractEdge {
             source: context.instance_id.unwrap_or(0),
@@ -1245,6 +1371,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: Some(*family),
+            boundary_evidence: None,
         },
         Effect::OutParamOwnedOnSuccess { family, arg } => {
             let instance_id = graph.alloc_instance();
@@ -1259,6 +1386,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: Some(*family),
+                boundary_evidence: None,
             }
         }
         Effect::OutParamNullOnError { arg } => ContractEdge {
@@ -1269,6 +1397,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: context.family,
+            boundary_evidence: None,
         },
         Effect::OwnershipEscape { family, result: _ } => {
             let instance_id = graph.alloc_instance();
@@ -1283,6 +1412,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: Some(*family),
+                boundary_evidence: None,
             }
         }
         Effect::OwnershipReclaim { family, result: _ } => {
@@ -1298,6 +1428,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: Some(*family),
+                boundary_evidence: None,
             }
         }
         Effect::ReturnsBorrowed => {
@@ -1310,6 +1441,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: None,
+                boundary_evidence: None,
             }
         }
         Effect::ReturnsOwned { family } => {
@@ -1322,6 +1454,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: Some(*family),
+                boundary_evidence: None,
             }
         }
         Effect::ConsumesArg { arg, family } => ContractEdge {
@@ -1335,6 +1468,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: context.family,
+            boundary_evidence: None,
         },
         Effect::CrossLanguageFree {
             alloc_family,
@@ -1352,6 +1486,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: Some(*release_family),
+            boundary_evidence: None,
         },
         Effect::EscapesToCallback { arg } => ContractEdge {
             source: context.instance_id.unwrap_or(0),
@@ -1361,6 +1496,7 @@ fn effect_to_contract_edge(
             function_name: context.callee_name.clone(),
             caller_name: context.caller_name.clone(),
             family: None,
+            boundary_evidence: None,
         },
         // Handle other effect variants
         _ => {
@@ -1374,6 +1510,7 @@ fn effect_to_contract_edge(
                 function_name: context.callee_name.clone(),
                 caller_name: context.caller_name.clone(),
                 family: context.family,
+                boundary_evidence: None,
             }
         }
     }
@@ -1391,6 +1528,359 @@ struct CallContext {
     instance_id: Option<u64>,
     /// The family if known.
     family: Option<FamilyId>,
+}
+
+/// Detect indirect calls that use freed pointers (FFI callback UAF pattern).
+///
+/// Scans function bodies for the pattern: malloc → free → indirect_call(freed_ptr).
+/// When found, generates ConsumesArg edges so the issue candidate builder
+/// can detect use-after-free via its post_release_uses check.
+///
+/// This handles FFI callback UAF patterns like:
+/// ```llvm
+/// %1 = call ptr @malloc(i64 32)
+/// call void @free(ptr %1)
+/// %4 = load ptr, ptr @g_callback
+/// call void %4(ptr %7, ptr %1, i64 32)  ; UAF: %1 used after free
+/// ```
+/// Detects post-free call use patterns in function bodies.
+///
+/// Scans function_bodies for patterns where:
+/// 1. A pointer is allocated (malloc/calloc/realloc)
+/// 2. The pointer is freed
+/// 3. The freed pointer (or a GEP-derived alias) is passed to a subsequent
+///    call (direct or indirect)
+///
+/// Unlike the previous `detect_indirect_call_post_free_use`, this function:
+/// - Checks both direct and indirect calls
+/// - Tracks GEP-derived aliases (GEP dest inherits the source's freed status)
+/// - Does NOT create new Acquire/Release edges (avoids duplicate edges that
+///   cause false-positive ConditionalLeak)
+/// - Only adds ConsumesArg edges pointing to existing instances found in
+///   graph.edges (from the main loop's malloc/free processing)
+///
+/// The ConsumesArg edge after a Release edge on the same instance triggers
+/// UseAfterFree detection in issue_candidate_builder.
+fn detect_post_free_call_use(
+    graph: &mut ContractGraph,
+    module: &omniscope_ir::IRModule,
+    func_id_map: &std::collections::HashMap<&str, u64>,
+) {
+    use omniscope_ir::IRInstructionKind;
+
+    // Phase 1: Build an index of existing instances that have both Acquire
+    // and Release edges in the same function.
+    //
+    // We collect all data from graph.edges FIRST (immutable borrow), then
+    // add new edges AFTER (mutable borrow), to satisfy the borrow checker.
+    //
+    // Key indices built:
+    //   - instance_has_acquire / instance_has_release: filter for instances
+    //     that are both acquired and released (candidates for UAF)
+    //   - release_callers: instance_id → caller_name (for grouping by function)
+    //   - release_funcs: instance_id → release function name (e.g., "free",
+    //     "_ZdlPv") used to identify free calls in Phase 2
+    //   - acquire_edges_by_caller: caller_name → Vec<(instance_id, func_name)>
+    //     used to map a free call's argument register to the instance it frees
+    let mut instance_has_acquire: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut instance_has_release: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut release_callers: std::collections::HashMap<u64, String> =
+        std::collections::HashMap::new();
+    // Track which release function each instance was freed by,
+    // so Phase 2 can match free-call instructions to instances.
+    let mut release_func_by_instance: std::collections::HashMap<u64, String> =
+        std::collections::HashMap::new();
+
+    for edge in &graph.edges {
+        match &edge.effect {
+            Effect::Acquire { result, .. } => {
+                instance_has_acquire.insert(*result);
+            }
+            #[allow(clippy::collapsible_match)]
+            Effect::Release { .. } | Effect::ConditionalRelease { .. } => {
+                if edge.source != 0 {
+                    instance_has_release.insert(edge.source);
+                    release_callers.insert(edge.source, edge.caller_name.clone());
+                    release_func_by_instance.insert(edge.source, edge.function_name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Find instances that have both Acquire and Release
+    let released_instances: std::collections::HashSet<u64> = instance_has_acquire
+        .intersection(&instance_has_release)
+        .copied()
+        .collect();
+
+    // Map caller_name → instance_ids that are released
+    let mut released_instances_by_caller: std::collections::HashMap<String, Vec<u64>> =
+        std::collections::HashMap::new();
+    for (&instance_id, caller) in &release_callers {
+        if released_instances.contains(&instance_id) {
+            released_instances_by_caller
+                .entry(caller.clone())
+                .or_default()
+                .push(instance_id);
+        }
+    }
+
+    // Phase 2: Scan function_bodies for post-free call patterns
+    // Collect new edges to add (deferred to avoid borrow conflicts)
+    let mut new_edges: Vec<ContractEdge> = Vec::new();
+
+    for (func_name, body) in &module.function_bodies {
+        let func_id = match func_id_map.get(func_name.as_str()) {
+            Some(&id) => id,
+            None => continue,
+        };
+
+        // Get the released instance IDs for this function from the main loop
+        let released_ids = match released_instances_by_caller.get(func_name.as_str()) {
+            Some(ids) => ids.clone(),
+            None => continue, // No released instances in this function
+        };
+
+        // Only check functions that have released instances AND either:
+        // 1. Are near an FFI boundary (call or are called by FFI functions), OR
+        // 2. Have indirect calls (function pointer calls) after free — these
+        //    are characteristic of FFI callback UAF patterns
+        let has_indirect_call = body
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst.kind, IRInstructionKind::IndirectCall));
+
+        let is_ffi_adjacent = module.calls.iter().any(|c| {
+            let caller = c.caller.trim_start_matches('@');
+            let callee = c.callee.trim_start_matches('@');
+            // This function either calls FFI or is called by FFI
+            (caller == func_name || callee == func_name) && graph.is_ffi_boundary(callee).is_some()
+        }) || module.functions.iter().any(|(name, _)| {
+            name.trim_start_matches('@') == func_name && graph.is_ffi_boundary(func_name).is_some()
+        });
+
+        if !is_ffi_adjacent && !has_indirect_call {
+            continue;
+        }
+
+        // Track register → is_freed status and register → instance_id mapping.
+        // A register is "freed" if it holds a pointer to a released allocation.
+        // GEP destinations inherit the freed status of their source pointer.
+        // The reg→instance_id map enables ConsumesArg edges to point to the
+        // correct instance, not just released_ids.first().
+        let mut freed_regs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut freed_reg_to_instance: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+
+        // Track how many free/release calls we've seen for this function,
+        // so we can map each free call to the corresponding released instance.
+        // The released_ids are ordered by the sequence they appear in graph.edges,
+        // which matches the order free calls appear in the instruction stream.
+        let mut free_call_index: usize = 0;
+
+        for inst in &body.instructions {
+            match inst.kind {
+                IRInstructionKind::Call => {
+                    if let Some(callee) = &inst.callee {
+                        // Track free/dealloc: mark the operand register as freed
+                        if callee == "free" || callee == "_ZdaPv" || callee == "_ZdlPv" {
+                            // Direct calls have empty operands (see instruction_parser.rs:408),
+                            // so we must parse arguments from raw_text.
+                            let call_args = extract_call_arg_registers(&inst.raw_text);
+                            // Map this free call to the corresponding released instance
+                            // using sequential ordering (free_call_index matches the order
+                            // instances appear in released_ids from graph.edges).
+                            let instance_id = if free_call_index < released_ids.len() {
+                                let id = released_ids[free_call_index];
+                                free_call_index += 1;
+                                Some(id)
+                            } else {
+                                None
+                            };
+                            for reg in &call_args {
+                                freed_regs.insert(reg.clone());
+                                if let Some(id) = instance_id {
+                                    freed_reg_to_instance.insert(reg.clone(), id);
+                                }
+                            }
+                            // Don't check for post-free use in the free call itself
+                            continue;
+                        }
+                    }
+                    // Check direct calls for post-free use:
+                    // If any operand register is in freed_regs, it's a UAF
+                    // Direct calls have empty operands, so parse from raw_text
+                    if !freed_regs.is_empty() {
+                        let call_args = extract_call_arg_registers(&inst.raw_text);
+                        for reg in &call_args {
+                            if freed_regs.contains(reg) {
+                                // Found a post-free use via direct call.
+                                // Look up the correct instance_id from the freed
+                                // register → instance mapping, not released_ids.first().
+                                let instance_id = freed_reg_to_instance
+                                    .get(reg)
+                                    .copied()
+                                    .or_else(|| released_ids.first().copied())
+                                    .unwrap_or(0);
+                                if instance_id != 0 {
+                                    let callee_name = inst.callee.as_deref().unwrap_or("unknown");
+                                    new_edges.push(ContractEdge {
+                                        source: instance_id,
+                                        target: 0,
+                                        effect: Effect::ConsumesArg {
+                                            arg: 0,
+                                            family: Some(FamilyId::C_HEAP),
+                                        },
+                                        function: func_id,
+                                        function_name: callee_name.to_string(),
+                                        caller_name: func_name.clone(),
+                                        family: Some(FamilyId::C_HEAP),
+                                        boundary_evidence: None,
+                                    });
+                                }
+                                break; // Only add one ConsumesArg per call
+                            }
+                        }
+                    }
+                }
+                IRInstructionKind::IndirectCall if !freed_regs.is_empty() => {
+                    // Check indirect calls for post-free use
+                    let callee_reg = inst.callee.as_deref().unwrap_or("");
+                    // Indirect calls have operands, but they may include type
+                    // annotations (e.g., "%4(ptr"). Also check raw_text.
+                    let call_args = extract_call_arg_registers(&inst.raw_text);
+                    // Combine raw_text args and operands for thorough matching
+                    let mut all_args: Vec<String> = call_args;
+                    for op in &inst.operands {
+                        if !all_args.contains(op) {
+                            all_args.push(op.clone());
+                        }
+                    }
+                    for op in &all_args {
+                        let op_clean = op.split('(').next().unwrap_or(op.as_str());
+                        if op_clean.starts_with('%')
+                            && op_clean != callee_reg
+                            && freed_regs.contains(op_clean)
+                        {
+                            // Look up the correct instance_id from the freed
+                            // register → instance mapping.
+                            let instance_id = freed_reg_to_instance
+                                .get(op_clean)
+                                .copied()
+                                .or_else(|| released_ids.first().copied())
+                                .unwrap_or(0);
+                            if instance_id != 0 {
+                                new_edges.push(ContractEdge {
+                                    source: instance_id,
+                                    target: 0,
+                                    effect: Effect::ConsumesArg {
+                                        arg: 0,
+                                        family: Some(FamilyId::C_HEAP),
+                                    },
+                                    function: func_id,
+                                    function_name: format!("indirect_call_via_{}", callee_reg),
+                                    caller_name: func_name.clone(),
+                                    family: Some(FamilyId::C_HEAP),
+                                    boundary_evidence: None,
+                                });
+                            }
+                            break;
+                        }
+                    }
+                }
+                IRInstructionKind::GetElementPtr => {
+                    // GEP dest inherits freed status from source pointer
+                    if let Some(dest) = &inst.dest {
+                        for op in &inst.operands {
+                            if op.starts_with('%') && freed_regs.contains(op) {
+                                freed_regs.insert(dest.clone());
+                                // Inherit the instance_id mapping from the source
+                                if let Some(&instance_id) = freed_reg_to_instance.get(op) {
+                                    freed_reg_to_instance.insert(dest.clone(), instance_id);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Phase 3: Add the collected edges
+    for edge in new_edges {
+        graph.add_edge(edge);
+    }
+}
+
+/// Extracts register names (%-prefixed) from the argument list of a call instruction.
+///
+/// For direct calls like `call void @free(ptr %buf)`, the text parser sets
+/// `operands` to an empty Vec (see `instruction_parser.rs:408`). This helper
+/// parses the raw_text to recover the argument registers.
+///
+/// Handles LLVM IR formats like:
+/// - `call void @free(ptr %buf)`
+/// - `call i32 @ffi_process_buffer(ptr %rebased, i64 %size)`
+/// - `tail call void @free(ptr nonnull %1)`
+fn extract_call_arg_registers(raw_text: &str) -> Vec<String> {
+    let mut regs = Vec::new();
+
+    // Find the argument list: everything between the first '(' and its matching ')'
+    // after the callee name.
+    let text = raw_text.trim();
+
+    // Strategy: find the last matching ')' for the call arguments.
+    // The argument list starts after the callee name.
+    // For `call void @free(ptr %buf)`, the args are `ptr %buf`
+    // For `call i32 @func(ptr %1, i64 %2)`, the args are `ptr %1, i64 %2`
+
+    // Find the opening paren of the argument list.
+    // It's after the callee (which could be @name or %reg).
+    // We look for the last ')' in the line and then find its matching '('.
+    let close_paren = match text.rfind(')') {
+        Some(pos) => pos,
+        None => return regs,
+    };
+
+    // Walk backwards to find the matching '('
+    let mut depth = 1i32;
+    let mut open_paren = 0;
+    for (i, ch) in text[..close_paren].char_indices().rev() {
+        if ch == ')' {
+            depth += 1;
+        } else if ch == '(' {
+            depth -= 1;
+            if depth == 0 {
+                open_paren = i;
+                break;
+            }
+        }
+    }
+
+    if depth != 0 {
+        return regs;
+    }
+
+    // Extract the argument text between parentheses
+    let args_text = &text[open_paren + 1..close_paren];
+
+    // Split by comma and extract register names
+    for arg in args_text.split(',') {
+        let arg = arg.trim();
+        // Each argument may have type annotations like "ptr %1" or "i64 %size"
+        // or "ptr nonnull %buf". We want just the register name.
+        for token in arg.split_whitespace() {
+            if token.starts_with('%') {
+                regs.push(token.to_string());
+                break; // One register per argument
+            }
+        }
+    }
+
+    regs
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@
 
 use omniscope_core::{FactKind, MemoryPool, Result};
 use omniscope_ir::IRModule;
+use omniscope_types::boundary::BoundaryEvidence;
 use omniscope_types::{FamilyId, PointerContract};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -38,6 +39,9 @@ pub struct RawResourceFact {
     pub contract: PointerContract,
     /// Argument index involved (if applicable).
     pub arg_index: Option<u32>,
+    /// Boundary evidence attached to this fact (if the call is near an FFI boundary).
+    /// `None` = not yet computed; `Some([])` = computed but no boundary evidence.
+    pub boundary_evidence: Option<Vec<BoundaryEvidence>>,
 }
 
 /// Raw fact collector pass.
@@ -115,6 +119,12 @@ impl RawFactCollectorPass {
                 is_acquire,
                 contract,
                 arg_index: Some(0),
+                // TODO(phase-boundary-wiring): boundary_evidence is always None
+                // because ModuleIndex never populates it. Replace with actual
+                // evidence once the boundary detection pipeline writes into
+                // CachedCallMeta. Keeping None ensures downstream code does not
+                // mistake "not computed" for "computed and empty" (Some([])).
+                boundary_evidence: None,
             });
         }
 
@@ -143,6 +153,7 @@ impl RawFactCollectorPass {
                         PointerContract::Unknown
                     },
                     arg_index: Some(0),
+                    boundary_evidence: None,
                 });
             }
         }
@@ -220,6 +231,7 @@ impl RawFactCollectorPass {
                 is_acquire,
                 contract,
                 arg_index: Some(0),
+                boundary_evidence: None,
             }
         };
 
@@ -283,6 +295,7 @@ impl RawFactCollectorPass {
                         PointerContract::Unknown
                     },
                     arg_index: Some(0),
+                    boundary_evidence: None,
                 });
             }
         }
@@ -351,6 +364,7 @@ impl Pass for RawFactCollectorPass {
                     is_acquire: fact.kind == FactKind::AllocSite,
                     contract: PointerContract::Unknown,
                     arg_index: None,
+                    boundary_evidence: None,
                 };
                 raw_facts.push(raw);
             }

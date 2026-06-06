@@ -208,6 +208,14 @@ pub enum SemanticKey {
     Path(String, u64),
     /// Query by owner name (container, structure).
     Owner(String),
+    /// Query by call site: (caller, callee, argument_index).
+    /// Identifies a specific call within a function for fine-grained
+    /// semantic lookup (e.g., "which malloc fed this free?").
+    CallSite {
+        caller: String,
+        callee: String,
+        index: u32,
+    },
 }
 
 impl SemanticKey {
@@ -234,6 +242,15 @@ impl SemanticKey {
     /// Creates an Owner key.
     pub fn owner(name: &str) -> Self {
         Self::Owner(name.to_string())
+    }
+
+    /// Creates a CallSite key.
+    pub fn call_site(caller: &str, callee: &str, index: u32) -> Self {
+        Self::CallSite {
+            caller: caller.to_string(),
+            callee: callee.to_string(),
+            index,
+        }
     }
 
     /// Converts a string key to a SemanticKey (for backward compatibility).
@@ -263,6 +280,24 @@ impl SemanticKey {
             if let Some(reg) = key.strip_prefix("value:") {
                 return Self::Value(reg.to_string());
             }
+        } else if key.starts_with("callsite:") {
+            // Format: callsite<NULL>caller<NULL>callee<NULL>index
+            // Uses NUL (\0) as field separator because LLVM symbol names
+            // cannot contain NUL bytes, making the encoding unambiguous.
+            // The prefix "callsite:" is kept with ':' for human readability
+            // in debug output; internal fields use \0.
+            if let Some(rest) = key.strip_prefix("callsite:") {
+                let parts: Vec<&str> = rest.splitn(3, '\0').collect();
+                if parts.len() == 3 {
+                    if let Ok(index) = parts[2].parse::<u32>() {
+                        return Self::CallSite {
+                            caller: parts[0].to_string(),
+                            callee: parts[1].to_string(),
+                            index,
+                        };
+                    }
+                }
+            }
         }
         // Default to Symbol for backward compatibility
         Self::Symbol(key.to_string())
@@ -276,6 +311,14 @@ impl SemanticKey {
             Self::Resource(id) => format!("resource:{id}"),
             Self::Path(func, id) => format!("path:{func}:{id}"),
             Self::Owner(name) => format!("owner:{name}"),
+            Self::CallSite {
+                caller,
+                callee,
+                index,
+            } => {
+                // Uses NUL separator to avoid ambiguity with ':' in symbol names
+                format!("callsite:{caller}\0{callee}\0{index}")
+            }
         }
     }
 
@@ -661,4 +704,141 @@ pub struct SemanticResolution {
     pub evidence: String,
     /// The R-N pattern that produced this resolution (e.g., "R-0", "R-3").
     pub pattern_id: &'static str,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Semantic Fact — a verified or inferred semantic property
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Confidence level for a semantic fact.
+///
+/// Facts with higher confidence are preferred when resolving conflicts
+/// between multiple facts about the same resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FactConfidence {
+    /// High confidence: directly observed from IR patterns or verified
+    /// by multiple independent sources (e.g., both symbol name and
+    /// instruction pattern agree).
+    High,
+    /// Medium confidence: inferred from a single source or heuristic
+    /// (e.g., function name pattern only).
+    Medium,
+    /// Low confidence: speculative inference or conflicting evidence.
+    Low,
+}
+
+impl FactConfidence {
+    /// Converts confidence to a numeric score for ranking.
+    pub fn score(&self) -> f32 {
+        match self {
+            Self::High => 1.0,
+            Self::Medium => 0.6,
+            Self::Low => 0.3,
+        }
+    }
+}
+
+impl std::fmt::Display for FactConfidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::High => write!(f, "high"),
+            Self::Medium => write!(f, "medium"),
+            Self::Low => write!(f, "low"),
+        }
+    }
+}
+
+/// Origin of a semantic fact — which analysis pass or data source produced it.
+///
+/// Knowing the source helps downstream consumers weight facts correctly
+/// and detect circular reasoning (e.g., a fact from ContractDB should
+/// not reinforce the same contract that created it).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FactSource {
+    /// Derived from IR instruction patterns (e.g., ConditionalRelease
+    /// from atomicrmw + icmp + branch).
+    IRPattern,
+    /// Derived from the resource contract database (family registry +
+    /// summary inference).
+    ContractDB,
+    /// Derived from function behavior summary (BehaviorPattern → fact).
+    BehaviorSummary,
+    /// Derived from FFI boundary detection (cross-language call sites).
+    BoundaryDetector,
+    /// Derived from memory graph analysis (ownership flow, aliasing).
+    MemoryGraph,
+}
+
+impl std::fmt::Display for FactSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IRPattern => write!(f, "ir_pattern"),
+            Self::ContractDB => write!(f, "contract_db"),
+            Self::BehaviorSummary => write!(f, "behavior_summary"),
+            Self::BoundaryDetector => write!(f, "boundary_detector"),
+            Self::MemoryGraph => write!(f, "memory_graph"),
+        }
+    }
+}
+
+/// A semantic fact: a verified or inferred property about a resource or
+/// operation, produced by analysis passes and consumed by downstream
+/// issue candidate builders.
+///
+/// Unlike `SemanticResolution` (which records *why* a value has a kind),
+/// `SemanticFact` records *what* is known about a resource or operation,
+/// with explicit provenance (source) and confidence.
+///
+/// # Example
+///
+/// ```text
+/// SemanticFact {
+///     key: SemanticKey::CallSite { caller: "main", callee: "free", index: 0 },
+///     kind: SemanticKind::IntoRawTransfer,
+///     confidence: FactConfidence::High,
+///     source: FactSource::BehaviorSummary,
+///     evidence: "Box::into_raw followed by free in same function",
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct SemanticFact {
+    /// The key identifying what this fact is about.
+    pub key: SemanticKey,
+    /// The semantic kind this fact asserts.
+    pub kind: SemanticKind,
+    /// How confident we are in this fact.
+    pub confidence: FactConfidence,
+    /// Where this fact came from.
+    pub source: FactSource,
+    /// Human-readable evidence supporting this fact.
+    pub evidence: String,
+}
+
+impl SemanticFact {
+    /// Creates a new semantic fact.
+    pub fn new(
+        key: SemanticKey,
+        kind: SemanticKind,
+        confidence: FactConfidence,
+        source: FactSource,
+        evidence: impl Into<String>,
+    ) -> Self {
+        Self {
+            key,
+            kind,
+            confidence,
+            source,
+            evidence: evidence.into(),
+        }
+    }
+
+    /// Returns true if this fact has high confidence.
+    pub fn is_high_confidence(&self) -> bool {
+        self.confidence == FactConfidence::High
+    }
+
+    /// Returns the numeric confidence score.
+    pub fn confidence_score(&self) -> f32 {
+        self.confidence.score()
+    }
 }

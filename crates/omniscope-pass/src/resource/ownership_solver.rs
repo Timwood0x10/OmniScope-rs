@@ -683,6 +683,7 @@ mod tests {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         graph.add_edge(ContractEdge {
@@ -696,6 +697,7 @@ mod tests {
             function_name: "free".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -751,6 +753,7 @@ mod tests {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -812,6 +815,7 @@ mod tests {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         // Escape: ownership escapes to a raw pointer (into_raw).
@@ -826,6 +830,7 @@ mod tests {
             function_name: "into_raw".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         // Reclaim: ownership reclaimed from the raw pointer (from_raw).
@@ -841,6 +846,7 @@ mod tests {
             function_name: "from_raw".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -902,6 +908,7 @@ mod tests {
             function_name: "PyObject_New".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
         });
 
         // Retain (Py_INCREF)
@@ -916,6 +923,7 @@ mod tests {
             function_name: "Py_INCREF".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
         });
 
         // ConditionalRelease (Py_DECREF — refcount > 0 after decrement)
@@ -930,6 +938,7 @@ mod tests {
             function_name: "Py_DECREF".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -973,6 +982,7 @@ mod tests {
             function_name: "PyObject_New".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
         });
 
         // ConditionalRelease (Py_DECREF — only reference, so it's definitive)
@@ -987,6 +997,7 @@ mod tests {
             function_name: "Py_DECREF".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::PYTHON_OBJECT),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -1027,6 +1038,7 @@ mod tests {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         // ReturnsOwned
@@ -1040,6 +1052,7 @@ mod tests {
             function_name: "create_buffer".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -1084,6 +1097,7 @@ mod tests {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         // ConsumesArg
@@ -1098,6 +1112,7 @@ mod tests {
             function_name: "queue_push".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -1141,6 +1156,7 @@ mod tests {
             function_name: "Box::new".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+            boundary_evidence: None,
         });
 
         // OwnershipEscape — result is the raw pointer value ID
@@ -1155,6 +1171,7 @@ mod tests {
             function_name: "Box::into_raw".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -1204,6 +1221,7 @@ mod tests {
             function_name: "register_callback".to_string(),
             caller_name: "test_func".to_string(),
             family: None,
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);
@@ -1259,6 +1277,7 @@ mod tests {
             function_name: "Box::new".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+            boundary_evidence: None,
         });
 
         // Release via drop_in_place (RAII cleanup).
@@ -1273,6 +1292,7 @@ mod tests {
             function_name: "_ZN4core3ptr13drop_in_placeI3FooEEvPT_".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::RUST_RAW_OWNERSHIP),
+            boundary_evidence: None,
         });
 
         ctx.store("contract_graph", graph);

@@ -170,6 +170,7 @@ fn build_raw_facts_for_leak(
             function_name: format!("malloc_{i}"),
             caller_name: format!("func_{}", i % 10),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
             is_acquire: true,
             contract: PointerContract::Owned,
             arg_index: Some(0),
@@ -183,6 +184,7 @@ fn build_raw_facts_for_leak(
                 function_name: format!("free_{i}"),
                 caller_name: format!("func_{}", i % 10),
                 family: Some(FamilyId::C_HEAP),
+                boundary_evidence: None,
                 is_acquire: false,
                 contract: PointerContract::Released,
                 arg_index: Some(0),
@@ -202,6 +204,7 @@ fn build_raw_facts_for_leak(
                 function_name: format!("malloc_{i}"),
                 caller_name: format!("func_{}", i % 10),
                 family: Some(FamilyId::C_HEAP),
+                boundary_evidence: None,
             });
             graph.add_edge(ContractEdge {
                 source: instance_id,
@@ -214,6 +217,7 @@ fn build_raw_facts_for_leak(
                 function_name: format!("free_{i}"),
                 caller_name: format!("func_{}", i % 10),
                 family: Some(FamilyId::C_HEAP),
+                boundary_evidence: None,
             });
         }
     }
@@ -379,6 +383,7 @@ fn bench_ownership_solver_throughput(c: &mut Criterion) {
                 function_name: format!("malloc_{i}"),
                 caller_name: format!("func_{}", i % 10),
                 family: Some(FamilyId::C_HEAP),
+                boundary_evidence: None,
             });
             graph.add_edge(ContractEdge {
                 source: instance_id,
@@ -391,6 +396,7 @@ fn bench_ownership_solver_throughput(c: &mut Criterion) {
                 function_name: format!("free_{i}"),
                 caller_name: format!("func_{}", i % 10),
                 family: Some(FamilyId::C_HEAP),
+                boundary_evidence: None,
             });
         }
 

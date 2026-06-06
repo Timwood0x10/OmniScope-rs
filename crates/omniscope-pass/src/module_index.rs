@@ -17,6 +17,7 @@
 
 use omniscope_ir::IRModule;
 use omniscope_semantics::{FamilyRegistry, LanguageDetector};
+use omniscope_types::boundary::{BoundaryEvidence, FfiSliceInfo};
 use omniscope_types::call_graph_types::{is_dangerous, is_libc, FunctionKind};
 use omniscope_types::config::Language;
 use std::collections::HashMap;
@@ -55,6 +56,12 @@ pub struct CachedCallMeta {
     pub is_cross_language: bool,
     /// Whether this is an FFI boundary (cross-language + not filtered).
     pub is_ffi_boundary: bool,
+    /// Boundary evidence items collected for this call site.
+    /// `None` = not yet computed; `Some([])` = computed but no evidence found.
+    pub boundary_evidence: Option<Vec<BoundaryEvidence>>,
+    /// FFI slice membership metadata for this call site.
+    /// `None` = not yet computed; `Some(FfiSliceInfo)` = computed.
+    pub ffi_slice_info: Option<FfiSliceInfo>,
 }
 
 /// Pre-computed metadata for a function definition or declaration.
@@ -317,6 +324,8 @@ impl ModuleIndex {
                 family_id,
                 is_cross_language,
                 is_ffi_boundary,
+                boundary_evidence: None,
+                ffi_slice_info: None,
             });
 
             callee_callers

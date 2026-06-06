@@ -35,7 +35,9 @@ pub use resource::family_registry::{
 };
 pub use resource::ffi_contract;
 pub use resource::go_adapter::{GoAdapter, GoFFISafety, GoFunctionAnalysis, GoSemanticPattern};
-pub use resource::ir_pattern::{extract_behavior, BehaviorPattern, FunctionBehavior, ReturnSource};
+pub use resource::ir_pattern::{
+    extract_behavior, BehaviorPattern, EscapeType, FunctionBehavior, PosixOpCategory, ReturnSource,
+};
 pub use resource::length_truncation_detector::{
     describe_truncation, extract_truncation_patterns, truncation_cwe_id, TruncationAnalysis,
     TruncationConfidence, TruncationPattern, TypeWidth,
@@ -50,8 +52,9 @@ pub use resource::semantic_engine::{
 };
 pub use resource::semantic_tree::{
     build_semantic_tree, build_semantic_tree_with_cache, infer_provenance_from_context,
-    infer_provenance_from_syscall, PointerProvenance, SemanticKey, SemanticKind, SemanticNode,
-    SemanticResolution, SemanticTree, SyscallSemantic, TypeSemantic,
+    infer_provenance_from_syscall, FactConfidence, FactSource, PointerProvenance, SemanticFact,
+    SemanticKey, SemanticKind, SemanticNode, SemanticResolution, SemanticTree, SyscallSemantic,
+    TypeSemantic,
 };
 pub use resource::structural_inference::{
     infer_bridge_summary, infer_destructor_summary, infer_refcount_release_summary,

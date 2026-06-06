@@ -27,6 +27,7 @@ fn make_graph_with_pair(
         function_name: alloc_func.to_string(),
         caller_name: "test_func".to_string(),
         family: Some(alloc_family),
+        boundary_evidence: None,
     });
 
     graph.add_edge(ContractEdge {
@@ -40,6 +41,7 @@ fn make_graph_with_pair(
         function_name: release_func.to_string(),
         caller_name: "test_func".to_string(),
         family: Some(release_family),
+        boundary_evidence: None,
     });
 
     graph
@@ -207,6 +209,7 @@ fn test_double_release_produces_candidate() {
         function_name: "malloc".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // First release
@@ -221,6 +224,7 @@ fn test_double_release_produces_candidate() {
         function_name: "free".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Second release (double-free)
@@ -235,6 +239,7 @@ fn test_double_release_produces_candidate() {
         function_name: "free_again".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     let groups = InstanceEdgeGroups::new(&graph);
@@ -1030,6 +1035,7 @@ fn test_invalid_borrowed_free_candidate() {
         function_name: "borrow_ptr".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Add a release edge (simulating freeing a borrowed pointer)
@@ -1044,6 +1050,7 @@ fn test_invalid_borrowed_free_candidate() {
         function_name: "free".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Create ownership states with a borrowed instance
@@ -1113,6 +1120,7 @@ fn test_owned_pointer_release_no_false_positive() {
         function_name: "malloc".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Add a release edge (normal free)
@@ -1127,6 +1135,7 @@ fn test_owned_pointer_release_no_false_positive() {
         function_name: "free".to_string(),
         caller_name: "test_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Create ownership states with an owned instance
@@ -1297,6 +1306,7 @@ fn test_consumes_arg_after_release_produces_use_after_free() {
         function_name: "malloc".to_string(),
         caller_name: "buggy_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Release edge (free)
@@ -1311,6 +1321,7 @@ fn test_consumes_arg_after_release_produces_use_after_free() {
         function_name: "free".to_string(),
         caller_name: "buggy_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // ConsumesArg edge after release — the freed pointer is consumed
@@ -1326,6 +1337,7 @@ fn test_consumes_arg_after_release_produces_use_after_free() {
         function_name: "ffi_process".to_string(),
         caller_name: "buggy_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     let groups = InstanceEdgeGroups::new(&graph);
@@ -1418,6 +1430,7 @@ fn test_stores_arg_to_global_after_release_produces_use_after_free() {
         function_name: "malloc".to_string(),
         caller_name: "buggy_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Release edge
@@ -1432,6 +1445,7 @@ fn test_stores_arg_to_global_after_release_produces_use_after_free() {
         function_name: "free".to_string(),
         caller_name: "buggy_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // StoresArgToGlobal after release — freed pointer stored to global
@@ -1443,6 +1457,7 @@ fn test_stores_arg_to_global_after_release_produces_use_after_free() {
         function_name: "set_global_ptr".to_string(),
         caller_name: "buggy_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     let groups = InstanceEdgeGroups::new(&graph);
@@ -1534,6 +1549,7 @@ fn test_consumes_arg_before_release_no_false_positive() {
         function_name: "malloc".to_string(),
         caller_name: "safe_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // ConsumesArg edge BEFORE release — normal use
@@ -1548,6 +1564,7 @@ fn test_consumes_arg_before_release_no_false_positive() {
         function_name: "ffi_process".to_string(),
         caller_name: "safe_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     // Release edge (free) — after use, normal pattern
@@ -1562,6 +1579,7 @@ fn test_consumes_arg_before_release_no_false_positive() {
         function_name: "free".to_string(),
         caller_name: "safe_func".to_string(),
         family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
     });
 
     let groups = InstanceEdgeGroups::new(&graph);

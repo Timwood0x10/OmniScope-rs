@@ -38,6 +38,7 @@ fn build_balanced_graph(n: usize) -> ContractGraph {
             function_name: "malloc".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
         graph.add_edge(ContractEdge {
             source: instance_id,
@@ -50,6 +51,7 @@ fn build_balanced_graph(n: usize) -> ContractGraph {
             function_name: "free".to_string(),
             caller_name: "test_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
     }
 
@@ -76,6 +78,7 @@ fn build_leak_graph(n: usize) -> ContractGraph {
             function_name: "malloc".to_string(),
             caller_name: "leaky_func".to_string(),
             family: Some(FamilyId::C_HEAP),
+            boundary_evidence: None,
         });
     }
 
@@ -111,6 +114,7 @@ fn build_multi_family_graph(n: usize) -> ContractGraph {
             function_name: format!("alloc_{i}"),
             caller_name: format!("func_{}", i % 10),
             family: Some(family),
+            boundary_evidence: None,
         });
 
         // Release edge (same family)
@@ -122,6 +126,7 @@ fn build_multi_family_graph(n: usize) -> ContractGraph {
             function_name: format!("release_{i}"),
             caller_name: format!("func_{}", i % 10),
             family: Some(family),
+            boundary_evidence: None,
         });
     }
 
@@ -151,6 +156,7 @@ fn build_escape_reclaim_graph(n: usize) -> ContractGraph {
             function_name: "__rust_alloc".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
 
         // Escape (into_raw)
@@ -165,6 +171,7 @@ fn build_escape_reclaim_graph(n: usize) -> ContractGraph {
             function_name: "into_raw".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
 
         // Reclaim (from_raw) — releases escaped instance and creates new one
@@ -179,6 +186,7 @@ fn build_escape_reclaim_graph(n: usize) -> ContractGraph {
             function_name: "from_raw".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
 
         // Final release of reclaimed instance
@@ -193,6 +201,7 @@ fn build_escape_reclaim_graph(n: usize) -> ContractGraph {
             function_name: "__rust_dealloc".to_string(),
             caller_name: "box_new".to_string(),
             family: Some(FamilyId::RUST_GLOBAL),
+            boundary_evidence: None,
         });
     }
 

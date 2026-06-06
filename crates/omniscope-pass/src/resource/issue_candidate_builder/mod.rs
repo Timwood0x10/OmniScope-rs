@@ -27,7 +27,9 @@ mod tests;
 use omniscope_core::issue_candidate::FfiEvidence;
 use omniscope_core::{IssueCandidate, Result};
 use omniscope_semantics::resource::allocator_shim::AllocatorShimDetector;
-use omniscope_semantics::{FamilyRegistry, LanguageDetector, OwnershipState, ResourceInstance};
+use omniscope_semantics::{
+    FamilyRegistry, LanguageDetector, OwnershipState, ResourceInstance, SemanticFact,
+};
 use omniscope_types::{
     BoundaryContext, BoundaryDetectionMethod, CrossBoundaryEvidence, Effect, Evidence,
     EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
@@ -36,6 +38,22 @@ use omniscope_types::{
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
 use grouping::InstanceEdgeGroups;
+
+/// Converts a SemanticFact into an Evidence attachment for issue candidates.
+///
+/// The evidence kind is set to SemanticFactEvidence and the description
+/// includes the fact's kind, source, confidence, and evidence text.
+fn fact_to_evidence(fact: &SemanticFact) -> Evidence {
+    let confidence = fact.confidence_score();
+    Evidence::new(
+        EvidenceKind::SemanticFactEvidence,
+        format!(
+            "[{:?}] {} (source={}, confidence={})",
+            fact.kind, fact.evidence, fact.source, fact.confidence,
+        ),
+    )
+    .with_confidence(confidence)
+}
 
 /// Issue candidate builder pass.
 ///
@@ -87,6 +105,24 @@ impl Pass for IssueCandidateBuilderPass {
         // Load boundary context for FFI boundary detection.
         let boundary_ctx = ctx.get_ref::<BoundaryContext>("boundary_context").cloned();
         let detector = LanguageDetector::new();
+
+        // Load semantic facts from IR behavior summary pass (Phase 3).
+        // Build a function-name → facts index for O(1) lookup per candidate.
+        // Facts are keyed by SemanticKey::Symbol(func_name), not Resource IDs,
+        // because the fact emitter operates on function behavior, not resource
+        // instances. Matching by alloc_function or alloc_caller name connects
+        // the fact to candidates that involve the same function.
+        let semantic_facts: Vec<SemanticFact> = ctx.get("semantic_facts").unwrap_or_default();
+        let fact_index: std::collections::HashMap<String, Vec<&SemanticFact>> = {
+            let mut idx: std::collections::HashMap<String, Vec<&SemanticFact>> =
+                std::collections::HashMap::new();
+            for fact in &semantic_facts {
+                if let Some(func_name) = fact.key.as_symbol() {
+                    idx.entry(func_name.to_string()).or_default().push(fact);
+                }
+            }
+            idx
+        };
 
         if let Some(graph) = graph {
             // Build index-based edge groups (zero-clone).
@@ -753,6 +789,33 @@ impl Pass for IssueCandidateBuilderPass {
         // Note: We only filter custom allocator shims (mimalloc, jemalloc, etc.),
         // not system or Rust allocators, as those are legitimate for analysis.
         let allocator_detector = AllocatorShimDetector::new();
+
+        // Attach semantic facts as evidence to matching candidates (Phase 3).
+        // Facts are indexed by function name (SemanticKey::Symbol); candidates
+        // carry alloc_function and alloc_caller from the contract graph.
+        // Match on both alloc_function (the acquire/release call site function)
+        // and alloc_caller (the enclosing function) to maximize coverage.
+        let mut facts_attached: usize = 0;
+        for candidate in &mut candidates {
+            // Collect lookup keys as owned Strings to avoid borrow conflict
+            // with the mutable borrow from add_evidence below.
+            let lookup_keys: Vec<String> = vec![
+                candidate.alloc_function.clone(),
+                candidate.alloc_caller.clone().unwrap_or_default(),
+            ];
+            for key in &lookup_keys {
+                if key.is_empty() {
+                    continue;
+                }
+                if let Some(facts) = fact_index.get(key) {
+                    for fact in facts {
+                        candidate.add_evidence(fact_to_evidence(fact));
+                        facts_attached += 1;
+                    }
+                }
+            }
+        }
+
         let filtered_candidates: Vec<IssueCandidate> = candidates
             .into_iter()
             .filter(|candidate| {
@@ -770,9 +833,10 @@ impl Pass for IssueCandidateBuilderPass {
         let candidate_count = filtered_candidates.len();
         ctx.store("issue_candidates", filtered_candidates);
 
-        let result = PassResult::new(self.name())
+        let mut result = PassResult::new(self.name())
             .with_nodes(candidate_count)
             .with_duration(start.elapsed().as_millis() as u64);
+        result.add_stat("semantic_facts_attached", facts_attached);
 
         Ok(result)
     }
