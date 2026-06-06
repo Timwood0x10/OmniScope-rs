@@ -82,17 +82,30 @@ impl Pass for IRBehaviorSummaryPass {
 
         // Iterate over all function bodies in stable order.
         // HashMap iteration order is non-deterministic, so we sort by
-        // function name first to produce stable func_id assignments.
+        // function name first.
         let mut func_bodies: Vec<_> = module.function_bodies.iter().collect();
         func_bodies.sort_by(|a, b| a.0.cmp(b.0));
 
-        for (func_id, (_name, body)) in func_bodies.iter().enumerate() {
-            let func_id = func_id as u64;
+        for (_name, body) in func_bodies.iter() {
             let behavior = extract_behavior(body);
             behaviors.push(behavior.clone());
 
             // Convert behavior to summary and add to store
             if !behavior.patterns.is_empty() {
+                // Derive a deterministic FunctionId from the function name
+                // rather than using an enumeration index. The enumeration
+                // index depends on HashMap iteration order and has no
+                // relationship to function IDs used elsewhere in the pipeline
+                // (e.g., contract_graph_builder's func_id_map). Using a
+                // name-based hash ensures:
+                //   1. Deterministic across runs (same name → same ID)
+                //   2. Independent of HashMap iteration order
+                //   3. Same ID produced regardless of which other functions
+                //      are present in the module
+                // Note: SummaryStore consumers use find_by_name(), not
+                // get(FunctionId), so the exact value is only used as a
+                // HashMap key — it just needs to be unique and deterministic.
+                let func_id = name_to_stable_id(&behavior.name);
                 let summary = behavior_to_summary(&behavior, func_id, func_id);
                 summary_store.insert(summary);
 
@@ -167,6 +180,29 @@ impl Default for IRBehaviorSummaryPass {
     }
 }
 
+/// Derives a deterministic FunctionId from a function name.
+///
+/// Uses a simple FNV-1a-inspired hash to produce a stable u64 ID.
+/// This ensures the same function name always maps to the same ID,
+/// regardless of module composition or HashMap iteration order.
+/// The ID only needs to be unique per name and deterministic —
+/// it does not need to align with function IDs from other passes
+/// because SummaryStore consumers use `find_by_name()` for lookup.
+fn name_to_stable_id(name: &str) -> u64 {
+    // FNV-1a offset basis and prime for 64-bit
+    let mut hash: u64 = 14_695_981_039_346_656_037;
+    for byte in name.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(1_099_511_628_211);
+    }
+    // Avoid 0 as it's used as a sentinel ("no ID") elsewhere
+    if hash == 0 {
+        1
+    } else {
+        hash
+    }
+}
+
 /// Maps a detected behavior pattern to semantic fact(s).
 ///
 /// Each BehaviorPattern produces one or more SemanticFact records
@@ -179,9 +215,8 @@ fn pattern_to_facts(
     _func_id: u64,
 ) -> Vec<SemanticFact> {
     // Use Symbol key keyed by function name, NOT Resource(func_id).
-    // func_id is an unstable enumeration index (HashMap::values().enumerate()),
-    // while Resource IDs in the contract graph are instance allocation IDs.
-    // Mixing these domains causes facts to attach to wrong candidates.
+    // func_id is derived from the function name hash (name_to_stable_id),
+    // not from the contract graph's instance allocation IDs.
     let key = SemanticKey::Symbol(func_name.to_string());
     match pattern {
         BehaviorPattern::ConditionalRelease {

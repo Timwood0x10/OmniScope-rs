@@ -119,12 +119,10 @@ impl RawFactCollectorPass {
                 is_acquire,
                 contract,
                 arg_index: Some(0),
-                // TODO(phase-boundary-wiring): boundary_evidence is always None
-                // because ModuleIndex never populates it. Replace with actual
-                // evidence once the boundary detection pipeline writes into
-                // CachedCallMeta. Keeping None ensures downstream code does not
-                // mistake "not computed" for "computed and empty" (Some([])).
-                boundary_evidence: None,
+                // Propagate boundary evidence from ModuleIndex seed classification.
+                // None means "not computed" (should not happen after P1 wiring),
+                // Some([]) means "computed but no boundary evidence found".
+                boundary_evidence: call_meta.boundary_evidence.clone(),
             });
         }
 
@@ -153,7 +151,10 @@ impl RawFactCollectorPass {
                         PointerContract::Unknown
                     },
                     arg_index: Some(0),
-                    boundary_evidence: None,
+                    // Function-level scan has no call-level boundary evidence.
+                    // Use Some([]) to indicate "computed, no boundary" rather
+                    // than None which means "not computed".
+                    boundary_evidence: Some(vec![]),
                 });
             }
         }
@@ -231,6 +232,9 @@ impl RawFactCollectorPass {
                 is_acquire,
                 contract,
                 arg_index: Some(0),
+                // Fallback IR scan path: no ModuleIndex available, so
+                // boundary evidence is not computed. Use None to distinguish
+                // from the ModuleIndex path where Some([]) = computed but empty.
                 boundary_evidence: None,
             }
         };
@@ -295,7 +299,10 @@ impl RawFactCollectorPass {
                         PointerContract::Unknown
                     },
                     arg_index: Some(0),
-                    boundary_evidence: None,
+                    // Function-level scan has no call-level boundary evidence.
+                    // Use Some([]) to indicate "computed, no boundary" rather
+                    // than None which means "not computed".
+                    boundary_evidence: Some(vec![]),
                 });
             }
         }
@@ -364,6 +371,7 @@ impl Pass for RawFactCollectorPass {
                     is_acquire: fact.kind == FactKind::AllocSite,
                     contract: PointerContract::Unknown,
                     arg_index: None,
+                    // Legacy path: no boundary analysis available.
                     boundary_evidence: None,
                 };
                 raw_facts.push(raw);

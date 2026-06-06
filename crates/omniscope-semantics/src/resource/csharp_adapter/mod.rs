@@ -38,6 +38,10 @@ pub mod tests;
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::Language;
 
+use crate::resource::semantic_tree::{
+    FactConfidence, FactSource, SemanticFact, SemanticKey, SemanticKind,
+};
+
 /// C#-specific semantic patterns derived from IR analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CSharpSemanticPattern {
@@ -84,6 +88,117 @@ pub struct CSharpFunctionAnalysis {
     pub manages_managed_memory: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: CSharpFFISafety,
+}
+
+impl CSharpFunctionAnalysis {
+    /// Convert C# analysis results into SemanticFact records.
+    pub fn to_semantic_facts(&self) -> Vec<SemanticFact> {
+        let key = SemanticKey::Symbol(self.function_name.clone());
+        let mut facts = Vec::new();
+
+        for pattern in &self.patterns {
+            match pattern {
+                CSharpSemanticPattern::PInvokeCall => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CsharpPinvokeMarshal,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CSharpAdapter: P/Invoke call in {}", self.function_name),
+                    ));
+                }
+                CSharpSemanticPattern::MarshalAllocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "CSharpAdapter: marshal allocation in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                CSharpSemanticPattern::MarshalDeallocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "CSharpAdapter: marshal deallocation in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                CSharpSemanticPattern::SafeHandleUsage => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CsharpSafeHandle,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CSharpAdapter: SafeHandle in {}", self.function_name),
+                    ));
+                }
+                CSharpSemanticPattern::IDisposablePattern => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CsharpSafeHandle,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CSharpAdapter: IDisposable in {}", self.function_name),
+                    ));
+                }
+                CSharpSemanticPattern::ManagedAllocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RuntimeManagedResource,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "CSharpAdapter: managed allocation in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                CSharpSemanticPattern::GCOperation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RuntimeManagedResource,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CSharpAdapter: GC operation in {}", self.function_name),
+                    ));
+                }
+                CSharpSemanticPattern::GCHandleAllocation
+                | CSharpSemanticPattern::GCHandleDeallocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CsharpPinvokeMarshal,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CSharpAdapter: GCHandle in {}", self.function_name),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        if !self.ffi_safety.is_safe() {
+            facts.push(SemanticFact::new(
+                key,
+                SemanticKind::Unknown,
+                FactConfidence::Low,
+                FactSource::LanguageAdapter,
+                format!(
+                    "CSharpAdapter: FFI safety concern {:?} in {}",
+                    self.ffi_safety, self.function_name
+                ),
+            ));
+        }
+
+        facts
+    }
 }
 
 /// FFI safety assessment for C# functions.

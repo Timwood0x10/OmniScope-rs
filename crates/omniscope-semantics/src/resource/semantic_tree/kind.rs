@@ -281,18 +281,19 @@ impl SemanticKey {
                 return Self::Value(reg.to_string());
             }
         } else if key.starts_with("callsite:") {
-            // Format: callsite<NULL>caller<NULL>callee<NULL>index
-            // Uses NUL (\0) as field separator because LLVM symbol names
-            // cannot contain NUL bytes, making the encoding unambiguous.
-            // The prefix "callsite:" is kept with ':' for human readability
-            // in debug output; internal fields use \0.
+            // Format: callsite:<percent-encoded-caller>:<percent-encoded-callee>:<index>
+            // Percent-encodes ':' and '%' in caller/callee to avoid ambiguity
+            // with the field separator ':'. This is safe for logs, JSON, and
+            // CLI output (unlike NUL-byte encoding).
             if let Some(rest) = key.strip_prefix("callsite:") {
-                let parts: Vec<&str> = rest.splitn(3, '\0').collect();
+                let parts: Vec<&str> = rest.splitn(3, ':').collect();
                 if parts.len() == 3 {
+                    let caller = percent_decode(parts[0]);
+                    let callee = percent_decode(parts[1]);
                     if let Ok(index) = parts[2].parse::<u32>() {
                         return Self::CallSite {
-                            caller: parts[0].to_string(),
-                            callee: parts[1].to_string(),
+                            caller,
+                            callee,
                             index,
                         };
                     }
@@ -316,8 +317,13 @@ impl SemanticKey {
                 callee,
                 index,
             } => {
-                // Uses NUL separator to avoid ambiguity with ':' in symbol names
-                format!("callsite:{caller}\0{callee}\0{index}")
+                // Percent-encode ':' and '%' in caller/callee so the ':'
+                // separator is unambiguous. Safe for logs, JSON, CLI.
+                format!(
+                    "callsite:{}:{}:{index}",
+                    percent_encode(caller),
+                    percent_encode(callee)
+                )
             }
         }
     }
@@ -356,6 +362,62 @@ impl std::fmt::Display for SemanticKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_key_string())
     }
+}
+
+/// Percent-encodes `:` and `%` in a string for use as a CallSite key field.
+///
+/// Only these two characters need encoding because `:` is the field
+/// separator and `%` is the escape prefix. All other characters
+/// (including arbitrary LLVM symbol characters) pass through unchanged.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            ':' => out.push_str("%3A"),
+            '%' => out.push_str("%25"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Decodes a percent-encoded string produced by [`percent_encode`].
+///
+/// Returns the original string. Malformed escape sequences (e.g., `%ZZ`)
+/// are passed through unchanged for robustness.
+fn percent_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            let hi = chars.next();
+            let lo = chars.next();
+            match (hi, lo) {
+                (Some(h), Some(l)) => {
+                    let byte = u8::from_str_radix(&format!("{h}{l}"), 16);
+                    match byte {
+                        Ok(b) => out.push(b as char),
+                        Err(_) => {
+                            // Malformed escape — pass through literally
+                            out.push('%');
+                            out.push(h);
+                            out.push(l);
+                        }
+                    }
+                }
+                _ => {
+                    // Incomplete escape at end of string
+                    out.push('%');
+                    if let Some(h) = hi {
+                        out.push(h);
+                    }
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 impl SemanticKind {
@@ -765,6 +827,10 @@ pub enum FactSource {
     BehaviorSummary,
     /// Derived from FFI boundary detection (cross-language call sites).
     BoundaryDetector,
+    /// Derived from language-specific adapters (C++, Python, Java/JNI,
+    /// Go, C#, etc.). Each adapter converts its language-specific patterns
+    /// into SemanticFacts for unified downstream consumption.
+    LanguageAdapter,
     /// Derived from memory graph analysis (ownership flow, aliasing).
     MemoryGraph,
 }
@@ -776,6 +842,7 @@ impl std::fmt::Display for FactSource {
             Self::ContractDB => write!(f, "contract_db"),
             Self::BehaviorSummary => write!(f, "behavior_summary"),
             Self::BoundaryDetector => write!(f, "boundary_detector"),
+            Self::LanguageAdapter => write!(f, "language_adapter"),
             Self::MemoryGraph => write!(f, "memory_graph"),
         }
     }

@@ -23,6 +23,8 @@
 mod grouping;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_dual_evidence;
 
 use omniscope_core::issue_candidate::FfiEvidence;
 use omniscope_core::{IssueCandidate, Result};
@@ -32,7 +34,7 @@ use omniscope_semantics::{
 };
 use omniscope_types::{
     BoundaryContext, BoundaryDetectionMethod, CrossBoundaryEvidence, Effect, Evidence,
-    EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
+    EvidenceKind, FamilyId, IssueCandidateKind, Language, PointerContract,
 };
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -53,6 +55,59 @@ fn fact_to_evidence(fact: &SemanticFact) -> Evidence {
         ),
     )
     .with_confidence(confidence)
+}
+
+/// Check whether a contract edge has boundary evidence from the
+/// boundary_seeds pipeline (not just BoundaryContext configuration).
+///
+/// Boundary evidence from `boundary_evidence: Some([..])` indicates
+/// the seed classifier found a cross-language boundary at this edge.
+/// `Some([])` means "computed but no boundary found".
+/// `None` means "not computed" (should not happen after P1 wiring).
+fn edge_has_boundary_evidence(
+    edge: &crate::resource::contract_graph_builder::ContractEdge,
+) -> bool {
+    edge.boundary_evidence
+        .as_ref()
+        .is_some_and(|ev| !ev.is_empty())
+}
+
+/// Collect boundary evidence from two edges (acquire + release) into
+/// a single `CrossBoundaryEvidence` if any strong boundary signal exists.
+///
+/// Returns None if neither edge has boundary evidence.
+fn collect_boundary_from_edges(
+    acquire_edge: &crate::resource::contract_graph_builder::ContractEdge,
+    release_edge: &crate::resource::contract_graph_builder::ContractEdge,
+) -> Option<CrossBoundaryEvidence> {
+    // Prefer evidence from the release edge (where the boundary violation
+    // typically manifests), fall back to the acquire edge.
+    let evidence = release_edge
+        .boundary_evidence
+        .as_ref()
+        .filter(|ev| !ev.is_empty())
+        .or_else(|| {
+            acquire_edge
+                .boundary_evidence
+                .as_ref()
+                .filter(|ev| !ev.is_empty())
+        })?;
+
+    // Find the strongest evidence item and convert to CrossBoundaryEvidence
+    let best = evidence
+        .iter()
+        .find(|e| e.is_strong())
+        .or(evidence.first())?;
+
+    // Determine language pair from the evidence or edge metadata
+    let from = best.caller_lang.unwrap_or(Language::Unknown);
+    let to = best.callee_lang.unwrap_or(Language::Unknown);
+
+    Some(CrossBoundaryEvidence {
+        from,
+        to,
+        detection_method: BoundaryDetectionMethod::LanguagePairMatch,
+    })
 }
 
 /// Issue candidate builder pass.
@@ -261,19 +316,42 @@ impl Pass for IssueCandidateBuilderPass {
                                 None
                             };
 
-                            if let Some(boundary) = boundary_evidence {
-                                candidate = candidate.with_boundary(boundary);
+                            if let Some(ref boundary) = boundary_evidence {
+                                candidate = candidate.with_boundary(boundary.clone());
                             }
 
-                            // Set FFI evidence for cross-language free
-                            let caller_lang =
-                                detector.detect_from_function(&graph.edges[ri].caller_name);
-                            let callee_lang = detector.detect_from_function(release_func);
-                            candidate =
-                                candidate.with_ffi_evidence(FfiEvidence::CrossLanguageCall {
-                                    caller_lang: format!("{:?}", caller_lang),
-                                    callee_lang: format!("{:?}", callee_lang),
-                                });
+                            // Dual-evidence gating (§7.5.3): FFI evidence is set
+                            // only when boundary evidence exists. Without boundary
+                            // evidence, this is a resource mismatch, not FFI.
+                            //
+                            // Boundary evidence sources (in priority order):
+                            // 1. BoundaryContext (user-configured boundaries)
+                            // 2. ContractEdge.boundary_evidence (from boundary_seeds)
+                            let has_boundary = boundary_evidence.is_some()
+                                || edge_has_boundary_evidence(&graph.edges[ai])
+                                || edge_has_boundary_evidence(&graph.edges[ri]);
+
+                            if has_boundary {
+                                let caller_lang =
+                                    detector.detect_from_function(&graph.edges[ri].caller_name);
+                                let callee_lang = detector.detect_from_function(release_func);
+                                candidate =
+                                    candidate.with_ffi_evidence(FfiEvidence::CrossLanguageCall {
+                                        caller_lang: format!("{:?}", caller_lang),
+                                        callee_lang: format!("{:?}", callee_lang),
+                                    });
+
+                                // Also set boundary from edge evidence if BoundaryContext
+                                // did not provide one
+                                if candidate.boundary.is_none() {
+                                    if let Some(be) = collect_boundary_from_edges(
+                                        &graph.edges[ai],
+                                        &graph.edges[ri],
+                                    ) {
+                                        candidate = candidate.with_boundary(be);
+                                    }
+                                }
+                            }
 
                             candidates.push(candidate);
                         } else {
@@ -342,16 +420,34 @@ impl Pass for IssueCandidateBuilderPass {
                                 None
                             };
 
-                            if let Some(boundary) = boundary_evidence {
-                                candidate = candidate.with_boundary(boundary);
-                                // Only set FFI evidence when a boundary is proven —
-                                // cross-family without a boundary is a resource mismatch,
-                                // not an FFI signal.
+                            if let Some(ref boundary) = boundary_evidence {
+                                candidate = candidate.with_boundary(boundary.clone());
+                            }
+
+                            // Dual-evidence gating (§7.5.3): FFI evidence requires
+                            // both boundary evidence AND resource evidence.
+                            // Cross-family is resource evidence; we need boundary.
+                            let has_boundary = boundary_evidence.is_some()
+                                || edge_has_boundary_evidence(&graph.edges[ai])
+                                || edge_has_boundary_evidence(&graph.edges[ri]);
+
+                            if has_boundary {
                                 candidate =
                                     candidate.with_ffi_evidence(FfiEvidence::CrossFamilyRelease {
                                         alloc_family: format!("{:?}", alloc_family),
                                         release_family: format!("{:?}", release_family),
                                     });
+
+                                // Also set boundary from edge evidence if BoundaryContext
+                                // did not provide one
+                                if candidate.boundary.is_none() {
+                                    if let Some(be) = collect_boundary_from_edges(
+                                        &graph.edges[ai],
+                                        &graph.edges[ri],
+                                    ) {
+                                        candidate = candidate.with_boundary(be);
+                                    }
+                                }
                             }
 
                             candidates.push(candidate);
@@ -458,9 +554,19 @@ impl Pass for IssueCandidateBuilderPass {
                                     .with_confidence(0.7),
                                 );
 
-                                // Set FFI evidence for callback escape
-                                candidate =
-                                    candidate.with_ffi_evidence(FfiEvidence::CallbackEscape);
+                                // Dual-evidence gating (§7.5.3): CallbackEscape
+                                // is only FFI evidence when boundary evidence exists.
+                                let escape_edge = &graph.edges[escape_callback_indices[0]];
+                                let has_boundary = edge_has_boundary_evidence(escape_edge);
+                                if has_boundary {
+                                    candidate =
+                                        candidate.with_ffi_evidence(FfiEvidence::CallbackEscape);
+                                    if let Some(be) =
+                                        collect_boundary_from_edges(escape_edge, escape_edge)
+                                    {
+                                        candidate = candidate.with_boundary(be);
+                                    }
+                                }
 
                                 candidates.push(candidate);
                             }
@@ -647,14 +753,24 @@ impl Pass for IssueCandidateBuilderPass {
                         .with_confidence(0.7),
                     );
 
-                    // Set FFI evidence for ownership transfer only when it
-                    // crosses a language boundary — into_raw within the same
-                    // language is not an FFI signal.
-                    let escape_caller = graph.edges[escape_idx].caller_name.as_str();
+                    // Dual-evidence gating (§7.5.3): OwnershipTransfer FFI
+                    // evidence requires boundary evidence. into_raw within the
+                    // same language is not an FFI signal unless boundary seeds
+                    // found a boundary at this edge.
+                    let escape_edge = &graph.edges[escape_idx];
+                    let escape_caller = escape_edge.caller_name.as_str();
                     let escape_lang = detector.detect_from_function(escape_func);
                     let caller_lang = detector.detect_from_function(escape_caller);
-                    if escape_lang != caller_lang {
+                    let cross_lang = escape_lang != caller_lang;
+                    let has_boundary = cross_lang || edge_has_boundary_evidence(escape_edge);
+                    if has_boundary {
                         candidate = candidate.with_ffi_evidence(FfiEvidence::OwnershipTransfer);
+                        if candidate.boundary.is_none() {
+                            if let Some(be) = collect_boundary_from_edges(escape_edge, escape_edge)
+                            {
+                                candidate = candidate.with_boundary(be);
+                            }
+                        }
                     }
 
                     candidates.push(candidate);
@@ -699,12 +815,27 @@ impl Pass for IssueCandidateBuilderPass {
                                 reclaim_family
                             ));
 
-                            // Set FFI evidence for cross-family reclaim
-                            candidate =
-                                candidate.with_ffi_evidence(FfiEvidence::CrossFamilyRelease {
-                                    alloc_family: format!("{:?}", alloc_family),
-                                    release_family: format!("{:?}", reclaim_family),
-                                });
+                            // Dual-evidence gating (§7.5.3): CrossFamilyRelease
+                            // FFI evidence requires boundary evidence. A
+                            // cross-family reclaim at a non-boundary site
+                            // is a family mismatch, not an FFI bug.
+                            let has_boundary = edge_has_boundary_evidence(&graph.edges[ai])
+                                || edge_has_boundary_evidence(&graph.edges[ri]);
+                            if has_boundary {
+                                candidate =
+                                    candidate.with_ffi_evidence(FfiEvidence::CrossFamilyRelease {
+                                        alloc_family: format!("{:?}", alloc_family),
+                                        release_family: format!("{:?}", reclaim_family),
+                                    });
+                                if candidate.boundary.is_none() {
+                                    if let Some(be) = collect_boundary_from_edges(
+                                        &graph.edges[ai],
+                                        &graph.edges[ri],
+                                    ) {
+                                        candidate = candidate.with_boundary(be);
+                                    }
+                                }
+                            }
 
                             candidates.push(candidate);
                         }
@@ -791,17 +922,19 @@ impl Pass for IssueCandidateBuilderPass {
         let allocator_detector = AllocatorShimDetector::new();
 
         // Attach semantic facts as evidence to matching candidates (Phase 3).
-        // Facts are indexed by function name (SemanticKey::Symbol); candidates
-        // carry alloc_function and alloc_caller from the contract graph.
-        // Match on both alloc_function (the acquire/release call site function)
-        // and alloc_caller (the enclosing function) to maximize coverage.
+        // Facts are indexed by function name (SemanticKey::Symbol); the key is
+        // the *enclosing function* where a behavior was detected (e.g., "main"),
+        // not the allocation callee (e.g., "malloc"). Candidates carry
+        // alloc_caller/release_caller for enclosing function context, so we
+        // match on those — not on alloc_function/release_function which are
+        // typically generic allocator names like "malloc" or "_Znwm".
         let mut facts_attached: usize = 0;
         for candidate in &mut candidates {
             // Collect lookup keys as owned Strings to avoid borrow conflict
             // with the mutable borrow from add_evidence below.
             let lookup_keys: Vec<String> = vec![
-                candidate.alloc_function.clone(),
                 candidate.alloc_caller.clone().unwrap_or_default(),
+                candidate.release_caller.clone().unwrap_or_default(),
             ];
             for key in &lookup_keys {
                 if key.is_empty() {
@@ -815,6 +948,45 @@ impl Pass for IssueCandidateBuilderPass {
                 }
             }
         }
+
+        // ── Precision metrics (§7.5.7) ──
+        // Count candidates by FFI evidence status and kind before filtering.
+        // These metrics enable downstream precision analysis without
+        // re-running the pipeline.
+        let ffi_evidence_count = candidates.iter().filter(|c| c.has_ffi_evidence()).count();
+        let boundary_evidence_count = candidates.iter().filter(|c| c.boundary.is_some()).count();
+        let needs_model_count = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::NeedsModel)
+            .count();
+        let local_bug_count = candidates
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.kind,
+                    IssueCandidateKind::DoubleRelease
+                        | IssueCandidateKind::UseAfterFree
+                        | IssueCandidateKind::ConditionalLeak
+                        | IssueCandidateKind::DoubleReclaim
+                        | IssueCandidateKind::InvalidBorrowedFree
+                )
+            })
+            .count();
+        // Cross-family candidates without FFI evidence: suppressed by
+        // dual-evidence gating. These would have been FFI reports under
+        // the old system but are now downgraded to resource-only issues.
+        let boundary_suppressed = candidates
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.kind,
+                    IssueCandidateKind::CrossFamilyFree
+                        | IssueCandidateKind::CrossLanguageFree
+                        | IssueCandidateKind::OwnershipEscapeLeak
+                        | IssueCandidateKind::BorrowEscape
+                ) && !c.has_ffi_evidence()
+            })
+            .count();
 
         let filtered_candidates: Vec<IssueCandidate> = candidates
             .into_iter()
@@ -837,6 +1009,11 @@ impl Pass for IssueCandidateBuilderPass {
             .with_nodes(candidate_count)
             .with_duration(start.elapsed().as_millis() as u64);
         result.add_stat("semantic_facts_attached", facts_attached);
+        result.add_stat("ffi_evidence_count", ffi_evidence_count);
+        result.add_stat("boundary_evidence_count", boundary_evidence_count);
+        result.add_stat("needs_model_count", needs_model_count);
+        result.add_stat("local_bug_count", local_bug_count);
+        result.add_stat("boundary_suppressed", boundary_suppressed);
 
         Ok(result)
     }

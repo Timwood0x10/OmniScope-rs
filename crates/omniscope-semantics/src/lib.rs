@@ -23,10 +23,16 @@ pub use resource::abi_layout_detector::{
 pub use resource::confidence_scorer::{
     classify_issue, score_issue, ConfidenceTier, ScoreBreakdown, ScoringContext,
 };
+pub use resource::cpp_adapter::{
+    CppAdapter, CppFFISafety, CppFunctionAnalysis, CppSemanticPattern,
+};
 pub use resource::cross_function_lifetime::{
     AnalysisResult, CrossFunctionTracker, FlowType, FunctionInfo, LifetimeConstraint,
     LifetimeDomain, LifetimeViolation, ParamInfo, ResourceFate, ResourceFlow, ReturnInfo,
     ViolationType,
+};
+pub use resource::csharp_adapter::{
+    CSharpAdapter, CSharpFFISafety, CSharpFunctionAnalysis, CSharpSemanticPattern,
 };
 pub use resource::escape::{classify_escape, EscapeContext, EscapeResult};
 pub use resource::family_inference::infer_family;
@@ -37,6 +43,9 @@ pub use resource::ffi_contract;
 pub use resource::go_adapter::{GoAdapter, GoFFISafety, GoFunctionAnalysis, GoSemanticPattern};
 pub use resource::ir_pattern::{
     extract_behavior, BehaviorPattern, EscapeType, FunctionBehavior, PosixOpCategory, ReturnSource,
+};
+pub use resource::java_adapter::{
+    JavaAdapter, JavaFFISafety, JavaFunctionAnalysis, JavaSemanticPattern,
 };
 pub use resource::length_truncation_detector::{
     describe_truncation, extract_truncation_patterns, truncation_cwe_id, TruncationAnalysis,

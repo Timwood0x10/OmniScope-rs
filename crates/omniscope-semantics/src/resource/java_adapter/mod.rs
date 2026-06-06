@@ -40,6 +40,10 @@ pub mod tests;
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::Language;
 
+use crate::resource::semantic_tree::{
+    FactConfidence, FactSource, SemanticFact, SemanticKey, SemanticKind,
+};
+
 /// Java-specific semantic patterns derived from IR analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JavaSemanticPattern {
@@ -92,6 +96,128 @@ pub struct JavaFunctionAnalysis {
     pub manages_native_memory: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: JavaFFISafety,
+}
+
+impl JavaFunctionAnalysis {
+    /// Convert Java/JNI analysis results into SemanticFact records.
+    ///
+    /// Maps Java-specific patterns (JNI references, GC, exceptions)
+    /// to SemanticKind variants for unified downstream consumption.
+    pub fn to_semantic_facts(&self) -> Vec<SemanticFact> {
+        let key = SemanticKey::Symbol(self.function_name.clone());
+        let mut facts = Vec::new();
+
+        for pattern in &self.patterns {
+            match pattern {
+                JavaSemanticPattern::JNICall => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::DeclaredCrossBoundary,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: JNI call in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNIObjectCreation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: JNI object creation in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNILocalReference => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::JavaLocalRef,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: JNI local ref in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNIGlobalReference => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::JavaGlobalRef,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: JNI global ref in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNIWeakGlobalReference => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::JavaWeakRef,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: JNI weak global ref in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNIStringOperation
+                | JavaSemanticPattern::JNIArrayOperation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: JNI data op in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNIExceptionHandling => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppExceptionPath,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "JavaAdapter: JNI exception handling in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                JavaSemanticPattern::GCOperation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RuntimeManagedResource,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("JavaAdapter: GC operation in {}", self.function_name),
+                    ));
+                }
+                JavaSemanticPattern::JNINativeRegistration => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::DeclaredCrossBoundary,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "JavaAdapter: JNI native registration in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                // JNIClassLoading, JNIMethodResolution, JNIFieldAccess,
+                // JNIMonitorOperation, Reflection, Unknown
+                _ => {}
+            }
+        }
+
+        if !self.ffi_safety.is_safe() {
+            facts.push(SemanticFact::new(
+                key,
+                SemanticKind::Unknown,
+                FactConfidence::Low,
+                FactSource::LanguageAdapter,
+                format!(
+                    "JavaAdapter: FFI safety concern {:?} in {}",
+                    self.ffi_safety, self.function_name
+                ),
+            ));
+        }
+
+        facts
+    }
 }
 
 /// FFI safety assessment for Java functions.

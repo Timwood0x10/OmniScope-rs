@@ -685,6 +685,354 @@ Key facts:
 - finalizer is fallback cleanup, lower confidence than deterministic release
 - raw handles crossing P/Invoke need explicit ownership contract
 
+## 7.5 Precision Implementation Playbook
+
+The implementation should improve FFI precision by separating three concerns:
+
+```text
+boundary recognition
+  -> language/runtime semantic recognition
+  -> bug attribution and verification
+```
+
+Do not let any single signal report an FFI bug by itself:
+
+- FFI call presence alone is not a bug.
+- Resource mismatch alone is not FFI evidence.
+- Language-specific symbol names are evidence, not final proof.
+- Runtime/compiler glue should not become user-facing boundary evidence unless it is connected to a user wrapper or configured boundary.
+
+### 7.5.1 Current Code Integration Points
+
+Use existing modules in this order:
+
+| Stage | Code location | Responsibility | Output |
+|---|---|---|---|
+| IR indexing | `crates/omniscope-pass/src/module_index.rs` | Cache call/function facts once per module | `CachedCallMeta`, function metadata |
+| Boundary seeds | `crates/omniscope-pass/src/analysis/boundary_seeds.rs` | Classify strong/weak/suppression FFI seeds | `BoundaryEvidence`, `FfiSliceInfo` |
+| Raw facts | `crates/omniscope-pass/src/resource/raw_fact_collector.rs` | Convert call metadata into resource facts | `RawResourceFact` |
+| Resource graph | `crates/omniscope-pass/src/resource/contract_graph_builder.rs` | Build acquire/release/escape/use graph | `ContractGraph`, `ContractEdge` |
+| Semantic facts | `crates/omniscope-pass/src/resource/ir_behavior_summary_pass.rs` | Convert IR behavior patterns into semantic facts | `SemanticFact` |
+| Candidate generation | `crates/omniscope-pass/src/resource/issue_candidate_builder/mod.rs` | Build possible issues from graph + facts | `IssueCandidate` |
+| Verification/gating | `crates/omniscope-pass/src/resource/issue_verifier.rs`, `issue_gate.rs` | Confirm, suppress, downgrade, explain | final issues |
+
+The important wiring requirement:
+
+```text
+ModuleIndex boundary evidence
+  -> RawResourceFact boundary_evidence
+  -> ContractEdge boundary_evidence
+  -> IssueCandidate boundary / ffi_evidence
+  -> IssueVerifier / IssueGate final decision
+```
+
+Until that path is fully connected, fields such as `boundary_evidence: None` should be treated as "not computed", not "computed and no boundary".
+
+### 7.5.2 Boundary Recognition Rules
+
+`boundary_seeds` should populate `ModuleIndex` with boundary evidence before resource passes run.
+
+Strong seeds:
+
+- Caller and callee languages are known and different.
+- User-configured boundary from CLI/config.
+- Non-C language calls an external unknown declaration that is likely C ABI.
+- C calls a real C++ Itanium/MSVC symbol, excluding Rust `_ZN` legacy mangling.
+- Exported wrapper has pointer parameter or pointer return.
+- Function pointer crosses an external ABI call.
+- Callback registration takes callback function plus userdata.
+
+Weak seeds:
+
+- Same-language wrapper calls a known FFI contract symbol.
+- Dangerous libc/resource call appears inside an exported wrapper.
+- Runtime bridge is connected to a user-facing boundary flow.
+
+Suppression seeds:
+
+- LLVM intrinsics.
+- Compiler/runtime glue with no user boundary path.
+- Pure helper calls with no ownership transfer.
+- Internal same-language calls with no external/callback/exported ABI evidence.
+
+FFI slice rule:
+
+```text
+strong seed -> include seed caller/callee
+            -> expand callers/callees up to 2 hops
+            -> include acquire/release closure
+            -> include callback registration/userdata closure
+```
+
+Do not expand from suppression seeds. Weak seeds should mark context but should not independently upgrade a resource issue into an FFI issue.
+
+### 7.5.3 Candidate Attribution Rule
+
+Classify candidates with two separate evidence buckets:
+
+```text
+Boundary evidence:
+  CrossLanguageCall
+  ConfiguredBoundary
+  ExternalAbiCall
+  CallbackAcrossBoundary
+  FunctionPointerAbi
+  ExportedWrapper
+
+Resource evidence:
+  CrossFamilyRelease
+  OwnershipTransfer
+  BorrowedAsOwned
+  RetainReleaseMismatch
+  FfiReturnUnchecked
+  UseAfterFree
+  DoubleRelease
+  ConditionalLeak
+```
+
+Reporting rule:
+
+```text
+if definite local memory bug:
+    report as local memory issue
+
+if boundary evidence exists and resource evidence exists:
+    report as FFI issue
+
+if resource evidence exists but no boundary evidence:
+    report as general resource issue or NeedsModel
+
+if boundary evidence exists but no resource evidence:
+    do not report a bug
+```
+
+This is the main precision improvement. It prevents false positives from benign FFI calls and prevents resource bugs from being mislabeled as FFI bugs.
+
+### 7.5.4 Language Bug Recognition Strategy
+
+#### C/C++
+
+Boundary evidence:
+
+- C wrapper calling C++ mangled symbol.
+- C++ calling C ABI function.
+- Callback registration function with userdata.
+- Exported C wrapper around C++ implementation.
+
+Resource evidence:
+
+- `malloc/calloc/realloc/free`
+- `_Znwm`, `_Znam`, `_ZdlPv`, `_ZdaPv`
+- destructor and exception cleanup blocks
+- function pointer callback use
+
+FFI bugs to detect:
+
+- `malloc -> operator delete`
+- `new[] -> free`
+- C callback stores stack userdata
+- free then pass pointer to external C/C++ callback
+- ownership escape through C wrapper without matching release contract
+
+Suppress:
+
+- C wrapper calling pure C++ compute.
+- RAII destructor cleanup.
+- `__cxa_*` and compiler exception runtime unless connected to user wrapper.
+
+#### Rust
+
+Boundary evidence:
+
+- Rust function calling unmangled external C declaration.
+- C wrapper calling exported Rust ABI function.
+- `extern "C"`-like exported wrapper inferred from symbol shape and pointer ABI.
+
+Resource evidence:
+
+- `__rust_alloc`, `__rust_alloc_zeroed`, `__rust_dealloc`, `__rust_realloc`
+- `Box::into_raw` / `Box::from_raw`
+- `CString::into_raw` / `CString::from_raw`
+- `Vec::from_raw_parts`
+- drop glue and panic cleanup
+
+FFI bugs to detect:
+
+- Rust allocation freed by C `free`.
+- C allocation reclaimed by Rust raw ownership APIs.
+- `into_raw` without matching reclaim.
+- double `from_raw` reclaim.
+- Rust-managed pointer retained by C after Rust owner drops.
+
+Suppress:
+
+- Rust drop glue.
+- Rust allocator runtime internals without user boundary.
+- Rust-to-C passthrough with no ownership transfer.
+
+#### Python C API
+
+Boundary evidence:
+
+- Python extension entrypoints.
+- Python C API calls inside native wrapper.
+- cffi/ctypes/capsule-style pointer transfer.
+
+Resource evidence:
+
+- `Py_INCREF`, `Py_DECREF`, `Py_XINCREF`, `Py_XDECREF`
+- owned/borrowed/stolen reference APIs
+- `PyGILState_Ensure` / `PyGILState_Release`
+- Python buffer APIs
+
+FFI bugs to detect:
+
+- owned reference leak.
+- borrowed reference decref.
+- stolen reference decref after transfer.
+- missing GIL release.
+- Python buffer pointer retained by C after object lifetime.
+
+Suppress:
+
+- borrowed ref read-only use.
+- stolen ref transferred into container.
+- `PyObject*` treated as Python reference, not C heap.
+
+#### Java/JNI
+
+Boundary evidence:
+
+- `Java_pkg_Class_method` native entrypoint.
+- `JNIEnv*` call patterns.
+- native code calling back into JVM.
+
+Resource evidence:
+
+- `NewGlobalRef` / `DeleteGlobalRef`
+- `NewLocalRef` / `DeleteLocalRef`
+- `GetStringUTFChars` / `ReleaseStringUTFChars`
+- `Get<Primitive>ArrayElements` / `Release<Primitive>ArrayElements`
+- exception pending paths
+
+FFI bugs to detect:
+
+- global ref leak.
+- string chars missing release.
+- array elements missing release.
+- local ref stored beyond native frame.
+- exception path skipping cleanup.
+
+Suppress:
+
+- local refs released by native frame lifetime.
+- local lookup/read-only operations.
+- JNI refs treated as JVM-managed references, not C heap.
+
+#### Zig
+
+Boundary evidence:
+
+- Zig extern declaration calling C.
+- exported Zig ABI wrapper.
+- C code calling Zig namespace-mangled implementation.
+- Zig allocator bridge to C allocator.
+
+Resource evidence:
+
+- allocator vtable alloc/free
+- `std.heap.c_allocator`
+- defer cleanup shape
+- slice pointer/length crossing C ABI
+
+FFI bugs to detect:
+
+- Zig allocator allocation freed by raw `free`.
+- C allocation freed by wrong Zig allocator.
+- missing `defer` cleanup.
+- C retains Zig-managed pointer.
+- pointer/length mismatch across C ABI.
+
+Suppress:
+
+- `defer` cleanup proving release.
+- Zig runtime/compiler_rt internals.
+- allocator-compatible paths when allocator instance is proven same.
+
+#### Go/cgo
+
+Boundary evidence:
+
+- `_cgo_*` bridge symbols.
+- exported Go functions callable from C.
+- C callback into Go.
+- C function calls from cgo wrapper.
+
+Resource evidence:
+
+- C heap allocation/free inside cgo.
+- Go runtime allocation and finalizer/defer patterns.
+- Go pointer passed to C storage/callback.
+- handle indirection patterns.
+
+FFI bugs to detect:
+
+- Go pointer retained by C.
+- C malloc returned to Go and never freed.
+- C callback stores Go object pointer.
+- C heap allocation missing free.
+
+Suppress:
+
+- Go runtime allocation as GC-managed.
+- handle indirection safe pattern.
+- defer/finalizer as cleanup evidence, with finalizer lower confidence than deterministic release.
+
+### 7.5.5 Testing Plan for Precision
+
+Use embedded IR first. File fixtures should validate realism after embedded tests define semantics.
+
+Per language, add:
+
+1. True-positive bug case.
+2. True-negative clean FFI case.
+3. Scale case with many generated functions.
+4. Runtime/glue suppression case.
+5. Cross-boundary ownership transfer case.
+
+Minimum embedded IR matrix:
+
+| Language area | TP | TN | Suppression |
+|---|---|---|---|
+| C/C++ | `malloc -> delete`, `new[] -> free`, callback userdata escape | `malloc/free`, `new/delete`, C wrapper pure compute | `__cxa_*`, RAII cleanup |
+| Rust | Rust alloc -> C free, double `from_raw` | Rust alloc/dealloc, Rust -> C passthrough | drop glue, allocator runtime |
+| Python | borrowed ref decref, owned ref leak | stolen ref transfer, owned decref | borrowed read-only ref |
+| JNI | global ref leak, string chars leak | local ref frame cleanup, get/release pair | JVM local lookup |
+| Zig | allocator mismatch, missing defer | allocator alloc/free, defer cleanup | compiler_rt/runtime |
+| Go/cgo | Go pointer retained by C, C heap leak | C malloc/free, handle indirection | Go runtime allocation |
+
+Precision metrics should be recorded separately:
+
+```text
+Boundary TP/FP/FN:
+Resource TP/FP/FN:
+FFI bug TP/FP/FN:
+Runtime suppression count:
+NeedsModel count:
+Top false-positive language:
+Top false-negative bug class:
+```
+
+### 7.5.6 Development Priority
+
+1. Connect `boundary_seeds` into `ModuleIndex` so `CachedCallMeta.boundary_evidence` and `ffi_slice_info` are populated.
+2. Propagate boundary evidence through `RawResourceFact` and `ContractEdge`.
+3. Update `IssueCandidateBuilder` so FFI bug classification requires both boundary evidence and resource evidence.
+4. Keep local memory bugs reportable without FFI evidence, but do not count them as FFI true positives.
+5. Normalize language adapters so each emits semantic facts instead of direct issues.
+6. Add embedded IR tests for C/C++ and Rust first, then Python/JNI, then Zig/Go.
+7. Add loader/cache instrumentation after semantic correctness is stable, so performance regressions can be measured independently.
+
 ## 8. Avoiding Large Whitelists
 
 Allowed:

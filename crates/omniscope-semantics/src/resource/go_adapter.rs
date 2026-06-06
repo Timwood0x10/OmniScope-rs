@@ -6,6 +6,10 @@
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::Language;
 
+use crate::resource::semantic_tree::{
+    FactConfidence, FactSource, SemanticFact, SemanticKey, SemanticKind,
+};
+
 /// Go-specific semantic patterns derived from IR analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoSemanticPattern {
@@ -60,6 +64,107 @@ pub struct GoFunctionAnalysis {
     pub manages_c_heap_memory: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: GoFFISafety,
+}
+
+impl GoFunctionAnalysis {
+    /// Convert Go/CGO analysis results into SemanticFact records.
+    pub fn to_semantic_facts(&self) -> Vec<SemanticFact> {
+        let key = SemanticKey::Symbol(self.function_name.clone());
+        let mut facts = Vec::new();
+
+        for pattern in &self.patterns {
+            match pattern {
+                GoSemanticPattern::GoGCAllocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::GoRuntimeAlloc,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: GC allocation in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::CGOAllocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: CGO allocation in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::CGODesallocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: CGO deallocation in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::RuntimeInternal => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RuntimeInternal,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: runtime internal in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::CGOBridge => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::GoCgoWrapper,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: CGO bridge in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::DeferCleanup => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::GoDeferCleanup,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: defer cleanup in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::Finalizer => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::GoFinalizer,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: finalizer in {}", self.function_name),
+                    ));
+                }
+                GoSemanticPattern::PointerViolation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::Unknown,
+                        FactConfidence::Low,
+                        FactSource::LanguageAdapter,
+                        format!("GoAdapter: pointer violation in {}", self.function_name),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        if !self.ffi_safety.is_safe() {
+            facts.push(SemanticFact::new(
+                key,
+                SemanticKind::Unknown,
+                FactConfidence::Low,
+                FactSource::LanguageAdapter,
+                format!(
+                    "GoAdapter: FFI safety concern {:?} in {}",
+                    self.ffi_safety, self.function_name
+                ),
+            ));
+        }
+
+        facts
+    }
 }
 
 /// FFI safety assessment for Go functions.

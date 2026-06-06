@@ -38,6 +38,10 @@ pub mod tests;
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::Language;
 
+use crate::resource::semantic_tree::{
+    FactConfidence, FactSource, SemanticFact, SemanticKey, SemanticKind,
+};
+
 /// C++-specific semantic patterns derived from IR analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CppSemanticPattern {
@@ -134,6 +138,167 @@ pub struct CppFunctionAnalysis {
     pub is_extern_c: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: CppFFISafety,
+}
+
+impl CppFunctionAnalysis {
+    /// Convert C++ analysis results into SemanticFact records.
+    ///
+    /// Each detected CppSemanticPattern maps to one or more SemanticFacts
+    /// with appropriate SemanticKind, confidence, and evidence text.
+    /// The key is a Symbol keyed by the analyzed function name so
+    /// downstream consumers (IssueCandidateBuilder) can attach facts
+    /// as evidence to matching candidates.
+    pub fn to_semantic_facts(&self) -> Vec<SemanticFact> {
+        let key = SemanticKey::Symbol(self.function_name.clone());
+        let mut facts = Vec::new();
+
+        for pattern in &self.patterns {
+            match pattern {
+                CppSemanticPattern::Constructor => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: constructor detected in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::Destructor => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppDestructor,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: destructor detected in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::RaiiGuard => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: RAII guard in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::UniquePtrCreation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppUniquePtr,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: unique_ptr in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::SharedPtrCreation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppSharedPtr,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: shared_ptr in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::SmartPtrRelease => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: smart_ptr release in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::RefCountIncrement => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppSharedPtr,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: refcount increment in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::RefCountDecrement => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppSharedPtr,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: refcount decrement in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::MoveConstructor
+                | CppSemanticPattern::MoveAssignment
+                | CppSemanticPattern::StdMove => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::IntoRawTransfer,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: move semantics in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::TryBlock
+                | CppSemanticPattern::CatchBlock
+                | CppSemanticPattern::ThrowExpression => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppExceptionPath,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: exception handling in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::RawNew => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: raw new in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::RawDelete => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: raw delete in {}", self.function_name),
+                    ));
+                }
+                CppSemanticPattern::ExternC => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::DeclaredCrossBoundary,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("CppAdapter: extern \"C\" in {}", self.function_name),
+                    ));
+                }
+                // Patterns that don't produce SemanticFacts:
+                // VirtualCall, PureVirtual, VirtualDestructor, TemplateInstantiation,
+                // StlContainer, StlAlgorithm, MangledName, WeakPtrCreation,
+                // PlacementNew, CustomAllocator, Noexcept, Unknown
+                _ => {}
+            }
+        }
+
+        // Also emit an FFI safety fact if the assessment is concerning
+        if !self.ffi_safety.is_safe() {
+            facts.push(SemanticFact::new(
+                key,
+                SemanticKind::Unknown,
+                FactConfidence::Low,
+                FactSource::LanguageAdapter,
+                format!(
+                    "CppAdapter: FFI safety concern {:?} in {}",
+                    self.ffi_safety, self.function_name
+                ),
+            ));
+        }
+
+        facts
+    }
 }
 
 /// FFI safety assessment for C++ functions.

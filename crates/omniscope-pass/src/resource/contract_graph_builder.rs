@@ -292,7 +292,7 @@ impl Pass for ContractGraphBuilderPass {
                     function_name: fact.function_name.clone(),
                     caller_name: fact.caller_name.clone(),
                     family: Some(family),
-                    boundary_evidence: None,
+                    boundary_evidence: fact.boundary_evidence.clone(),
                 });
                 // Track this instance by (func_id, family) for matching with releases
                 acquire_instances
@@ -443,7 +443,7 @@ impl Pass for ContractGraphBuilderPass {
                     function_name: fact.function_name.clone(),
                     caller_name: fact.caller_name.clone(),
                     family: Some(family),
-                    boundary_evidence: None,
+                    boundary_evidence: fact.boundary_evidence.clone(),
                 });
             }
         }
@@ -1577,15 +1577,10 @@ fn detect_post_free_call_use(
     // Key indices built:
     //   - instance_has_acquire / instance_has_release: filter for instances
     //     that are both acquired and released (candidates for UAF)
-    //   - release_callers: instance_id → caller_name (for grouping by function)
-    //   - release_funcs: instance_id → release function name (e.g., "free",
-    //     "_ZdlPv") used to identify free calls in Phase 2
-    //   - acquire_edges_by_caller: caller_name → Vec<(instance_id, func_name)>
-    //     used to map a free call's argument register to the instance it frees
+    //   - release_func_by_instance: instance_id → release function name (e.g.,
+    //     "free", "_ZdlPv") used to identify free calls in Phase 2
     let mut instance_has_acquire: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut instance_has_release: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut release_callers: std::collections::HashMap<u64, String> =
-        std::collections::HashMap::new();
     // Track which release function each instance was freed by,
     // so Phase 2 can match free-call instructions to instances.
     let mut release_func_by_instance: std::collections::HashMap<u64, String> =
@@ -1600,7 +1595,6 @@ fn detect_post_free_call_use(
             Effect::Release { .. } | Effect::ConditionalRelease { .. } => {
                 if edge.source != 0 {
                     instance_has_release.insert(edge.source);
-                    release_callers.insert(edge.source, edge.caller_name.clone());
                     release_func_by_instance.insert(edge.source, edge.function_name.clone());
                 }
             }
@@ -1614,15 +1608,34 @@ fn detect_post_free_call_use(
         .copied()
         .collect();
 
-    // Map caller_name → instance_ids that are released
+    // Map caller_name → instance_ids that are released.
+    // Build from graph.edges in edge order (not from release_callers HashMap)
+    // so the Vec ordering matches the sequential order of release calls
+    // in the instruction stream — free_call_index depends on this.
     let mut released_instances_by_caller: std::collections::HashMap<String, Vec<u64>> =
         std::collections::HashMap::new();
-    for (&instance_id, caller) in &release_callers {
-        if released_instances.contains(&instance_id) {
-            released_instances_by_caller
-                .entry(caller.clone())
-                .or_default()
-                .push(instance_id);
+    for edge in &graph.edges {
+        match &edge.effect {
+            Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                if edge.source != 0
+                    && released_instances.contains(&edge.source) =>
+            {
+                released_instances_by_caller
+                    .entry(edge.caller_name.clone())
+                    .or_default()
+                    .push(edge.source);
+            }
+            Effect::CrossLanguageFree { .. }
+                // CrossLanguageFree is also a release — include it
+                if edge.source != 0
+                    && released_instances.contains(&edge.source) =>
+            {
+                released_instances_by_caller
+                    .entry(edge.caller_name.clone())
+                    .or_default()
+                    .push(edge.source);
+            }
+            _ => {}
         }
     }
 
@@ -1675,8 +1688,8 @@ fn detect_post_free_call_use(
 
         // Track how many free/release calls we've seen for this function,
         // so we can map each free call to the corresponding released instance.
-        // The released_ids are ordered by the sequence they appear in graph.edges,
-        // which matches the order free calls appear in the instruction stream.
+        // released_ids is built from graph.edges in edge order, which
+        // matches the order free calls appear in the instruction stream.
         let mut free_call_index: usize = 0;
 
         for inst in &body.instructions {

@@ -22,6 +22,9 @@ use omniscope_types::call_graph_types::{is_dangerous, is_libc, FunctionKind};
 use omniscope_types::config::Language;
 use std::collections::HashMap;
 
+use crate::analysis::boundary_seeds::{classify_seed, FfiSlice};
+use crate::analysis::ffi_boundary_detector::FFIBoundaryDetector;
+
 /// Pre-computed metadata for a single call instruction.
 ///
 /// Caches language detection, registry lookup, and classification
@@ -123,6 +126,25 @@ pub struct ModuleIndex {
     /// Cached FunctionKind classification for each unique function name.
     /// Avoids repeated classify_function() calls in call_graph and other passes.
     pub function_kind_cache: HashMap<String, FunctionKind>,
+}
+
+/// Check if a function signature involves pointer types (params or return).
+///
+/// Pointer types are identified by common IR patterns: `*`, `ptr`, `i8*`,
+/// `*mut`, `*const`, etc. This is a heuristic — full type resolution
+/// requires the data layout, but the string-level check is sufficient
+/// for boundary seed classification.
+fn has_pointer_in_signature(params: &[String], return_type: &str) -> bool {
+    let is_ptr_type = |ty: &str| -> bool {
+        let trimmed = ty.trim();
+        trimmed.contains('*')
+            || trimmed.contains("ptr")
+            || trimmed.starts_with("i8*")
+            || trimmed.starts_with("*mut")
+            || trimmed.starts_with("*const")
+            || trimmed.starts_with("opaque")
+    };
+    params.iter().any(|p| is_ptr_type(p)) || is_ptr_type(return_type)
 }
 
 /// Check if a function name is a language runtime intrinsic (cached version).
@@ -336,6 +358,126 @@ impl ModuleIndex {
                 .entry(caller_name.clone())
                 .or_default()
                 .push(idx);
+        }
+
+        // ── Phase 2: Boundary seed classification and FFI slice expansion ──
+        // Classify each call as a strong/weak/suppression seed using the
+        // boundary_seeds module, then expand the FFI slice from strong seeds.
+        // This populates the boundary_evidence and ffi_slice_info fields that
+        // were left as None in Phase 1.
+        {
+            let ffi_detector = FFIBoundaryDetector::with_detector(detector.clone());
+
+            // Classify each call site
+            let mut seed_results: HashMap<usize, crate::analysis::boundary_seeds::SeedResult> =
+                HashMap::with_capacity(call_metas.len());
+
+            for (idx, meta) in call_metas.iter().enumerate() {
+                // Determine pointer signature from function metadata.
+                // Look up the callee in declarations first, then functions.
+                let (has_ptr_param, is_callback, is_runtime_bridge, is_exported_wrapper) = {
+                    let callee = &meta.callee_name;
+                    let caller = &meta.caller_name;
+
+                    // Check pointer params/return from function metadata
+                    let callee_func = module
+                        .declarations
+                        .get(callee)
+                        .or_else(|| module.functions.get(callee));
+                    let caller_func = module.functions.get(caller);
+
+                    let ptr_in_callee = callee_func
+                        .map(|f| has_pointer_in_signature(&f.params, &f.return_type))
+                        .unwrap_or(false);
+                    let ptr_in_caller = caller_func
+                        .map(|f| has_pointer_in_signature(&f.params, &f.return_type))
+                        .unwrap_or(false);
+                    let has_ptr = ptr_in_callee || ptr_in_caller;
+
+                    let is_cb =
+                        crate::analysis::boundary_seeds::is_callback_registration_pattern(callee);
+                    let is_bridge =
+                        crate::analysis::boundary_seeds::is_runtime_bridge_function(callee);
+                    let is_export = crate::analysis::boundary_seeds::looks_like_exported_wrapper(
+                        caller,
+                        meta.caller_lang,
+                    );
+
+                    (has_ptr, is_cb, is_bridge, is_export)
+                };
+
+                let is_dangerous_libc = is_dangerous(&meta.callee_name);
+
+                let seed = classify_seed(
+                    &meta.caller_name,
+                    &meta.callee_name,
+                    meta.caller_lang,
+                    meta.callee_lang,
+                    meta.is_external,
+                    meta.is_llvm_intrinsic,
+                    meta.is_cpp_mangled,
+                    meta.is_cross_language,
+                    has_ptr_param,
+                    is_callback,
+                    &ffi_detector,
+                    false, // is_configured_boundary — not available at index build time
+                    is_runtime_bridge,
+                    is_dangerous_libc,
+                    is_exported_wrapper,
+                    false, // is_function_pointer_ffi — requires deeper analysis
+                );
+
+                // Only store non-suppression seeds for expansion
+                if seed.slice_info.is_in_slice() {
+                    seed_results.insert(idx, seed);
+                }
+            }
+
+            // Build resource pair closure: find acquire/release pairs
+            // in the same function for the FFI slice expansion.
+            let resource_pair_closure: Vec<(usize, usize)> =
+                build_resource_pair_closure(&call_metas);
+
+            // Expand FFI slice from strong seeds
+            let ffi_slice = FfiSlice::expand_from_seeds(
+                &seed_results,
+                &caller_calls,
+                &callee_callers,
+                &call_metas,
+                &resource_pair_closure,
+            );
+
+            // Write boundary evidence and FFI slice info back into call_metas
+            for (idx, meta) in call_metas.iter_mut().enumerate() {
+                // Boundary evidence from seed classification
+                if let Some(seed) = seed_results.get(&idx) {
+                    if !seed.evidence.is_empty() {
+                        meta.boundary_evidence = Some(seed.evidence.clone());
+                    } else {
+                        // Computed but no evidence: empty vec distinguishes
+                        // "computed and no boundary" from "not computed" (None)
+                        meta.boundary_evidence = Some(vec![]);
+                    }
+                } else {
+                    // Not a seed: computed but no boundary evidence
+                    meta.boundary_evidence = Some(vec![]);
+                }
+
+                // FFI slice info
+                if let Some(slice_info) = ffi_slice.call_info(idx) {
+                    meta.ffi_slice_info = Some(slice_info.clone());
+                } else {
+                    // Call is outside the FFI slice
+                    meta.ffi_slice_info = Some(FfiSliceInfo::outside());
+                }
+            }
+
+            tracing::debug!(
+                "ModuleIndex: boundary seeds classified {} calls, FFI slice contains {} functions / {} calls",
+                seed_results.len(),
+                ffi_slice.function_count(),
+                ffi_slice.call_count(),
+            );
         }
 
         // Pre-compute function metadata
@@ -566,6 +708,45 @@ impl ModuleIndex {
             .map(|meta| meta.is_runtime_internal)
             .unwrap_or(false)
     }
+}
+
+/// Build resource pair closure: find (acquire_call_idx, release_call_idx)
+/// pairs that share the same caller function and family.
+///
+/// This is needed for FFI slice expansion — if an acquire call is in the
+/// slice, its matching release should also be included (and vice versa).
+fn build_resource_pair_closure(call_metas: &[CachedCallMeta]) -> Vec<(usize, usize)> {
+    use std::collections::HashMap;
+
+    // Group calls by (caller_name, family_id)
+    let mut acquire_by_key: HashMap<(String, Option<omniscope_types::FamilyId>), Vec<usize>> =
+        HashMap::new();
+    let mut release_by_key: HashMap<(String, Option<omniscope_types::FamilyId>), Vec<usize>> =
+        HashMap::new();
+
+    for (idx, meta) in call_metas.iter().enumerate() {
+        let key = (meta.caller_name.clone(), meta.family_id);
+        if meta.is_alloc_call {
+            acquire_by_key.entry(key).or_default().push(idx);
+        } else if meta.is_dealloc_call {
+            release_by_key.entry(key).or_default().push(idx);
+        }
+    }
+
+    let mut pairs = Vec::new();
+
+    // Match acquires and releases in the same (caller, family) scope.
+    // Use FIFO matching: first acquire pairs with first release.
+    for (key, acquire_indices) in &acquire_by_key {
+        if let Some(release_indices) = release_by_key.get(key) {
+            let count = acquire_indices.len().min(release_indices.len());
+            for i in 0..count {
+                pairs.push((acquire_indices[i], release_indices[i]));
+            }
+        }
+    }
+
+    pairs
 }
 
 #[cfg(test)]

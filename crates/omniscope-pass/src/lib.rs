@@ -30,6 +30,7 @@ pub use resource::ir_behavior_summary_pass::IRBehaviorSummaryPass;
 pub use resource::issue_candidate_builder::IssueCandidateBuilderPass;
 pub use resource::issue_gate::{check_issue, check_issue_with_kinds, GateVerdict};
 pub use resource::issue_verifier::IssueVerifierPass;
+pub use resource::language_adapter_fact_pass::LanguageAdapterFactPass;
 pub use resource::ownership_solver::OwnershipSolverPass;
 pub use resource::path_sensitive_leak::{LeakDetectionPass, LeakPath, PathAnalysisResult};
 pub use resource::raw_fact_collector::RawFactCollectorPass;

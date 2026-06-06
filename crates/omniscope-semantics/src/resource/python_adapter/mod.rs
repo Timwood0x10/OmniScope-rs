@@ -31,6 +31,10 @@ mod tests;
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::FamilyId;
 
+use crate::resource::semantic_tree::{
+    FactConfidence, FactSource, SemanticFact, SemanticKey, SemanticKind,
+};
+
 /// Python semantic analysis result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PythonSemantic {
@@ -44,6 +48,54 @@ pub struct PythonSemantic {
     pub confidence: f32,
     /// Human-readable reasoning
     pub reasoning: String,
+}
+
+impl PythonSemantic {
+    /// Convert a PythonSemantic into a SemanticFact.
+    ///
+    /// Maps Python-specific patterns (refcount, GIL, reference types)
+    /// to SemanticKind variants for unified downstream consumption.
+    pub fn to_semantic_fact(&self) -> SemanticFact {
+        let key = SemanticKey::Symbol(self.function_name.clone());
+        let (kind, confidence) = match &self.pattern {
+            PythonPattern::NewReference => (SemanticKind::PythonOwnedRef, FactConfidence::High),
+            PythonPattern::BorrowedReference => {
+                (SemanticKind::PythonBorrowedRef, FactConfidence::High)
+            }
+            PythonPattern::StolenReference => {
+                (SemanticKind::PythonOwnedRef, FactConfidence::Medium)
+            }
+            PythonPattern::RefCountOp { is_increment, .. } => {
+                if *is_increment {
+                    (SemanticKind::PythonRefcountInc, FactConfidence::High)
+                } else {
+                    (SemanticKind::PythonRefcountDec, FactConfidence::High)
+                }
+            }
+            PythonPattern::GILAcquire | PythonPattern::GILRelease => {
+                (SemanticKind::PythonGilProtected, FactConfidence::Medium)
+            }
+            PythonPattern::ObjectDestruction => {
+                (SemanticKind::RaiiDropRelease, FactConfidence::Medium)
+            }
+            PythonPattern::MemoryAllocation => (SemanticKind::HeapProvenance, FactConfidence::High),
+            PythonPattern::MemoryDeallocation => {
+                (SemanticKind::RaiiDropRelease, FactConfidence::Medium)
+            }
+            PythonPattern::ExceptionHandling { .. } => {
+                (SemanticKind::CppExceptionPath, FactConfidence::Low)
+            }
+            PythonPattern::Unknown => (SemanticKind::Unknown, FactConfidence::Low),
+        };
+
+        SemanticFact::new(
+            key,
+            kind,
+            confidence,
+            FactSource::LanguageAdapter,
+            format!("PythonAdapter: {}", self.reasoning),
+        )
+    }
 }
 
 /// Python-specific semantic patterns.
@@ -167,6 +219,143 @@ pub struct PythonFunctionAnalysis {
     pub uses_borrowed_ref: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: PythonFFISafety,
+}
+
+impl PythonFunctionAnalysis {
+    /// Convert Python analysis results into SemanticFact records.
+    ///
+    /// Each detected PythonPattern maps to a SemanticFact with appropriate
+    /// SemanticKind, confidence, and evidence text.
+    pub fn to_semantic_facts(&self) -> Vec<SemanticFact> {
+        let key = SemanticKey::Symbol(self.function_name.clone());
+        let mut facts = Vec::new();
+
+        let all_patterns: Vec<&PythonPattern> = self
+            .name_patterns
+            .iter()
+            .chain(self.body_patterns.iter())
+            .collect();
+
+        for pattern in &all_patterns {
+            match pattern {
+                PythonPattern::NewReference => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::PythonOwnedRef,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("PythonAdapter: new reference in {}", self.function_name),
+                    ));
+                }
+                PythonPattern::BorrowedReference => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::PythonBorrowedRef,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "PythonAdapter: borrowed reference in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                PythonPattern::StolenReference => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::PythonOwnedRef,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("PythonAdapter: stolen reference in {}", self.function_name),
+                    ));
+                }
+                PythonPattern::RefCountOp { is_increment, .. } => {
+                    let kind = if *is_increment {
+                        SemanticKind::PythonRefcountInc
+                    } else {
+                        SemanticKind::PythonRefcountDec
+                    };
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        kind,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("PythonAdapter: refcount op in {}", self.function_name),
+                    ));
+                }
+                PythonPattern::GILAcquire | PythonPattern::GILRelease => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::PythonGilProtected,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!("PythonAdapter: GIL management in {}", self.function_name),
+                    ));
+                }
+                PythonPattern::ObjectDestruction => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "PythonAdapter: object destruction in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                PythonPattern::MemoryAllocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("PythonAdapter: memory allocation in {}", self.function_name),
+                    ));
+                }
+                PythonPattern::MemoryDeallocation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RaiiDropRelease,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "PythonAdapter: memory deallocation in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                PythonPattern::ExceptionHandling { .. } => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::CppExceptionPath,
+                        FactConfidence::Low,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "PythonAdapter: exception handling in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                PythonPattern::Unknown => {}
+            }
+        }
+
+        // Emit FFI safety concern if assessment is unsafe
+        if !self.ffi_safety.is_safe() {
+            facts.push(SemanticFact::new(
+                key,
+                SemanticKind::Unknown,
+                FactConfidence::Low,
+                FactSource::LanguageAdapter,
+                format!(
+                    "PythonAdapter: FFI safety concern {:?} in {}",
+                    self.ffi_safety, self.function_name
+                ),
+            ));
+        }
+
+        facts
+    }
 }
 
 /// Python adapter for semantic analysis.
