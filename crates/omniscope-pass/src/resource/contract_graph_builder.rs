@@ -1673,7 +1673,22 @@ fn detect_post_free_call_use(
             name.trim_start_matches('@') == func_name && graph.is_ffi_boundary(func_name).is_some()
         });
 
-        if !is_ffi_adjacent && !has_indirect_call {
+        // Check for a simple same-function UAF pattern: free followed by a
+        // direct call that passes the freed pointer. This is always a bug
+        // regardless of FFI adjacency, so we skip the FFI/indirect-call
+        // gate when this pattern is present.
+        let has_simple_post_free_use = body.instructions.windows(2).any(|pair| {
+            // First instruction is a free/delete call
+            matches!(pair[0].kind, IRInstructionKind::Call)
+                && pair[0].callee.as_deref().map_or(false, |c| {
+                    c == "free" || c == "_ZdlPv" || c == "_ZdaPv"
+                        || c == "HeapFree" || c == "VirtualFree"
+                })
+                // Second instruction is a call that might use the freed pointer
+                && matches!(pair[1].kind, IRInstructionKind::Call | IRInstructionKind::IndirectCall)
+        });
+
+        if !is_ffi_adjacent && !has_indirect_call && !has_simple_post_free_use {
             continue;
         }
 

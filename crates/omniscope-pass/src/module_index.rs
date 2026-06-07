@@ -15,12 +15,12 @@
 //! - **Single allocation**: The index is built once during pipeline
 //!   initialization and lives for the entire analysis run.
 
+use indexmap::IndexMap;
 use omniscope_ir::IRModule;
 use omniscope_semantics::{FamilyRegistry, LanguageDetector};
 use omniscope_types::boundary::{BoundaryEvidence, FfiSliceInfo};
 use omniscope_types::call_graph_types::{is_dangerous, is_libc, FunctionKind};
 use omniscope_types::config::Language;
-use std::collections::HashMap;
 
 use crate::analysis::boundary_seeds::{classify_seed, FfiSlice};
 use crate::analysis::ffi_boundary_detector::FFIBoundaryDetector;
@@ -103,11 +103,13 @@ pub struct ModuleIndex {
     /// Pre-computed metadata for each call instruction (same order as `module.calls`).
     pub call_metas: Vec<CachedCallMeta>,
     /// Pre-computed metadata for each function (keyed by trimmed name).
-    pub function_metas: HashMap<String, CachedFunctionMeta>,
+    /// Uses IndexMap for deterministic iteration order, ensuring pipeline
+    /// output is stable across runs (fixes non-deterministic issue classification).
+    pub function_metas: IndexMap<String, CachedFunctionMeta>,
     /// Callee name -> list of call indices that call this callee.
-    pub callee_callers: HashMap<String, Vec<usize>>,
+    pub callee_callers: IndexMap<String, Vec<usize>>,
     /// Caller name -> list of call indices in this function.
-    pub caller_calls: HashMap<String, Vec<usize>>,
+    pub caller_calls: IndexMap<String, Vec<usize>>,
     /// Function names that have FFI boundary calls (as caller).
     pub ffi_caller_functions: Vec<String>,
     /// Function names that call allocation functions.
@@ -122,10 +124,10 @@ pub struct ModuleIndex {
     pub language_detector: LanguageDetector,
     /// Cached SyscallSemantic classification for each unique callee name.
     /// Avoids repeated string matching in downstream passes.
-    pub syscall_cache: HashMap<String, omniscope_semantics::SyscallSemantic>,
+    pub syscall_cache: std::collections::HashMap<String, omniscope_semantics::SyscallSemantic>,
     /// Cached FunctionKind classification for each unique function name.
     /// Avoids repeated classify_function() calls in call_graph and other passes.
-    pub function_kind_cache: HashMap<String, FunctionKind>,
+    pub function_kind_cache: std::collections::HashMap<String, FunctionKind>,
     /// Whether the entire module uses a single known language.
     ///
     /// When true, there are no cross-language FFI boundaries, so
@@ -276,8 +278,8 @@ impl ModuleIndex {
 
         // Pre-compute call metadata
         let mut call_metas: Vec<CachedCallMeta> = Vec::with_capacity(total_call_count);
-        let mut callee_callers: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut caller_calls: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut callee_callers: IndexMap<String, Vec<usize>> = IndexMap::new();
+        let mut caller_calls: IndexMap<String, Vec<usize>> = IndexMap::new();
 
         // Collect known languages during Phase 1 for early single-language detection
         let mut known_languages: std::collections::HashSet<Language> =
@@ -406,8 +408,8 @@ impl ModuleIndex {
             let ffi_detector = FFIBoundaryDetector::with_detector(detector.clone());
 
             // Classify each call site
-            let mut seed_results: HashMap<usize, crate::analysis::boundary_seeds::SeedResult> =
-                HashMap::with_capacity(call_metas.len());
+            let mut seed_results: IndexMap<usize, crate::analysis::boundary_seeds::SeedResult> =
+                IndexMap::with_capacity(call_metas.len());
 
             for (idx, meta) in call_metas.iter().enumerate() {
                 // Determine pointer signature from function metadata.
@@ -518,7 +520,7 @@ impl ModuleIndex {
         }
 
         // Pre-compute function metadata
-        let mut function_metas: HashMap<String, CachedFunctionMeta> = HashMap::new();
+        let mut function_metas: IndexMap<String, CachedFunctionMeta> = IndexMap::new();
 
         // Defined functions
         for (name, func) in &module.functions {
@@ -621,8 +623,10 @@ impl ModuleIndex {
         // Pre-compute SyscallSemantic classification for each unique callee name.
         // This avoids repeated string matching in downstream passes (semantic tree,
         // FFI boundary detection, etc.).
-        let mut syscall_cache: HashMap<String, omniscope_semantics::SyscallSemantic> =
-            HashMap::new();
+        let mut syscall_cache: std::collections::HashMap<
+            String,
+            omniscope_semantics::SyscallSemantic,
+        > = std::collections::HashMap::new();
         for call_meta in &call_metas {
             syscall_cache
                 .entry(call_meta.callee_name.clone())
@@ -633,7 +637,8 @@ impl ModuleIndex {
 
         // Pre-compute FunctionKind classification for each unique function name.
         // This avoids repeated classify_function() calls in call_graph and other passes.
-        let mut function_kind_cache: HashMap<String, FunctionKind> = HashMap::new();
+        let mut function_kind_cache: std::collections::HashMap<String, FunctionKind> =
+            std::collections::HashMap::new();
         for (name, meta) in &function_metas {
             let kind = classify_function_cached(name, meta.is_declaration, meta.language);
             function_kind_cache.insert(name.clone(), kind);
@@ -775,13 +780,12 @@ impl ModuleIndex {
 /// This is needed for FFI slice expansion — if an acquire call is in the
 /// slice, its matching release should also be included (and vice versa).
 fn build_resource_pair_closure(call_metas: &[CachedCallMeta]) -> Vec<(usize, usize)> {
-    use std::collections::HashMap;
-
     // Group calls by (caller_name, family_id)
-    let mut acquire_by_key: HashMap<(String, Option<omniscope_types::FamilyId>), Vec<usize>> =
-        HashMap::new();
-    let mut release_by_key: HashMap<(String, Option<omniscope_types::FamilyId>), Vec<usize>> =
-        HashMap::new();
+    // Use IndexMap for deterministic iteration order.
+    let mut acquire_by_key: IndexMap<(String, Option<omniscope_types::FamilyId>), Vec<usize>> =
+        IndexMap::new();
+    let mut release_by_key: IndexMap<(String, Option<omniscope_types::FamilyId>), Vec<usize>> =
+        IndexMap::new();
 
     for (idx, meta) in call_metas.iter().enumerate() {
         let key = (meta.caller_name.clone(), meta.family_id);

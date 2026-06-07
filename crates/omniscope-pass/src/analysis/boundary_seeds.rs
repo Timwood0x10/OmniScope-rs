@@ -441,9 +441,9 @@ impl FfiSlice {
     /// * `resource_pair_closure` - Optional pairs of (acquire_call_idx, release_call_idx)
     ///   for resource-pair closure.
     pub fn expand_from_seeds(
-        seed_results: &std::collections::HashMap<usize, SeedResult>,
-        caller_calls: &std::collections::HashMap<String, Vec<usize>>,
-        callee_callers: &std::collections::HashMap<String, Vec<usize>>,
+        seed_results: &indexmap::IndexMap<usize, SeedResult>,
+        caller_calls: &indexmap::IndexMap<String, Vec<usize>>,
+        callee_callers: &indexmap::IndexMap<String, Vec<usize>>,
         call_metas: &[crate::module_index::CachedCallMeta],
         resource_pair_closure: &[(usize, usize)],
     ) -> Self {
@@ -598,7 +598,7 @@ impl FfiSlice {
 fn expand_forward(
     function: &str,
     current_depth: u32,
-    caller_calls: &std::collections::HashMap<String, Vec<usize>>,
+    caller_calls: &indexmap::IndexMap<String, Vec<usize>>,
     call_metas: &[crate::module_index::CachedCallMeta],
     slice: &mut FfiSlice,
     visited: &mut std::collections::HashSet<(String, u32)>,
@@ -655,7 +655,7 @@ fn expand_forward(
 fn expand_backward(
     function: &str,
     current_depth: u32,
-    callee_callers: &std::collections::HashMap<String, Vec<usize>>,
+    callee_callers: &indexmap::IndexMap<String, Vec<usize>>,
     call_metas: &[crate::module_index::CachedCallMeta],
     slice: &mut FfiSlice,
     visited: &mut std::collections::HashSet<(String, u32)>,
@@ -983,18 +983,18 @@ mod tests {
             },
         ];
 
-        let mut caller_calls = std::collections::HashMap::new();
+        let mut caller_calls = indexmap::IndexMap::new();
         caller_calls.insert("A".to_string(), vec![0]);
         caller_calls.insert("B".to_string(), vec![1]);
         caller_calls.insert("C_rust".to_string(), vec![2]);
 
-        let mut callee_callers = std::collections::HashMap::new();
+        let mut callee_callers = indexmap::IndexMap::new();
         callee_callers.insert("B".to_string(), vec![0]);
         callee_callers.insert("C_rust".to_string(), vec![1]);
         callee_callers.insert("D".to_string(), vec![2]);
 
         // Seed: call 1 (B -> C_rust) is strong
-        let mut seed_results = std::collections::HashMap::new();
+        let mut seed_results = indexmap::IndexMap::new();
         seed_results.insert(
             1,
             SeedResult {

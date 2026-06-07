@@ -85,6 +85,16 @@ impl FamilyId {
     /// resource type is unknown and should not be assumed to be heap memory.
     pub const UNKNOWN: FamilyId = FamilyId(22);
 
+    /// Windows heap family: HeapAlloc/HeapFree/HeapReAlloc.
+    /// These use Windows heap handles (PROCESS_HEAP), distinct from C malloc.
+    /// Mixing HeapAlloc+free or malloc+HeapFree is a real mismatch.
+    pub const WIN32_HEAP: FamilyId = FamilyId(23);
+
+    /// Windows virtual memory family: VirtualAlloc/VirtualFree.
+    /// These allocate pages directly from the OS, not from any heap.
+    /// Mixing VirtualAlloc+free is a serious mismatch.
+    pub const WIN32_VIRTUAL: FamilyId = FamilyId(24);
+
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 
@@ -137,6 +147,8 @@ impl FamilyId {
             FamilyId::RUST_RAW_OWNERSHIP => "RUST_RAW_OWNERSHIP",
             FamilyId::FILE_DESCRIPTOR => "FILE_DESCRIPTOR",
             FamilyId::UNKNOWN => "UNKNOWN",
+            FamilyId::WIN32_HEAP => "WIN32_HEAP",
+            FamilyId::WIN32_VIRTUAL => "WIN32_VIRTUAL",
             _ => "unknown",
         }
     }
@@ -459,6 +471,30 @@ pub static FAMILY_UNKNOWN: ResourceFamily = ResourceFamily {
     compatible_releases: &[],
 };
 
+/// Windows heap family: HeapAlloc/HeapFree/HeapReAlloc.
+/// These use Windows heap handles (PROCESS_HEAP), distinct from C malloc.
+/// Evidence: Win32 API — HeapAlloc requires a heap handle from GetProcessHeap().
+/// Not compatible with C_HEAP: HeapAlloc+free is a real mismatch.
+pub static FAMILY_WIN32_HEAP: ResourceFamily = ResourceFamily {
+    id: FamilyId::WIN32_HEAP,
+    name: "win32_heap",
+    kind: FamilyKind::HandleBased,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[],
+};
+
+/// Windows virtual memory family: VirtualAlloc/VirtualFree.
+/// These allocate pages directly from the OS, not from any heap.
+/// Evidence: Win32 API — VirtualAlloc reserves/commits pages.
+/// Not compatible with C_HEAP: VirtualAlloc+free is a serious mismatch.
+pub static FAMILY_WIN32_VIRTUAL: ResourceFamily = ResourceFamily {
+    id: FamilyId::WIN32_VIRTUAL,
+    name: "win32_virtual",
+    kind: FamilyKind::HandleBased,
+    lifetime: LifetimeDomain::ExplicitFree,
+    compatible_releases: &[],
+};
+
 /// Serializable form of `ResourceFamily` for serde round-tripping.
 /// `ResourceFamily` uses `&'static str` and `&'static [FamilyId]` which
 /// cannot derive `Deserialize`, so we convert to this owned form.
@@ -527,6 +563,9 @@ pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_FILE_DESCRIPTOR,
     // Unknown family (placeholder for FFI returns)
     &FAMILY_UNKNOWN,
+    // Windows platform families
+    &FAMILY_WIN32_HEAP,
+    &FAMILY_WIN32_VIRTUAL,
 ];
 
 #[cfg(test)]
@@ -537,8 +576,8 @@ mod tests {
     fn test_builtin_families_count() {
         assert_eq!(
             BUILTIN_FAMILIES.len(),
-            22,
-            "Must have exactly 22 built-in families (including FILE_DESCRIPTOR and UNKNOWN)"
+            24,
+            "Must have exactly 24 built-in families (including WIN32_HEAP and WIN32_VIRTUAL)"
         );
     }
 

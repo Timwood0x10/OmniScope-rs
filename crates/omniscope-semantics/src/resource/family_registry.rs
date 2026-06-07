@@ -237,6 +237,11 @@ impl FamilyRegistry {
         self.add_csharp_com_symbols();
         // File descriptor family (OS resource handles)
         self.add_file_descriptor_symbols();
+        // Windows platform families
+        self.add_win32_heap_symbols();
+        self.add_win32_virtual_symbols();
+        // Zig allocator (additional symbols)
+        self.add_zig_symbols();
     }
 
     fn add_c_heap_symbols(&mut self) {
@@ -612,6 +617,49 @@ impl FamilyRegistry {
         // close() closes a file descriptor, releasing the OS resource.
         self.add_symbol("close", f, SymbolEffect::Release, lang);
     }
+
+    /// Register Windows heap family symbols (HeapAlloc/HeapFree/HeapReAlloc).
+    /// Evidence: Win32 API — HeapAlloc requires a heap handle, distinct from C malloc.
+    /// HeapAlloc+free is a cross-family mismatch (WIN32_HEAP vs C_HEAP).
+    fn add_win32_heap_symbols(&mut self) {
+        let f = FamilyId::WIN32_HEAP;
+        let lang = LanguageHint::C;
+        self.add_symbol("HeapAlloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("HeapFree", f, SymbolEffect::Release, lang);
+        self.add_symbol("HeapReAlloc", f, SymbolEffect::Acquire, lang);
+        // LocalAlloc/LocalFree use the same WIN32_HEAP family
+        self.add_symbol("LocalAlloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("LocalFree", f, SymbolEffect::Release, lang);
+        self.add_symbol("LocalReAlloc", f, SymbolEffect::Acquire, lang);
+        // GlobalAlloc/GlobalFree also use WIN32_HEAP family
+        self.add_symbol("GlobalAlloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("GlobalFree", f, SymbolEffect::Release, lang);
+        self.add_symbol("GlobalReAlloc", f, SymbolEffect::Acquire, lang);
+        // GetProcessHeap is a Retain (returns existing handle, no allocation)
+        self.add_symbol("GetProcessHeap", f, SymbolEffect::Retain, lang);
+    }
+
+    /// Register Windows virtual memory family symbols (VirtualAlloc/VirtualFree).
+    /// Evidence: Win32 API — VirtualAlloc reserves/commits pages directly from OS.
+    /// VirtualAlloc+free is a cross-family mismatch (WIN32_VIRTUAL vs C_HEAP).
+    fn add_win32_virtual_symbols(&mut self) {
+        let f = FamilyId::WIN32_VIRTUAL;
+        let lang = LanguageHint::C;
+        self.add_symbol("VirtualAlloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("VirtualAllocEx", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("VirtualFree", f, SymbolEffect::Release, lang);
+        self.add_symbol("VirtualFreeEx", f, SymbolEffect::Release, lang);
+    }
+
+    /// Register additional Zig allocator symbols.
+    /// allocInternal is the general-purpose Zig allocator entry point
+    /// that dispatches through the vtable — belongs to ZIG_ALLOCATOR family.
+    fn add_zig_symbols(&mut self) {
+        let f = FamilyId::ZIG_ALLOCATOR;
+        let lang = LanguageHint::Zig;
+        self.add_symbol("allocInternal", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("freeInternal", f, SymbolEffect::Release, lang);
+    }
 }
 
 impl Default for FamilyRegistry {
@@ -633,8 +681,8 @@ mod tests {
         );
         assert_eq!(
             registry.family_count(),
-            22,
-            "Must have 22 built-in families (including FILE_DESCRIPTOR and UNKNOWN)"
+            24,
+            "Must have 24 built-in families (including WIN32_HEAP, WIN32_VIRTUAL)"
         );
     }
 
