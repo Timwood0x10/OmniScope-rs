@@ -15,6 +15,7 @@
 //! - `rust_drop_tracker` — Tracks Rust Drop operations for RAII cleanup detection.
 
 pub mod contract_graph_builder;
+pub(crate) mod evidence_bundle;
 pub mod ffi_return_check;
 pub mod ir_behavior_summary_pass;
 pub mod issue_candidate_builder;
@@ -22,6 +23,7 @@ pub mod issue_gate;
 pub mod issue_verifier;
 pub mod language_adapter_fact_pass;
 pub mod may_alias;
+pub mod noreturn;
 pub mod ownership_solver;
 pub mod path_sensitive_leak;
 pub mod raw_fact_collector;

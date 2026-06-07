@@ -13,13 +13,15 @@
 //! - Produces ConditionalLeak candidates for the IssueVerifier
 
 use omniscope_core::{Confidence, IssueCandidate, IssueKind, Result};
-use omniscope_semantics::SummaryStore;
+use omniscope_ir::{IRInstructionKind, IRModule};
+use omniscope_semantics::{SemanticKind, SummaryStore};
 use omniscope_types::{
     Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict,
 };
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
+use crate::resource::noreturn::is_noreturn_callee;
 use crate::resource::ownership_solver::PointerStateMap;
 use crate::resource::raw_fact_collector::RawResourceFact;
 
@@ -117,6 +119,10 @@ impl Pass for LeakDetectionPass {
         let summary_store: Option<SummaryStore> = ctx.get("summary_store");
         let summary_store = summary_store.unwrap_or_default();
 
+        // Retrieve SRT resolutions for runtime-managed resource suppression.
+        let srt_resolutions: Option<std::collections::HashMap<String, Vec<SemanticKind>>> =
+            ctx.get("srt_resolutions");
+
         let Some(graph) = graph else {
             let result = PassResult::new(self.name())
                 .with_nodes(0)
@@ -171,6 +177,17 @@ impl Pass for LeakDetectionPass {
         // re-using `graph` past this point.
         let _ = graph;
 
+        // ── Call-path reachability analysis ──
+        // Build a lightweight call graph from the stored edges and
+        // compute which release sites are reachable from each alloc's
+        // caller function. Release sites in unreachable functions are
+        // excluded from the "paired" count — they cannot free the
+        // allocation because the call chain never reaches them.
+        let call_graph_edges: Option<Vec<omniscope_types::call_graph_types::CallGraphEdge>> =
+            ctx.get("call_graph_edges");
+        let call_adj: std::collections::HashMap<String, Vec<String>> =
+            build_call_adjacency(call_graph_edges.as_deref());
+
         // Retrieve pointer states from ownership solver (reserved for future
         // path-sensitive analysis when per-allocation filtering is implemented).
         let _pointer_states: Option<PointerStateMap> = ctx.get("pointer_states");
@@ -188,18 +205,67 @@ impl Pass for LeakDetectionPass {
             .filter(|f| f.is_acquire && !f.caller_name.is_empty())
             .collect();
 
+        // ── OOM-termination analysis ──
+        // Precompute per-function termination classification from the IR.
+        // Functions that only exit via abort/unreachable cannot "leak" —
+        // the program terminates before any leak matters.
+        // Functions with noreturn exit paths may have OOM handling that
+        // explains "unreleased" allocations on those paths.
+        let ir_module = ctx.get_ir_module();
+        let mut func_termination: std::collections::HashMap<String, FunctionTermination> =
+            std::collections::HashMap::new();
+        let mut func_has_noreturn: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        if let Some(module) = ir_module {
+            // Pre-classify only functions that appear as alloc callers.
+            for alloc in &alloc_sites {
+                if !func_termination.contains_key(&alloc.caller_name) {
+                    let term = classify_function_termination(module, &alloc.caller_name);
+                    func_termination.insert(alloc.caller_name.clone(), term);
+                    if function_has_noreturn_exit(module, &alloc.caller_name) {
+                        func_has_noreturn.insert(alloc.caller_name.clone());
+                    }
+                }
+            }
+        }
+
         for alloc in &alloc_sites {
             let family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
             let (alloc_count, release_count) = count_alloc_release_in_facts(&raw_facts, alloc);
             let has_release_in_summaries = check_release_in_summaries(&summary_store, alloc);
 
+            // ── Call-path reachability filter ──
+            // Compute which functions are reachable from the alloc's caller
+            // via the call graph. Only release sites in reachable functions
+            // are considered "paired" — unreachable releases cannot free
+            // this allocation.
+            //
+            // When no call graph is available (empty adjacency), we fall back
+            // to the conservative behaviour of considering all release sites
+            // reachable, preserving the original quantity-based pairing.
+            let has_call_graph = !call_adj.is_empty();
+            let reachable = if has_call_graph {
+                reachable_functions(&alloc.caller_name, &call_adj)
+            } else {
+                // No call graph — conservatively mark all release site
+                // functions as reachable to preserve legacy behaviour.
+                let mut r = std::collections::HashSet::new();
+                if let Some(sites) = release_sites_by_family.get(&family) {
+                    for s in sites {
+                        r.insert(s.clone());
+                    }
+                }
+                r.insert(alloc.caller_name.clone());
+                r
+            };
+
             // Determine leak type using counting-based logic.
             // NOTE: Path-sensitive analysis via collect_exit_states is disabled
             // because it collects ALL pointer states for a function, not just
             // the specific allocation, causing false positives when multiple
             // allocations exist in the same function.
-            let leak_type = if has_release_in_summaries {
+            let mut leak_type = if has_release_in_summaries {
                 LeakType::Safe
             } else if alloc_count > 0 && release_count == 0 {
                 LeakType::Definite
@@ -211,6 +277,84 @@ impl Pass for LeakDetectionPass {
                 LeakType::NeedsModel
             };
 
+            // ── OOM-termination downgrade ──
+            // If the alloc's caller function only exits via abort/unreachable
+            // (no normal `ret`), then no allocation in that function can leak
+            // — the program always terminates before reaching a leak exit.
+            // Downgrade to Safe entirely.
+            //
+            // If the caller has normal returns BUT also has noreturn exit
+            // paths (e.g. OOM check → abort), the "unreleased" allocation
+            // may be on the abort path. Downgrade DefiniteLeak to
+            // ConditionalLeak so it's not treated as a confirmed leak.
+            if leak_type == LeakType::Definite || leak_type == LeakType::Conditional {
+                let termination = func_termination.get(&alloc.caller_name);
+                match termination {
+                    Some(FunctionTermination::OnlyAborts) => {
+                        tracing::info!(
+                            target: "omniscope_pass::path_sensitive_leak::run",
+                            "suppressed leak on family {:?} in '{}': function exits only via abort/unreachable (OOM path)",
+                            family,
+                            alloc.caller_name
+                        );
+                        leak_type = LeakType::Safe;
+                    }
+                    Some(FunctionTermination::HasNormalReturn)
+                        if leak_type == LeakType::Definite
+                            && func_has_noreturn.contains(&alloc.caller_name) =>
+                    {
+                        // Function has both normal returns and noreturn paths.
+                        // The allocation might be on the abort path (e.g. OOM
+                        // handler). Downgrade from Definite to Conditional.
+                        tracing::info!(
+                            target: "omniscope_pass::path_sensitive_leak::run",
+                            "downgraded DefiniteLeak to Conditional on family {:?} in '{}': function has OOM/abort exit paths",
+                            family,
+                            alloc.caller_name
+                        );
+                        leak_type = LeakType::Conditional;
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Caller-owned effect downgrade ──
+            // If the alloc's caller function has a `ReturnsOwned`,
+            // `OutParamOwnedOnSuccess`, or `OwnershipEscape` effect for the
+            // same family, the allocation's ownership transfers to the caller
+            // — it is not leaked, just not freed locally. Downgrade to Safe
+            // for DefiniteLeak, or leave ConditionalLeak as-is (the caller
+            // might or might not free).
+            if (leak_type == LeakType::Definite || leak_type == LeakType::Conditional)
+                && caller_returns_owned_resource(&summary_store, alloc)
+            {
+                tracing::info!(
+                    target: "omniscope_pass::path_sensitive_leak::run",
+                    "suppressed leak on family {:?} in '{}': caller function transfers ownership to caller (ReturnsOwned/OutParamOwned/OwnershipEscape)",
+                    family,
+                    alloc.caller_name
+                );
+                leak_type = LeakType::Safe;
+            }
+
+            // ── Runtime-managed resource downgrade ──
+            // If the SRT resolutions mark the alloc's caller or the alloc
+            // function itself as `RuntimeManagedResource` or `StoredToRuntime`,
+            // the allocation is managed by a runtime (arena, zone, GC) — not a
+            // local leak. Similarly, `StoredToOwner` means the allocation is
+            // owned by a container. Downgrade to Safe.
+            if (leak_type == LeakType::Definite || leak_type == LeakType::Conditional)
+                && is_runtime_managed(&srt_resolutions, alloc)
+            {
+                tracing::info!(
+                    target: "omniscope_pass::path_sensitive_leak::run",
+                    "suppressed leak on family {:?} in '{}': resource is runtime-managed (arena/zone/GC) or stored to owner",
+                    family,
+                    alloc.caller_name
+                );
+                leak_type = LeakType::Safe;
+            }
+
             match leak_type {
                 LeakType::Definite => {
                     // Blocker #3 fix: if the contract graph shows the alloc
@@ -219,20 +363,39 @@ impl Pass for LeakDetectionPass {
                     // The existing per-function counting missed cross-function
                     // pairings (e.g. allocator wrapper allocates, sibling
                     // wrapper frees) and produced 100% FPs on `bun_alloc.ll`.
+                    //
+                    // Path-sensitive enhancement: only consider release sites
+                    // that are in functions reachable from the alloc's caller
+                    // via the call graph. Unreachable release sites cannot
+                    // free this allocation.
+                    let reachable_release_sites: Vec<String> = release_sites_by_family
+                        .get(&family)
+                        .map(|sites| {
+                            sites
+                                .iter()
+                                .filter(|s| reachable.contains(s.as_str()))
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
                     let (candidate_kind, downgrade_with_sites): (
                         IssueCandidateKind,
-                        Option<&Vec<String>>,
-                    ) = match release_sites_by_family.get(&family) {
-                        Some(sites) if !sites.is_empty() => {
-                            tracing::info!(
-                                target: "omniscope_pass::path_sensitive_leak::run",
-                                "downgraded leak on family {:?}: {} release sites paired",
-                                family,
-                                sites.len()
-                            );
-                            (IssueCandidateKind::ConditionalLeak, Some(sites))
-                        }
-                        _ => (IssueCandidateKind::DefiniteLeak, None),
+                        Option<Vec<String>>,
+                    ) = if !reachable_release_sites.is_empty() {
+                        tracing::info!(
+                            target: "omniscope_pass::path_sensitive_leak::run",
+                            "downgraded leak on family {:?}: {} reachable release sites (of {} total)",
+                            family,
+                            reachable_release_sites.len(),
+                            release_sites_by_family.get(&family).map(|s| s.len()).unwrap_or(0)
+                        );
+                        (
+                            IssueCandidateKind::ConditionalLeak,
+                            Some(reachable_release_sites),
+                        )
+                    } else {
+                        (IssueCandidateKind::DefiniteLeak, None)
                     };
                     let _issue_kind = IssueKind::DefiniteLeak;
                     let _confidence = if alloc_count > 1 {
@@ -307,75 +470,78 @@ impl Pass for LeakDetectionPass {
                     // ConditionalLeak is noise — suppress the emission.
                     // We compare per-family alloc-fact counts against the
                     // number of distinct release sites the graph knows about.
-                    // The release-site count is a lower bound on actual
-                    // release calls (sites are deduped by enclosing
-                    // function), so `sites >= alloc_facts` is a strong
-                    // "every alloc has a sibling release" signal.
-                    if let Some(sites) = release_sites_by_family.get(&family) {
-                        if !sites.is_empty() {
-                            let family_alloc_count = raw_facts
+                    //
+                    // Path-sensitive enhancement: only count release sites
+                    // that are reachable from the alloc's caller via the
+                    // call graph. Unreachable releases cannot free this
+                    // allocation, so they should not suppress the leak.
+                    let reachable_sites: Vec<String> = release_sites_by_family
+                        .get(&family)
+                        .map(|sites| {
+                            sites
                                 .iter()
-                                .filter(|f| f.is_acquire && f.family == Some(family))
-                                .count();
-                            if sites.len() >= family_alloc_count {
-                                tracing::info!(
-                                    target: "omniscope_pass::path_sensitive_leak::run",
-                                    "downgraded ConditionalLeak to Diagnostic on family {:?}: {} release sites paired (>= {} acquires)",
-                                    family,
-                                    sites.len(),
-                                    family_alloc_count
-                                );
-                                // Instead of silently swallowing the candidate,
-                                // emit it as Diagnostic so it stays visible for
-                                // auditing but does not surface as a reportable
-                                // issue. This avoids losing real TP leaks when
-                                // the release-site count is a false "fully paired"
-                                // signal (e.g., N allocs + N frees but one free
-                                // targets a different allocation).
-                                let mut candidate = IssueCandidate::new(
-                                    candidate_id,
-                                    IssueCandidateKind::ConditionalLeak,
-                                    family,
-                                    &alloc.function_name,
-                                );
-                                candidate_id += 1;
-                                candidate = candidate.with_alloc_contract(alloc.contract);
-                                if !alloc.caller_name.is_empty() {
-                                    candidate = candidate.with_alloc_caller(&alloc.caller_name);
-                                }
-                                candidate.verdict = Some(VerifierVerdict::Diagnostic);
-                                candidate = candidate.with_description(format!(
-                                    "allocation in '{}' of family {} paired with {} release site(s) at [{}] (downgraded: not a confirmed leak)",
-                                    alloc.function_name,
-                                    family.display_name(),
-                                    sites.len(),
-                                    sites.join(", ")
-                                ));
-                                candidate.add_evidence(
-                                    Evidence::new(
-                                        EvidenceKind::PathStateRefinement,
-                                        format!(
-                                            "paired-release downgrade: {} release site(s) for family {} at [{}]",
-                                            sites.len(),
-                                            family.display_name(),
-                                            sites.join(", ")
-                                        ),
-                                    )
-                                    .with_family(family),
-                                );
-                                leak_candidates.push(candidate);
-                                continue;
-                            } else {
-                                tracing::info!(
-                                    target: "omniscope_pass::path_sensitive_leak::run",
-                                    "downgraded leak on family {:?}: {} release sites paired (some acquires unpaired)",
-                                    family,
-                                    sites.len()
-                                );
-                                // Fall through — still emit ConditionalLeak,
-                                // but annotate the evidence with the partial
-                                // pairing so reviewers can audit.
+                                .filter(|s| reachable.contains(s.as_str()))
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    if !reachable_sites.is_empty() {
+                        let family_alloc_count = raw_facts
+                            .iter()
+                            .filter(|f| f.is_acquire && f.family == Some(family))
+                            .count();
+                        if reachable_sites.len() >= family_alloc_count {
+                            tracing::info!(
+                                target: "omniscope_pass::path_sensitive_leak::run",
+                                "downgraded ConditionalLeak to Diagnostic on family {:?}: {} reachable release sites (>= {} acquires)",
+                                family,
+                                reachable_sites.len(),
+                                family_alloc_count
+                            );
+                            let mut candidate = IssueCandidate::new(
+                                candidate_id,
+                                IssueCandidateKind::ConditionalLeak,
+                                family,
+                                &alloc.function_name,
+                            );
+                            candidate_id += 1;
+                            candidate = candidate.with_alloc_contract(alloc.contract);
+                            if !alloc.caller_name.is_empty() {
+                                candidate = candidate.with_alloc_caller(&alloc.caller_name);
                             }
+                            candidate.verdict = Some(VerifierVerdict::Diagnostic);
+                            candidate = candidate.with_description(format!(
+                                "allocation in '{}' of family {} paired with {} reachable release site(s) at [{}] (downgraded: not a confirmed leak)",
+                                alloc.function_name,
+                                family.display_name(),
+                                reachable_sites.len(),
+                                reachable_sites.join(", ")
+                            ));
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::PathStateRefinement,
+                                    format!(
+                                        "paired-release downgrade: {} reachable release site(s) for family {} at [{}]",
+                                        reachable_sites.len(),
+                                        family.display_name(),
+                                        reachable_sites.join(", ")
+                                    ),
+                                )
+                                .with_family(family),
+                            );
+                            leak_candidates.push(candidate);
+                            continue;
+                        } else {
+                            tracing::info!(
+                                target: "omniscope_pass::path_sensitive_leak::run",
+                                "downgraded leak on family {:?}: {} reachable release sites (some acquires unpaired)",
+                                family,
+                                reachable_sites.len()
+                            );
+                            // Fall through — still emit ConditionalLeak,
+                            // but annotate the evidence with the partial
+                            // pairing so reviewers can audit.
                         }
                     }
 
@@ -389,14 +555,14 @@ impl Pass for LeakDetectionPass {
                     if !alloc.caller_name.is_empty() {
                         candidate = candidate.with_alloc_caller(&alloc.caller_name);
                     }
-                    let partial_sites = release_sites_by_family.get(&family);
-                    let partial_note = match partial_sites {
-                        Some(sites) if !sites.is_empty() => format!(
-                            "; partial graph pairing: {} release site(s) at [{}]",
-                            sites.len(),
-                            sites.join(", ")
-                        ),
-                        _ => String::new(),
+                    let partial_note = if !reachable_sites.is_empty() {
+                        format!(
+                            "; partial graph pairing: {} reachable release site(s) at [{}]",
+                            reachable_sites.len(),
+                            reachable_sites.join(", ")
+                        )
+                    } else {
+                        String::new()
                     };
                     candidate = candidate.with_description(format!(
                         "allocation in '{}' of family {} has partial same-family release ({} alloc, {} release) on analyzed paths (conditional leak){}",
@@ -656,6 +822,77 @@ fn check_release_in_summaries(store: &SummaryStore, alloc: &RawResourceFact) -> 
     false
 }
 
+/// Checks if the alloc's caller function transfers ownership of the
+/// allocated resource to its caller (via `ReturnsOwned`, `OutParamOwnedOnSuccess`,
+/// or `OwnershipEscape` effect).
+///
+/// This is the FP#4 suppression: allocations in factory functions, `into_raw`
+/// wrappers, and out-param initializers are *intentionally* not freed locally —
+/// the caller takes ownership. Without this check, such allocations would be
+/// flagged as leaks.
+fn caller_returns_owned_resource(store: &SummaryStore, alloc: &RawResourceFact) -> bool {
+    let alloc_family = alloc.family.unwrap_or(FamilyId::C_HEAP);
+
+    // Look up the caller function's summary by function ID first,
+    // then fall back to name-based lookup.
+    let summary_by_id = store.get(alloc.function);
+    let summary_by_name = if summary_by_id.is_none() {
+        store.find_by_name(&alloc.caller_name)
+    } else {
+        None
+    };
+
+    let check_effects = |summary: &omniscope_semantics::ResourceSummary| -> bool {
+        summary.effects.iter().any(|effect| match effect {
+            Effect::ReturnsOwned { family } if *family == alloc_family => true,
+            Effect::OutParamOwnedOnSuccess { family, .. } if *family == alloc_family => true,
+            Effect::OwnershipEscape { family, .. } if *family == alloc_family => true,
+            _ => false,
+        })
+    };
+
+    if let Some(summary) = summary_by_id {
+        return check_effects(summary);
+    }
+    if let Some(summary) = summary_by_name {
+        return check_effects(summary);
+    }
+
+    false
+}
+
+/// Checks if the alloc's function or caller is marked as runtime-managed
+/// in the SRT (Semantic Resolution Tree) resolutions.
+///
+/// If a function is tagged with `RuntimeManagedResource`, `StoredToRuntime`,
+/// or `StoredToOwner`, allocations within it are not local leaks — the
+/// runtime/arena/owner is responsible for cleanup.
+fn is_runtime_managed(
+    srt_resolutions: &Option<std::collections::HashMap<String, Vec<SemanticKind>>>,
+    alloc: &RawResourceFact,
+) -> bool {
+    let Some(resolutions) = srt_resolutions else {
+        return false;
+    };
+
+    let managed_kinds = [
+        SemanticKind::RuntimeManagedResource,
+        SemanticKind::StoredToRuntime,
+        SemanticKind::StoredToOwner,
+    ];
+
+    // Check both the alloc function name and the caller name.
+    for name in [&alloc.function_name, &alloc.caller_name] {
+        if let Some(kinds) = resolutions.get(name) {
+            if kinds.iter().any(|k| managed_kinds.contains(k)) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Represents a path through the CFG from an allocation to an exit.
 ///
 /// Used internally for path slicing. In a full implementation,
@@ -748,6 +985,143 @@ impl PathAnalysisResult {
             (self.leaking_paths as f32 / self.total_paths as f32) * 0.7
         }
     }
+}
+
+/// Classification of a function's exit behavior.
+///
+/// Used by the OOM-termination FP suppression: allocations in functions
+/// that only exit via abort/unreachable are not leaks — the program
+/// terminates before any leak can occur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FunctionTermination {
+    /// Function has at least one normal `ret` exit (may also have abort paths).
+    HasNormalReturn,
+    /// Function exits *only* via abort/unreachable/noreturn calls — no `ret`.
+    OnlyAborts,
+    /// Cannot determine (no function body available).
+    Unknown,
+}
+
+/// Classify a function's termination behavior by examining its IR body.
+///
+/// A function is `OnlyAborts` if it contains **no** `ret` instruction and
+/// at least one noreturn indicator (`unreachable` instruction, or a call to
+/// a known noreturn function like `abort`, `__cxa_throw`, `out_of_memory`,
+/// `core::panicking::*`, etc.).
+///
+/// A function is `HasNormalReturn` if it has at least one `ret` instruction.
+/// Even if the function also has abort paths (e.g. OOM handling), the
+/// presence of a normal return means some paths *do* continue execution,
+/// so allocations on those paths could potentially leak.
+fn classify_function_termination(module: &IRModule, caller_name: &str) -> FunctionTermination {
+    let body = match module.function_bodies.get(caller_name) {
+        Some(b) => b,
+        None => return FunctionTermination::Unknown,
+    };
+
+    let has_ret = body
+        .instructions
+        .iter()
+        .any(|i| i.kind == IRInstructionKind::Ret);
+
+    if has_ret {
+        return FunctionTermination::HasNormalReturn;
+    }
+
+    // No `ret` — check if there are noreturn exits.
+    let has_noreturn = body.instructions.iter().any(|i| {
+        match i.kind {
+            IRInstructionKind::Other => {
+                // The text parser maps `unreachable` to Other kind.
+                i.raw_text.trim().starts_with("unreachable")
+            }
+            IRInstructionKind::Call => {
+                // Check if the callee is a known noreturn function.
+                i.callee.as_deref().is_some_and(is_noreturn_callee)
+            }
+            _ => false,
+        }
+    });
+
+    if has_noreturn {
+        FunctionTermination::OnlyAborts
+    } else {
+        // No ret and no noreturn — probably a declaration-only function
+        // with no body. Treat as unknown.
+        FunctionTermination::Unknown
+    }
+}
+
+/// Check if a function contains an OOM-termination pattern.
+///
+/// An OOM-termination pattern is a sequence where a null-check on an
+/// allocation result leads to a noreturn call (abort/panic/OOM handler).
+/// This means the "leak" on the OOM path is not a real leak — the
+/// program terminates before any leak matters.
+///
+/// Returns `true` if the function has at least one noreturn exit path
+/// (abort/panic/unreachable), regardless of whether it also has normal
+/// return paths. This is used to downgrade `DefiniteLeak` to
+/// `ConditionalLeak` when the "unreleased" allocs might be on abort paths.
+fn function_has_noreturn_exit(module: &IRModule, caller_name: &str) -> bool {
+    let body = match module.function_bodies.get(caller_name) {
+        Some(b) => b,
+        None => return false,
+    };
+
+    body.instructions.iter().any(|i| match i.kind {
+        IRInstructionKind::Other => i.raw_text.trim().starts_with("unreachable"),
+        IRInstructionKind::Call => i.callee.as_deref().is_some_and(is_noreturn_callee),
+        _ => false,
+    })
+}
+
+/// Build a caller → [callees] adjacency list from the call graph edges.
+/// If no edges are available, returns an empty map (all releases are
+/// conservatively considered reachable).
+fn build_call_adjacency(
+    edges: Option<&[omniscope_types::call_graph_types::CallGraphEdge]>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    let Some(edges) = edges else {
+        return std::collections::HashMap::new();
+    };
+    let mut adj: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for edge in edges {
+        adj.entry(edge.caller.clone())
+            .or_default()
+            .push(edge.callee.clone());
+    }
+    adj
+}
+
+/// Compute the set of function names reachable from `start` via the call
+/// graph adjacency list. Uses BFS with a max depth to avoid infinite
+/// recursion on cycles.
+fn reachable_functions(
+    start: &str,
+    adj: &std::collections::HashMap<String, Vec<String>>,
+) -> std::collections::HashSet<String> {
+    let mut reachable = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((start.to_string(), 0u32));
+    reachable.insert(start.to_string());
+
+    const MAX_DEPTH: u32 = 16;
+
+    while let Some((func, depth)) = queue.pop_front() {
+        if depth >= MAX_DEPTH {
+            continue;
+        }
+        if let Some(callees) = adj.get(&func) {
+            for callee in callees {
+                if reachable.insert(callee.clone()) {
+                    queue.push_back((callee.clone(), depth + 1));
+                }
+            }
+        }
+    }
+
+    reachable
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ use omniscope_ir::ir_model::{
     IRBasicBlock, IRDeclaration, IRFunction, IRGlobalVariable, IRInstructionModel, IRModuleModel,
 };
 use omniscope_ir::parser::IRModule;
+#[cfg(feature = "llvm-backend")]
 use tracing::debug;
 
 // ═══════════════════════════════════════════════════════════════════════════

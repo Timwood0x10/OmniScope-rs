@@ -29,6 +29,7 @@ use omniscope_types::{
     EvidenceKind, FamilyId, IssueCandidateKind, OmniScopeConfig, VerifierVerdict,
 };
 
+use super::evidence_bundle::EvidenceBundle;
 use super::structural_inference_pass::is_runtime_internal;
 use crate::analysis::NoiseReduction;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -138,6 +139,17 @@ impl Pass for IssueVerifierPass {
                     .map(|m| m.function_bodies.keys().cloned().collect())
                     .unwrap_or_default()
             });
+        let declared_functions: std::collections::HashSet<String> = ctx
+            .get_ir_module()
+            .map(|m| m.declarations.keys().cloned().collect())
+            .unwrap_or_else(|| {
+                ctx.get_ref::<omniscope_ir::IRModule>("ir_module")
+                    .map(|m| m.declarations.keys().cloned().collect())
+                    .unwrap_or_default()
+            });
+        let module_index = ctx
+            .get_ref::<crate::module_index::ModuleIndex>("module_index")
+            .cloned();
 
         // ── Single-language shortcut ──
         // If the module has only one language, skip FFI-specific issue types
@@ -153,8 +165,52 @@ impl Pass for IssueVerifierPass {
         let mut noise_suppressed: usize = 0;
         let mut ffi_gate_suppressed: usize = 0;
         let mut single_lang_suppressed: usize = 0;
+        let mut semantic_suppressed: usize = 0;
 
         for mut candidate in candidates {
+            let evidence_bundle = EvidenceBundle::from_candidate(
+                &candidate,
+                memory_graph.as_ref(),
+                srt_resolutions.as_ref(),
+            );
+            let has_semantic_suppression = evidence_bundle.has_semantic_suppression();
+            tracing::trace!(
+                candidate_id = evidence_bundle.candidate_id,
+                resource_id = ?evidence_bundle.resource_id,
+                has_boundary_evidence = evidence_bundle.has_boundary_evidence,
+                has_same_resource_evidence = evidence_bundle.has_same_resource_evidence,
+                has_reachable_release = evidence_bundle.has_reachable_release,
+                has_alias_rejection = evidence_bundle.has_alias_rejection,
+                has_semantic_suppression,
+                "built resource evidence bundle"
+            );
+
+            if is_declaration_only_candidate(
+                &candidate,
+                &user_defined_functions,
+                &declared_functions,
+            ) {
+                semantic_suppressed += 1;
+                candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                candidate.description.get_or_insert_with(|| {
+                    "issue candidate refers only to extern declaration(s), not an executable code path".to_string()
+                });
+                verified.push(candidate);
+                continue;
+            }
+
+            if let Some(ref index) = module_index {
+                if is_same_language_allocator_wrapper_noise(&candidate, index) {
+                    semantic_suppressed += 1;
+                    candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                    candidate.description.get_or_insert_with(|| {
+                        "allocator wrapper stays within one language/runtime family; no cross-language ownership violation".to_string()
+                    });
+                    verified.push(candidate);
+                    continue;
+                }
+            }
+
             // ── Single-language filter ──
             // For single-language modules, skip FFI-specific issue types.
             // Only keep generic bug types that don't require cross-language
@@ -481,6 +537,7 @@ impl Pass for IssueVerifierPass {
         result.add_stat("noise_suppressed", noise_suppressed);
         result.add_stat("ffi_gate_suppressed", ffi_gate_suppressed);
         result.add_stat("single_lang_suppressed", single_lang_suppressed);
+        result.add_stat("semantic_suppressed", semantic_suppressed);
 
         Ok(result)
     }
@@ -721,6 +778,89 @@ fn is_ffi_specific_issue(candidate: &IssueCandidate) -> bool {
             | IssueCandidateKind::CallbackEscape
             | IssueCandidateKind::BorrowEscape
     )
+}
+
+/// Checks whether an issue candidate refers only to extern declaration
+/// functions, not executable code paths.
+///
+/// This check is intentionally limited to `DoubleRelease`.
+/// Cross-family and cross-language candidates can be backed by acquire/release
+/// flow evidence even when the release callee is an extern declaration.
+fn is_declaration_only_candidate(
+    candidate: &IssueCandidate,
+    user_defined_functions: &std::collections::HashSet<String>,
+    declared_functions: &std::collections::HashSet<String>,
+) -> bool {
+    if !matches!(candidate.kind, IssueCandidateKind::DoubleRelease) {
+        return false;
+    }
+
+    let names = [
+        Some(candidate.alloc_function.as_str()),
+        candidate.release_function.as_deref(),
+    ];
+    names.into_iter().flatten().any(|name| {
+        let trimmed = name.trim_start_matches('@');
+        declared_functions.contains(trimmed) && !user_defined_functions.contains(trimmed)
+    }) && candidate
+        .alloc_caller
+        .as_deref()
+        .is_none_or(|c| !user_defined_functions.contains(c.trim_start_matches('@')))
+        && candidate
+            .release_caller
+            .as_deref()
+            .is_none_or(|c| !user_defined_functions.contains(c.trim_start_matches('@')))
+}
+
+fn is_same_language_allocator_wrapper_noise(
+    candidate: &IssueCandidate,
+    index: &crate::module_index::ModuleIndex,
+) -> bool {
+    if !matches!(
+        candidate.kind,
+        IssueCandidateKind::CrossFamilyFree
+            | IssueCandidateKind::CrossLanguageFree
+            | IssueCandidateKind::OwnershipEscapeLeak
+            | IssueCandidateKind::DoubleRelease
+            | IssueCandidateKind::UseAfterFree
+    ) {
+        return false;
+    }
+
+    let alloc_caller = candidate
+        .alloc_caller
+        .as_deref()
+        .unwrap_or(&candidate.alloc_function);
+    let release_caller = candidate.release_caller.as_deref().unwrap_or_else(|| {
+        candidate
+            .release_function
+            .as_deref()
+            .unwrap_or(&candidate.alloc_function)
+    });
+    let alloc_func = candidate.alloc_function.as_str();
+    let release_func = candidate.release_function.as_deref().unwrap_or(alloc_func);
+
+    let alloc_caller_meta = index.function_meta(alloc_caller);
+    let release_caller_meta = index.function_meta(release_caller);
+    let alloc_func_meta = index.function_meta(alloc_func);
+    let release_func_meta = index.function_meta(release_func);
+
+    let caller_langs: Vec<_> = [alloc_caller_meta, release_caller_meta]
+        .into_iter()
+        .flatten()
+        .filter(|m| m.language != omniscope_types::Language::Unknown)
+        .map(|m| m.language)
+        .collect();
+    if caller_langs.is_empty() || !caller_langs.iter().all(|l| *l == caller_langs[0]) {
+        return false;
+    }
+
+    let alloc_side_wrapper = alloc_func_meta
+        .is_some_and(|m| !m.is_declaration && (m.calls_alloc || m.is_runtime_internal));
+    let release_side_wrapper = release_func_meta
+        .is_some_and(|m| !m.is_declaration && (m.calls_dealloc || m.is_runtime_internal));
+
+    alloc_side_wrapper && release_side_wrapper
 }
 
 /// Verifies a single issue candidate and returns a verdict.
@@ -1307,6 +1447,221 @@ mod tests {
             verdict,
             VerifierVerdict::ConfirmedIssue,
             "Double release should be confirmed issue"
+        );
+    }
+
+    #[test]
+    fn test_declaration_only_double_release_suppressed() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            "free",
+        )
+        .with_release_function("free");
+
+        let user_defined = std::collections::HashSet::new();
+        let declared = std::collections::HashSet::from(["free".to_string()]);
+
+        assert!(
+            is_declaration_only_candidate(&candidate, &user_defined, &declared),
+            "extern declaration-only free must not become an executable double-free"
+        );
+    }
+
+    #[test]
+    fn test_user_defined_free_not_declaration_only_suppressed() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            "free",
+        )
+        .with_release_function("free")
+        .with_alloc_caller("double_free_demo")
+        .with_release_caller("double_free_demo");
+
+        let user_defined =
+            std::collections::HashSet::from(["free".to_string(), "double_free_demo".to_string()]);
+        let declared = std::collections::HashSet::from(["free".to_string()]);
+
+        assert!(
+            !is_declaration_only_candidate(&candidate, &user_defined, &declared),
+            "a user-defined wrapper or user caller must remain eligible for double-free reporting"
+        );
+    }
+
+    #[test]
+    fn test_declaration_only_double_release_not_suppressed_with_user_release_caller() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            "free",
+        )
+        .with_release_function("free")
+        .with_release_caller("double_free_demo");
+
+        let user_defined = std::collections::HashSet::from(["double_free_demo".to_string()]);
+        let declared = std::collections::HashSet::from(["free".to_string()]);
+
+        assert!(
+            !is_declaration_only_candidate(&candidate, &user_defined, &declared),
+            "extern free called from user code can still represent a real double-free"
+        );
+    }
+
+    #[test]
+    fn test_declaration_only_gate_ignores_non_double_release() {
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossFamilyFree,
+            FamilyId::C_HEAP,
+            "free",
+        )
+        .with_release_function("free");
+
+        let user_defined = std::collections::HashSet::new();
+        let declared = std::collections::HashSet::from(["free".to_string()]);
+
+        assert!(
+            !is_declaration_only_candidate(&candidate, &user_defined, &declared),
+            "declaration-only suppressor must not affect non-double-release candidates"
+        );
+    }
+
+    #[test]
+    fn test_same_language_allocator_wrapper_noise_suppressed() {
+        use omniscope_ir::IRModule;
+
+        let ir = r#"
+            declare ptr @mi_malloc(i64)
+            declare void @mi_free(ptr)
+
+            define ptr @_RNvCs_allocator_wrapper(i64 %n) {
+                %p = call ptr @mi_malloc(i64 %n)
+                ret ptr %p
+            }
+
+            define void @_RNvCs_allocator_release(ptr %p) {
+                call void @mi_free(ptr %p)
+                ret void
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        let index = crate::module_index::ModuleIndex::build(&module);
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossLanguageFree,
+            FamilyId::RUST_GLOBAL,
+            "_RNvCs_allocator_wrapper",
+        )
+        .with_release_family(FamilyId::MIMALLOC)
+        .with_release_function("_RNvCs_allocator_release")
+        .with_alloc_caller("_RNvCs_allocator_wrapper")
+        .with_release_caller("_RNvCs_allocator_release");
+
+        assert!(
+            is_same_language_allocator_wrapper_noise(&candidate, &index),
+            "same-language allocator wrappers around C allocator thunks are design intent, not cross-language free"
+        );
+    }
+
+    #[test]
+    fn test_cross_language_wrapper_not_suppressed() {
+        use omniscope_ir::IRModule;
+
+        let ir = r#"
+            declare ptr @malloc(i64)
+            declare void @_RNvCs_rust_dealloc(ptr)
+
+            define ptr @c_alloc(i64 %n) {
+                %p = call ptr @malloc(i64 %n)
+                ret ptr %p
+            }
+
+            define void @_RNvCs_release(ptr %p) {
+                call void @_RNvCs_rust_dealloc(ptr %p)
+                ret void
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        let index = crate::module_index::ModuleIndex::build(&module);
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossLanguageFree,
+            FamilyId::C_HEAP,
+            "c_alloc",
+        )
+        .with_release_family(FamilyId::RUST_GLOBAL)
+        .with_release_function("_RNvCs_rust_dealloc")
+        .with_alloc_caller("c_alloc")
+        .with_release_caller("_RNvCs_release");
+
+        assert!(
+            !is_same_language_allocator_wrapper_noise(&candidate, &index),
+            "genuine C-to-Rust release path must not be suppressed by wrapper-noise gate"
+        );
+    }
+
+    #[test]
+    fn test_same_language_wrapper_gate_does_not_suppress_plain_cross_family_without_wrapper() {
+        use omniscope_ir::IRModule;
+
+        let ir = r#"
+            declare ptr @malloc(i64)
+            declare void @_ZdaPv(ptr)
+
+            define void @plain_user(ptr %p) {
+                call void @_ZdaPv(ptr %p)
+                ret void
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        let index = crate::module_index::ModuleIndex::build(&module);
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::CrossFamilyFree,
+            FamilyId::C_HEAP,
+            "malloc",
+        )
+        .with_release_family(FamilyId::CPP_NEW_ARRAY)
+        .with_release_function("_ZdaPv")
+        .with_release_caller("plain_user");
+
+        assert!(
+            !is_same_language_allocator_wrapper_noise(&candidate, &index),
+            "plain cross-family C heap -> C++ delete without allocator-wrapper evidence must not be suppressed"
+        );
+    }
+
+    #[test]
+    fn test_same_language_wrapper_gate_ignores_double_release() {
+        use omniscope_ir::IRModule;
+
+        let ir = r#"
+            declare void @mi_free(ptr)
+
+            define void @_RNvCs_allocator_release(ptr %p) {
+                call void @mi_free(ptr %p)
+                ret void
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        let index = crate::module_index::ModuleIndex::build(&module);
+        let candidate = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::MIMALLOC,
+            "_RNvCs_allocator_release",
+        )
+        .with_release_function("_RNvCs_allocator_release")
+        .with_alloc_caller("_RNvCs_allocator_release")
+        .with_release_caller("_RNvCs_allocator_release");
+
+        assert!(
+            !is_same_language_allocator_wrapper_noise(&candidate, &index),
+            "same-language wrapper gate must not suppress generic double-release candidates"
         );
     }
 

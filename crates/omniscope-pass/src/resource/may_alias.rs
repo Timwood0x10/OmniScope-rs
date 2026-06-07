@@ -18,6 +18,11 @@
 //! - **Same SSA root**: both arguments trace through `bitcast` /
 //!   `getelementptr 0` / `load %p` chains to the same SSA value or the
 //!   same `@global` symbol.
+//! - **Store→Load alias**: when one argument originates from a `load`
+//!   whose source location was written by a `store` whose value
+//!   originates from the same root as the other argument, the two
+//!   sites may alias. This handles the common `store %p, %slot;
+//!   %q = load %slot; free(%p); free(%q)` pattern.
 //! - **Same allocator origin**: both originate from the same allocator
 //!   call instruction within the same function.
 //! - **Phi-merged alloc roots**: both arguments are operands of the same
@@ -109,37 +114,39 @@ pub fn may_alias(a: &FreeSite, b: &FreeSite, ir_module: Option<&IRModule>) -> Ma
         }
     }
 
-    // Walk SSA roots through bitcast / GEP-0 / load chains and compare.
+    // Walk SSA roots through bitcast / GEP-0 / load / store→load chains
+    // and compare using root SETS (not single roots), because store→load
+    // alias may expand a single load into multiple possible roots.
     let Some(body) = ir_module.and_then(|m| m.function_bodies.get(&a.caller)) else {
         // No body available — be permissive only on exact-arg matches above.
         return MayAliasResult::NotAlias;
     };
 
     let defs = build_def_map(body);
+    let store_map = build_store_map(body);
 
-    let root_a = a
+    let roots_a = a
         .arg_register
         .as_deref()
-        .map(|r| trace_root(r, &defs, &mut HashSet::new()));
-    let root_b = b
+        .map(|r| trace_root_set(r, &defs, &store_map, &mut HashSet::new()))
+        .unwrap_or_default();
+    let roots_b = b
         .arg_register
         .as_deref()
-        .map(|r| trace_root(r, &defs, &mut HashSet::new()));
+        .map(|r| trace_root_set(r, &defs, &store_map, &mut HashSet::new()))
+        .unwrap_or_default();
 
-    match (root_a, root_b) {
-        (Some(ref ra), Some(ref rb)) if ra == rb => MayAliasResult::MayAlias,
-        (Some(ref ra), Some(ref rb)) => {
-            // Phi-merged alloc roots: both roots are phis whose inputs all
-            // come from the same allocator return value. If the union of
-            // their phi-source roots overlaps, treat as may-alias.
-            if phi_inputs_overlap(ra, rb, &defs) {
-                MayAliasResult::MayAlias
-            } else {
-                MayAliasResult::NotAlias
-            }
-        }
-        _ => MayAliasResult::NotAlias,
+    // If the two root sets share any element, they may alias.
+    if !roots_a.is_empty() && !roots_b.is_empty() && roots_a.intersection(&roots_b).count() > 0 {
+        return MayAliasResult::MayAlias;
     }
+
+    // Phi-merged alloc roots: expand phi inputs and check overlap.
+    if phi_root_sets_overlap(&roots_a, &roots_b, &defs) {
+        return MayAliasResult::MayAlias;
+    }
+
+    MayAliasResult::NotAlias
 }
 
 /// Build a `dest_register -> instruction` map for the function body.
@@ -157,6 +164,169 @@ fn build_def_map(
         }
     }
     map
+}
+
+/// Build a `location_register → [stored_value_registers]` map for the
+/// function body.
+///
+/// For each `store %val, ptr %loc` instruction, records that `%val` was
+/// written to `%loc`. This enables `trace_root_set` to expand a `load`
+/// from `%loc` into all values that were ever stored to that location.
+fn build_store_map(body: &omniscope_ir::FunctionBody) -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for inst in &body.instructions {
+        if inst.kind != IRInstructionKind::Store {
+            continue;
+        }
+        // `store ptr %val, ptr %loc` — extract destination (location) and value.
+        if let Some(loc) = extract_store_location(&inst.raw_text) {
+            if let Some(val) = extract_store_value(&inst.raw_text) {
+                map.entry(loc).or_default().push(val);
+            }
+        }
+    }
+    map
+}
+
+/// Extract the location (destination) register from a store instruction.
+/// `store ptr %val, ptr %loc` → returns `%loc`.
+fn extract_store_location(raw: &str) -> Option<String> {
+    // Store syntax: `store <ty> <val>, ptr <loc>`
+    // After the comma, find the last register token.
+    let comma_pos = raw.find(',')?;
+    let after_comma = &raw[comma_pos + 1..];
+    for tok in after_comma.split_whitespace() {
+        let t = tok.trim_end_matches(',');
+        if t.starts_with('%') || t.starts_with('@') {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+/// Extract the value (source) register from a store instruction.
+/// `store ptr %val, ptr %loc` → returns `%val`.
+fn extract_store_value(raw: &str) -> Option<String> {
+    // Store syntax: `store <ty> <val>, ptr <loc>`
+    // Between `store` and the comma, find the register.
+    let comma_pos = raw.find(',')?;
+    let before_comma = &raw[..comma_pos];
+    for tok in before_comma.split_whitespace() {
+        let t = tok.trim_end_matches(',');
+        if t.starts_with('%') || t.starts_with('@') {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+/// Trace all possible SSA roots for a register, expanding `load` through
+/// store→load alias chains. Returns a set of canonical root registers.
+///
+/// Unlike `trace_root` (which returns a single root), this function
+/// produces a *set* of possible roots: when a `load` is encountered,
+/// the store map is consulted and all values ever stored to that location
+/// are recursively traced.
+fn trace_root_set(
+    reg: &str,
+    defs: &HashMap<String, &omniscope_ir::IRInstruction>,
+    store_map: &HashMap<String, Vec<String>>,
+    visited: &mut HashSet<String>,
+) -> HashSet<String> {
+    let mut roots = HashSet::new();
+    let mut stack = vec![reg.to_string()];
+
+    while let Some(current) = stack.pop() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        let Some(inst) = defs.get(&current) else {
+            // No defining instruction — this IS a root.
+            roots.insert(current);
+            continue;
+        };
+        match inst.kind {
+            IRInstructionKind::Conversion => {
+                if let Some(src) = extract_first_register(&inst.raw_text) {
+                    stack.push(src);
+                } else {
+                    roots.insert(current);
+                }
+            }
+            IRInstructionKind::GetElementPtr => {
+                if let Some(src) = extract_first_register(&inst.raw_text) {
+                    stack.push(src);
+                } else {
+                    roots.insert(current);
+                }
+            }
+            IRInstructionKind::Load => {
+                // `%p = load ptr, ptr %slot` — the root is the slot address,
+                // BUT we also expand through store→load alias: if any value
+                // was stored to `%slot`, those values are also possible roots.
+                if let Some(src) = extract_first_register(&inst.raw_text) {
+                    // The slot itself is a root candidate (preserving old
+                    // behavior: two loads from the same slot do alias).
+                    roots.insert(src.clone());
+
+                    // Expand through store→load: trace all values that were
+                    // ever stored to this location.
+                    if let Some(stored_vals) = store_map.get(&src) {
+                        for val in stored_vals {
+                            stack.push(val.clone());
+                        }
+                    }
+                } else {
+                    roots.insert(current);
+                }
+            }
+            IRInstructionKind::Phi => {
+                // Expand phi inputs and trace each one.
+                let phi_roots = phi_source_roots(&current, defs);
+                if phi_roots.is_empty() {
+                    roots.insert(current);
+                } else {
+                    for r in phi_roots {
+                        stack.push(r);
+                    }
+                }
+            }
+            _ => {
+                roots.insert(current);
+            }
+        }
+    }
+
+    roots
+}
+
+/// Check if two root sets overlap when expanded through phi inputs.
+///
+/// For each root in both sets, if it is a phi instruction, expand its
+/// source roots. Then check if the expanded sets intersect.
+fn phi_root_sets_overlap(
+    roots_a: &HashSet<String>,
+    roots_b: &HashSet<String>,
+    defs: &HashMap<String, &omniscope_ir::IRInstruction>,
+) -> bool {
+    let expanded_a = expand_phi_roots(roots_a, defs);
+    let expanded_b = expand_phi_roots(roots_b, defs);
+    expanded_a.intersection(&expanded_b).count() > 0
+}
+
+/// Expand a set of roots through phi source inputs.
+fn expand_phi_roots(
+    roots: &HashSet<String>,
+    defs: &HashMap<String, &omniscope_ir::IRInstruction>,
+) -> HashSet<String> {
+    let mut expanded = roots.clone();
+    for r in roots {
+        let phi_roots = phi_source_roots(r, defs);
+        if !phi_roots.is_empty() {
+            expanded.extend(phi_roots);
+        }
+    }
+    expanded
 }
 
 /// Trace an SSA register back through `bitcast`, `getelementptr ..., 0`,
@@ -213,21 +383,6 @@ fn trace_root(
             _ => return current,
         }
     }
-}
-
-/// Returns true when two SSA roots are both phi instructions whose
-/// source-roots overlap. Captures the "phi-merged alloc roots" rule.
-fn phi_inputs_overlap(
-    ra: &str,
-    rb: &str,
-    defs: &HashMap<String, &omniscope_ir::IRInstruction>,
-) -> bool {
-    let inputs_a = phi_source_roots(ra, defs);
-    let inputs_b = phi_source_roots(rb, defs);
-    if inputs_a.is_empty() || inputs_b.is_empty() {
-        return false;
-    }
-    inputs_a.iter().any(|s| inputs_b.contains(s))
 }
 
 /// Collect the canonical roots of all incoming values to a phi
@@ -568,6 +723,137 @@ mod tests {
             sites[1].arg_register.as_deref(),
             Some("%y"),
             "second free site arg should be %y"
+        );
+    }
+
+    #[test]
+    fn test_may_alias_store_load_same_slot() {
+        // Objective: store→load alias — two frees where one argument
+        // comes from a load and the other is the stored value.
+        // foo:
+        //   %1 = call ptr @malloc(i64 8)
+        //   store ptr %1, ptr %slot
+        //   %2 = load ptr, ptr %slot
+        //   call void @free(ptr %1)
+        //   call void @free(ptr %2)  ; %2 loaded from slot where %1 was stored
+        let mut module = IRModule::new();
+        let body = FunctionBody {
+            name: "foo".to_string(),
+            instructions: vec![
+                {
+                    let mut i = make_call("malloc", "%1 = call ptr @malloc(i64 8)");
+                    i.dest = Some("%1".to_string());
+                    i
+                },
+                make_inst(IRInstructionKind::Store, None, "store ptr %1, ptr %slot"),
+                make_inst(
+                    IRInstructionKind::Load,
+                    Some("%2"),
+                    "%2 = load ptr, ptr %slot",
+                ),
+            ],
+        };
+        module.function_bodies.insert("foo".to_string(), body);
+
+        let a = FreeSite::new("foo", "free", Some("%1".into()));
+        let b = FreeSite::new("foo", "free", Some("%2".into()));
+        assert_eq!(
+            may_alias(&a, &b, Some(&module)),
+            MayAliasResult::MayAlias,
+            "store→load alias: %2 was loaded from %slot where %1 was stored"
+        );
+    }
+
+    #[test]
+    fn test_may_alias_store_load_independent_stores_not_alias() {
+        // Objective: two loads from DIFFERENT slots that were written
+        // with independent values must NOT alias.
+        // foo:
+        //   %a = call ptr @malloc(i64 8)
+        //   %b = call ptr @malloc(i64 8)
+        //   store ptr %a, ptr %slot1
+        //   store ptr %b, ptr %slot2
+        //   %p = load ptr, ptr %slot1
+        //   %q = load ptr, ptr %slot2
+        let mut module = IRModule::new();
+        let body = FunctionBody {
+            name: "foo".to_string(),
+            instructions: vec![
+                {
+                    let mut i = make_call("malloc", "%a = call ptr @malloc(i64 8)");
+                    i.dest = Some("%a".to_string());
+                    i
+                },
+                {
+                    let mut i = make_call("malloc", "%b = call ptr @malloc(i64 8)");
+                    i.dest = Some("%b".to_string());
+                    i
+                },
+                make_inst(IRInstructionKind::Store, None, "store ptr %a, ptr %slot1"),
+                make_inst(IRInstructionKind::Store, None, "store ptr %b, ptr %slot2"),
+                make_inst(
+                    IRInstructionKind::Load,
+                    Some("%p"),
+                    "%p = load ptr, ptr %slot1",
+                ),
+                make_inst(
+                    IRInstructionKind::Load,
+                    Some("%q"),
+                    "%q = load ptr, ptr %slot2",
+                ),
+            ],
+        };
+        module.function_bodies.insert("foo".to_string(), body);
+
+        let a = FreeSite::new("foo", "free", Some("%p".into()));
+        let b = FreeSite::new("foo", "free", Some("%q".into()));
+        assert_eq!(
+            may_alias(&a, &b, Some(&module)),
+            MayAliasResult::NotAlias,
+            "independent stores to different slots must NOT alias"
+        );
+    }
+
+    #[test]
+    fn test_may_alias_not_alias_without_shared_store() {
+        // Objective: two arguments with no shared SSA root and no
+        // store→load connection must NOT alias.
+        // foo:
+        //   %1 = call ptr @malloc(i64 8)
+        //   %2 = call ptr @malloc(i64 8)
+        //   store ptr %1, ptr %slot
+        //   %3 = load ptr, ptr %slot
+        //   ; free(%2) and free(%3) — %2 is independent of %1 stored in slot
+        let mut module = IRModule::new();
+        let body = FunctionBody {
+            name: "foo".to_string(),
+            instructions: vec![
+                {
+                    let mut i = make_call("malloc", "%1 = call ptr @malloc(i64 8)");
+                    i.dest = Some("%1".to_string());
+                    i
+                },
+                {
+                    let mut i = make_call("malloc", "%2 = call ptr @malloc(i64 8)");
+                    i.dest = Some("%2".to_string());
+                    i
+                },
+                make_inst(IRInstructionKind::Store, None, "store ptr %1, ptr %slot"),
+                make_inst(
+                    IRInstructionKind::Load,
+                    Some("%3"),
+                    "%3 = load ptr, ptr %slot",
+                ),
+            ],
+        };
+        module.function_bodies.insert("foo".to_string(), body);
+
+        let a = FreeSite::new("foo", "free", Some("%2".into()));
+        let b = FreeSite::new("foo", "free", Some("%3".into()));
+        assert_eq!(
+            may_alias(&a, &b, Some(&module)),
+            MayAliasResult::NotAlias,
+            "%2 is independent allocation, %3 comes from store of %1 — NOT alias"
         );
     }
 }

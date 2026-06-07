@@ -38,7 +38,7 @@ use omniscope_types::boundary::{BoundaryEvidence, FfiSliceInfo};
 use omniscope_types::call_graph_types::{is_dangerous, is_libc, FunctionKind};
 use omniscope_types::config::Language;
 
-use crate::analysis::boundary_seeds::{classify_seed, FfiSlice};
+use crate::analysis::boundary_seeds::{classify_seed, FfiSlice, SeedContext};
 use crate::analysis::ffi_boundary_detector::FFIBoundaryDetector;
 
 /// Pre-computed metadata for a single call instruction.
@@ -547,24 +547,24 @@ impl ModuleIndex {
 
                 let is_dangerous_libc = is_dangerous(&meta.callee_name);
 
-                let seed = classify_seed(
-                    &meta.caller_name,
-                    &meta.callee_name,
-                    meta.caller_lang,
-                    meta.callee_lang,
-                    meta.is_external,
-                    meta.is_llvm_intrinsic,
-                    meta.is_cpp_mangled,
-                    meta.is_cross_language,
-                    has_ptr_param,
-                    is_callback,
-                    &ffi_detector,
-                    false, // is_configured_boundary — not available at index build time
+                let seed = classify_seed(&SeedContext {
+                    caller: &meta.caller_name,
+                    callee: &meta.callee_name,
+                    caller_lang: meta.caller_lang,
+                    callee_lang: meta.callee_lang,
+                    is_external: meta.is_external,
+                    is_llvm_intrinsic: meta.is_llvm_intrinsic,
+                    is_cpp_mangled: meta.is_cpp_mangled,
+                    is_cross_language: meta.is_cross_language,
+                    has_pointer_param_or_return: has_ptr_param,
+                    is_callback_registration: is_callback,
+                    detector: &ffi_detector,
+                    is_configured_boundary: false, // not available at index build time
                     is_runtime_bridge,
                     is_dangerous_libc,
                     is_exported_wrapper,
-                    false, // is_function_pointer_ffi — requires deeper analysis
-                );
+                    is_function_pointer_ffi: false, // requires deeper analysis
+                });
 
                 // Only store non-suppression seeds for expansion
                 if seed.slice_info.is_in_slice() {

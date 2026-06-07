@@ -20,9 +20,10 @@
 use omniscope_core::issue_candidate::FfiEvidence;
 use omniscope_core::{IssueCandidate, Result};
 use omniscope_ir::{IRInstruction, IRInstructionKind, IRModule};
-use omniscope_types::{Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
+use omniscope_types::{Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
+use crate::resource::noreturn::is_noreturn_callee;
 
 /// FFI nullable return unchecked detector pass.
 ///
@@ -126,8 +127,20 @@ fn scan_function_body(
     candidates: &mut Vec<IssueCandidate>,
     next_id: &mut u64,
 ) {
+    // ── OOM-termination pre-check ──
+    // If this function has a noreturn exit path (abort/unreachable/out_of_memory),
+    // then unchecked FFI returns are likely on the OOM path — downgrade them
+    // to Diagnostic instead of reporting as full issues.
+    let has_oom_termination = instructions.iter().any(|i| match i.kind {
+        IRInstructionKind::Other => i.raw_text.trim().starts_with("unreachable"),
+        IRInstructionKind::Call => i.callee.as_deref().is_some_and(is_noreturn_callee),
+        _ => false,
+    });
+
     // Track which registers have been null-checked.
     let mut null_checked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending_null_checks: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     // Track which registers are FFI call results (potential null).
     // Maps register name -> callee name (for evidence context).
@@ -204,6 +217,16 @@ fn scan_function_body(
                                                 source_callee, op, callee),
                                     ));
 
+                                    // If the function has OOM-termination paths (abort/unreachable),
+                                    // the null deref is likely on the OOM path — downgrade.
+                                    if has_oom_termination {
+                                        candidate.verdict = Some(VerifierVerdict::Diagnostic);
+                                        candidate.add_evidence(Evidence::new(
+                                            EvidenceKind::PathStateRefinement,
+                                            "function has OOM/abort exit path; null deref may be on abort path".to_string(),
+                                        ));
+                                    }
+
                                     candidates.push(candidate);
                                     null_checked.insert(op.to_string());
                                 }
@@ -213,18 +236,36 @@ fn scan_function_body(
                 }
             }
 
-            IRInstructionKind::Icmp | IRInstructionKind::Fcmp => {
-                // If this is an icmp/fcmp eq/ne %reg, null, mark %reg as checked
-                if let Some(ref pred) = inst.icmp_pred {
-                    if pred == "eq" || pred == "ne" {
-                        // Check if one operand is the register and the other is null
-                        for operand in &inst.operands {
-                            let op = operand.trim();
-                            if op.starts_with('%') && ffi_return_regs.contains_key(op) {
-                                null_checked.insert(op.to_string());
-                            }
-                        }
+            IRInstructionKind::Icmp | IRInstructionKind::Fcmp if is_null_compare(inst) => {
+                // A comparison only proves a null check once control flow
+                // branches on the comparison result. This avoids treating
+                // dead/unused `icmp` instructions as guards while still
+                // handling parsers that do not populate structured operands.
+                if let Some(checked_reg) = compared_ffi_return_register(inst, &ffi_return_regs) {
+                    if let Some(ref dest) = inst.dest {
+                        pending_null_checks.insert(dest.clone(), checked_reg);
+                    } else {
+                        null_checked.insert(checked_reg);
                     }
+                }
+            }
+
+            IRInstructionKind::Branch => {
+                let mut inst_clone = inst.clone();
+                inst_clone.ensure_raw();
+                let raw = inst_clone.raw_text.as_str();
+                let used_checks: Vec<String> = pending_null_checks
+                    .iter()
+                    .filter_map(|(cmp_reg, checked_reg)| {
+                        if raw_contains_register(raw, cmp_reg) {
+                            Some(checked_reg.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for checked_reg in used_checks {
+                    null_checked.insert(checked_reg);
                 }
             }
 
@@ -268,6 +309,16 @@ fn scan_function_body(
                                     source_callee, op, func_name),
                         ));
 
+                        // If the function has OOM-termination paths (abort/unreachable),
+                        // the unchecked return is likely on the OOM path — downgrade.
+                        if has_oom_termination {
+                            candidate.verdict = Some(VerifierVerdict::Diagnostic);
+                            candidate.add_evidence(Evidence::new(
+                                EvidenceKind::PathStateRefinement,
+                                "function has OOM/abort exit path; unchecked return may be on abort path".to_string(),
+                            ));
+                        }
+
                         candidates.push(candidate);
 
                         // Mark as checked to avoid duplicate reports for the same register
@@ -279,6 +330,50 @@ fn scan_function_body(
             _ => {}
         }
     }
+}
+
+fn is_null_compare(inst: &IRInstruction) -> bool {
+    if let Some(ref pred) = inst.icmp_pred {
+        if pred == "eq" || pred == "ne" {
+            return inst.operands.iter().any(|op| op.trim() == "null")
+                || inst.raw_text.contains(" null");
+        }
+    }
+
+    let mut inst_clone = inst.clone();
+    inst_clone.ensure_raw();
+    let raw = inst_clone.raw_text.as_str();
+    (raw.contains(" icmp eq ") || raw.contains(" icmp ne "))
+        && (raw.contains(", null") || raw.contains(" null,"))
+}
+
+fn compared_ffi_return_register(
+    inst: &IRInstruction,
+    ffi_return_regs: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    for operand in &inst.operands {
+        let op = operand.trim();
+        if op.starts_with('%') && ffi_return_regs.contains_key(op) {
+            return Some(op.to_string());
+        }
+    }
+
+    let mut inst_clone = inst.clone();
+    inst_clone.ensure_raw();
+    extract_registers(&inst_clone.raw_text)
+        .into_iter()
+        .find(|reg| ffi_return_regs.contains_key(reg))
+}
+
+fn extract_registers(raw: &str) -> Vec<String> {
+    raw.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%' || c == '_' || c == '.'))
+        .filter(|token| token.starts_with('%') && token.len() > 1)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn raw_contains_register(raw: &str, register: &str) -> bool {
+    extract_registers(raw).iter().any(|r| r == register)
 }
 
 /// Returns true if the call instruction returns a pointer type.
@@ -468,6 +563,13 @@ fn is_system_allocator(name: &str) -> bool {
         || name.starts_with("mi_")
         || name.starts_with("je_")
         || name.starts_with("tc_")
+        // Zig runtime allocators — these are wrapper calls that abort on OOM
+        // in the default configuration, so unchecked returns are not bugs.
+        || name.starts_with("zig_allocator_")
+        || name.starts_with("std.heap.")
+        // Zig's generic alloc() method — most Zig allocators abort on OOM
+        || name == "alloc" || name == "allocAligned"
+        || name == "alignedAlloc" || name == "allocWithFlags"
 }
 
 /// Functions that are null-sinks — passing a null pointer to them
@@ -746,6 +848,159 @@ mod tests {
             unchecked_candidates.is_empty(),
             "Null-checked FFI return must NOT produce UncheckedFfiReturn candidates, got {} candidates",
             unchecked_candidates.len()
+        );
+    }
+
+    /// FP guard with raw/parser edge: null comparison must be used by a branch.
+    /// A dead `icmp %p, null` must not suppress a later unsafe load.
+    #[test]
+    fn test_e2e_dead_null_compare_still_reports() {
+        use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
+        use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
+
+        let ir = r#"
+            declare ptr @ffi_get()
+
+            define void @dead_compare() {
+                %p = call ptr @ffi_get()
+                %isnull = icmp eq ptr %p, null
+                %v = load i8, ptr %p
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn),
+            "dead null comparison must not suppress unchecked load"
+        );
+    }
+
+    /// FP guard: branching on an unrelated compare must not mark the FFI
+    /// return as null-checked.
+    #[test]
+    fn test_e2e_unrelated_branch_compare_still_reports() {
+        use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
+        use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
+
+        let ir = r#"
+            declare ptr @ffi_get()
+
+            define void @wrong_branch(ptr %q) {
+                %p = call ptr @ffi_get()
+                %qnull = icmp eq ptr %q, null
+                br i1 %qnull, label %null, label %ok
+            null:
+                ret void
+            ok:
+                %v = load i8, ptr %p
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn),
+            "branching on a different pointer must not suppress unchecked FFI return"
+        );
+    }
+
+    /// TP guard: use-before-check is still unsafe even if a later branch checks
+    /// the same pointer.
+    #[test]
+    fn test_e2e_use_before_late_null_check_reports() {
+        use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
+        use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
+
+        let ir = r#"
+            declare ptr @ffi_get()
+
+            define void @late_check() {
+                %p = call ptr @ffi_get()
+                %v = load i8, ptr %p
+                %isnull = icmp eq ptr %p, null
+                br i1 %isnull, label %null, label %ok
+            null:
+                ret void
+            ok:
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn),
+            "null check after the first dereference must not suppress the report"
+        );
+    }
+
+    /// FP guard: a null-sensitive sink after a real branch guard should not
+    /// produce NullDereference.
+    #[test]
+    fn test_e2e_null_sink_after_branch_guard_no_false_positive() {
+        use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
+        use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
+
+        let ir = r#"
+            declare ptr @ffi_get()
+            declare i64 @strlen(ptr)
+
+            define i64 @safe_strlen() {
+                %p = call ptr @ffi_get()
+                %isnull = icmp eq ptr %p, null
+                br i1 %isnull, label %null, label %ok
+            null:
+                ret i64 0
+            ok:
+                %len = call i64 @strlen(ptr %p)
+                ret i64 %len
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.kind == IssueCandidateKind::NullDereference),
+            "null-sensitive sink after a branch guard must not report NullDereference"
         );
     }
 

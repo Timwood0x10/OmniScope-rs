@@ -55,49 +55,70 @@ pub struct SeedResult {
     pub slice_info: FfiSliceInfo,
 }
 
+/// Input context for classifying a call site as a boundary seed.
+///
+/// Groups the many boolean/name flags into a single struct to keep
+/// [`classify_seed`] readable and to allow adding new flags without
+/// changing the call signature.
+pub struct SeedContext<'a> {
+    /// Caller function name (trimmed, no `@` prefix).
+    pub caller: &'a str,
+    /// Callee function name (trimmed, no `@` prefix).
+    pub callee: &'a str,
+    /// Detected caller language.
+    pub caller_lang: Language,
+    /// Detected callee language.
+    pub callee_lang: Language,
+    /// Whether the callee is an external declaration.
+    pub is_external: bool,
+    /// Whether the callee is an LLVM intrinsic.
+    pub is_llvm_intrinsic: bool,
+    /// Whether the callee has a C++ Itanium mangling (`_Z`).
+    pub is_cpp_mangled: bool,
+    /// Whether the call is cross-language.
+    pub is_cross_language: bool,
+    /// Whether the call involves pointer types (param or return).
+    pub has_pointer_param_or_return: bool,
+    /// Whether the callee name matches a callback registration pattern.
+    pub is_callback_registration: bool,
+    /// The FFI boundary detector for language queries.
+    pub detector: &'a FFIBoundaryDetector,
+    /// Whether this call is in a user-configured boundary.
+    pub is_configured_boundary: bool,
+    /// Whether the callee is a runtime bridge function.
+    pub is_runtime_bridge: bool,
+    /// Whether the callee is a dangerous libc function.
+    pub is_dangerous_libc: bool,
+    /// Whether the caller is an exported wrapper function.
+    pub is_exported_wrapper: bool,
+    /// Whether a function pointer is passed to/returned from an external call.
+    pub is_function_pointer_ffi: bool,
+}
+
 /// Classify a call site as a boundary seed.
 ///
 /// This function examines a call's metadata and applies the seed rules
 /// to determine whether the call is a Strong seed, Weak seed, or
 /// Suppression seed.
-///
-/// # Arguments
-/// * `caller` - Caller function name (trimmed, no `@` prefix).
-/// * `callee` - Callee function name (trimmed, no `@` prefix).
-/// * `caller_lang` - Detected caller language.
-/// * `callee_lang` - Detected callee language.
-/// * `is_external` - Whether the callee is an external declaration.
-/// * `is_llvm_intrinsic` - Whether the callee is an LLVM intrinsic.
-/// * `is_cpp_mangled` - Whether the callee has a C++ Itanium mangling (`_Z`).
-/// * `is_cross_language` - Whether the call is cross-language.
-/// * `has_pointer_param_or_return` - Whether the call involves pointer types.
-/// * `is_callback_registration` - Whether the callee name matches a callback
-///   registration pattern.
-/// * `detector` - The FFI boundary detector for language queries.
-/// * `is_configured_boundary` - Whether this call is in user-configured boundary.
-/// * `is_runtime_bridge` - Whether the callee is a runtime bridge function.
-/// * `is_dangerous_libc` - Whether the callee is a dangerous libc function.
-/// * `is_exported_wrapper` - Whether the caller is an exported wrapper function.
-/// * `is_function_pointer_ffi` - Whether a function pointer is passed to/returned
-///   from an external call.
-pub fn classify_seed(
-    caller: &str,
-    callee: &str,
-    caller_lang: Language,
-    callee_lang: Language,
-    is_external: bool,
-    is_llvm_intrinsic: bool,
-    is_cpp_mangled: bool,
-    is_cross_language: bool,
-    has_pointer_param_or_return: bool,
-    is_callback_registration: bool,
-    _detector: &FFIBoundaryDetector,
-    is_configured_boundary: bool,
-    is_runtime_bridge: bool,
-    is_dangerous_libc: bool,
-    is_exported_wrapper: bool,
-    is_function_pointer_ffi: bool,
-) -> SeedResult {
+pub fn classify_seed(ctx: &SeedContext) -> SeedResult {
+    let SeedContext {
+        caller,
+        callee,
+        caller_lang,
+        callee_lang,
+        is_external,
+        is_llvm_intrinsic,
+        is_cpp_mangled,
+        is_cross_language,
+        has_pointer_param_or_return,
+        is_callback_registration,
+        detector: _,
+        is_configured_boundary,
+        is_runtime_bridge,
+        is_dangerous_libc,
+        is_exported_wrapper,
+        is_function_pointer_ffi,
+    } = *ctx;
     // ── Derive cross-language from caller/callee languages ──
     // If the caller/callee have different languages, treat as cross-language
     // even if the caller didn't set the flag (defensive).
@@ -715,24 +736,24 @@ mod tests {
     #[test]
     fn test_strong_seed_cross_language() {
         let detector = FFIBoundaryDetector::new();
-        let result = classify_seed(
-            "rust_main",
-            "c_handler",
-            Language::Rust,
-            Language::C,
-            true,
-            false,
-            false,
-            true,
-            false,
-            false,
-            &detector,
-            false,
-            false,
-            false,
-            false,
-            false,
-        );
+        let result = classify_seed(&SeedContext {
+            caller: "rust_main",
+            callee: "c_handler",
+            caller_lang: Language::Rust,
+            callee_lang: Language::C,
+            is_external: true,
+            is_llvm_intrinsic: false,
+            is_cpp_mangled: false,
+            is_cross_language: true,
+            has_pointer_param_or_return: false,
+            is_callback_registration: false,
+            detector: &detector,
+            is_configured_boundary: false,
+            is_runtime_bridge: false,
+            is_dangerous_libc: false,
+            is_exported_wrapper: false,
+            is_function_pointer_ffi: false,
+        });
         assert_eq!(
             result.classification,
             SeedClassification::Strong,
@@ -758,24 +779,24 @@ mod tests {
     #[test]
     fn test_strong_seed_cpp_ffi() {
         let detector = FFIBoundaryDetector::new();
-        let result = classify_seed(
-            "c_main",
-            "_Z3fooi",
-            Language::C,
-            Language::Cpp,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            &detector,
-            false,
-            false,
-            false,
-            false,
-            false,
-        );
+        let result = classify_seed(&SeedContext {
+            caller: "c_main",
+            callee: "_Z3fooi",
+            caller_lang: Language::C,
+            callee_lang: Language::Cpp,
+            is_external: false,
+            is_llvm_intrinsic: false,
+            is_cpp_mangled: true,
+            is_cross_language: false,
+            has_pointer_param_or_return: false,
+            is_callback_registration: false,
+            detector: &detector,
+            is_configured_boundary: false,
+            is_runtime_bridge: false,
+            is_dangerous_libc: false,
+            is_exported_wrapper: false,
+            is_function_pointer_ffi: false,
+        });
         assert_eq!(
             result.classification,
             SeedClassification::Strong,
@@ -788,24 +809,24 @@ mod tests {
     #[test]
     fn test_suppression_llvm_intrinsic() {
         let detector = FFIBoundaryDetector::new();
-        let result = classify_seed(
-            "c_main",
-            "llvm.memcpy",
-            Language::C,
-            Language::Unknown,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            &detector,
-            false,
-            false,
-            false,
-            false,
-            false,
-        );
+        let result = classify_seed(&SeedContext {
+            caller: "c_main",
+            callee: "llvm.memcpy",
+            caller_lang: Language::C,
+            callee_lang: Language::Unknown,
+            is_external: false,
+            is_llvm_intrinsic: true,
+            is_cpp_mangled: false,
+            is_cross_language: false,
+            has_pointer_param_or_return: false,
+            is_callback_registration: false,
+            detector: &detector,
+            is_configured_boundary: false,
+            is_runtime_bridge: false,
+            is_dangerous_libc: false,
+            is_exported_wrapper: false,
+            is_function_pointer_ffi: false,
+        });
         assert_eq!(
             result.classification,
             SeedClassification::Suppression,
@@ -822,24 +843,24 @@ mod tests {
     #[test]
     fn test_suppression_internal_same_language() {
         let detector = FFIBoundaryDetector::new();
-        let result = classify_seed(
-            "c_helper",
-            "c_utility",
-            Language::C,
-            Language::C,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &detector,
-            false,
-            false,
-            false,
-            false,
-            false,
-        );
+        let result = classify_seed(&SeedContext {
+            caller: "c_helper",
+            callee: "c_utility",
+            caller_lang: Language::C,
+            callee_lang: Language::C,
+            is_external: false,
+            is_llvm_intrinsic: false,
+            is_cpp_mangled: false,
+            is_cross_language: false,
+            has_pointer_param_or_return: false,
+            is_callback_registration: false,
+            detector: &detector,
+            is_configured_boundary: false,
+            is_runtime_bridge: false,
+            is_dangerous_libc: false,
+            is_exported_wrapper: false,
+            is_function_pointer_ffi: false,
+        });
         assert_eq!(
             result.classification,
             SeedClassification::Suppression,
@@ -852,24 +873,24 @@ mod tests {
     #[test]
     fn test_weak_seed_same_language_ffi() {
         let detector = FFIBoundaryDetector::new();
-        let result = classify_seed(
-            "rust_wrapper",
-            "rust_into_raw",
-            Language::Rust,
-            Language::Rust,
-            true,
-            false,
-            false,
-            false,
-            true,
-            false,
-            &detector,
-            false,
-            false,
-            false,
-            false,
-            false,
-        );
+        let result = classify_seed(&SeedContext {
+            caller: "rust_wrapper",
+            callee: "rust_into_raw",
+            caller_lang: Language::Rust,
+            callee_lang: Language::Rust,
+            is_external: true,
+            is_llvm_intrinsic: false,
+            is_cpp_mangled: false,
+            is_cross_language: false,
+            has_pointer_param_or_return: true,
+            is_callback_registration: false,
+            detector: &detector,
+            is_configured_boundary: false,
+            is_runtime_bridge: false,
+            is_dangerous_libc: false,
+            is_exported_wrapper: false,
+            is_function_pointer_ffi: false,
+        });
         assert_eq!(
             result.classification,
             SeedClassification::Weak,
