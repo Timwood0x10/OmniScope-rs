@@ -487,14 +487,14 @@ impl Pass for IssueCandidateBuilderPass {
                     for &ri in release_indices.iter().skip(1) {
                         // Skip candidate if alloc is a deallocator and callers differ
                         if alloc_is_deallocator && graph.edges[ri].caller_name != *first_caller {
-                            eprintln!(
+                            tracing::debug!(
                                 "[DR-FILTER] instance={} skipped: dealloc caller {} != first caller {}",
                                 instance_id, graph.edges[ri].caller_name, first_caller
                             );
                             continue;
                         }
 
-                        eprintln!(
+                        tracing::debug!(
                             "[DR-CREATE] instance={} alloc_fn={} caller={} first_caller={}",
                             instance_id,
                             graph.edges[ri].function_name,

@@ -1680,7 +1680,7 @@ fn detect_post_free_call_use(
         let has_simple_post_free_use = body.instructions.windows(2).any(|pair| {
             // First instruction is a free/delete call
             matches!(pair[0].kind, IRInstructionKind::Call)
-                && pair[0].callee.as_deref().map_or(false, |c| {
+                && pair[0].callee.as_deref().is_some_and(|c| {
                     c == "free" || c == "_ZdlPv" || c == "_ZdaPv"
                         || c == "HeapFree" || c == "VirtualFree"
                 })

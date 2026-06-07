@@ -663,6 +663,21 @@ pub fn is_runtime_internal(name: &str) -> bool {
         return true;
     }
 
+    // ── POSIX/libc system functions (runtime-internal allocations) ──
+    // mmap/munmap are OS-level memory mapping, managed by the runtime.
+    // Reporting leaks for these is noise — the runtime handles cleanup.
+    if name == "mmap" || name == "munmap" {
+        return true;
+    }
+    // brk/sbrk are low-level heap management, not user-code allocations
+    if name == "brk" || name == "sbrk" {
+        return true;
+    }
+    // mprotect, madvise are memory management syscalls, not user allocs
+    if name == "mprotect" || name == "madvise" {
+        return true;
+    }
+
     // ── Rust runtime internal ──
     // __rust_dealloc, __rust_alloc, __rust_realloc, __rust_alloc_zeroed
     if name.starts_with("__rust_") {

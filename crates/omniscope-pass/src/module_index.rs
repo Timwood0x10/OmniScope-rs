@@ -342,7 +342,17 @@ impl ModuleIndex {
                     && callee_lang == Language::Unknown
                     && call.is_external))
             // Filter out LLVM intrinsics
-            && !is_llvm_intrinsic;
+            && !is_llvm_intrinsic
+            // Filter out language runtime intrinsics (__rust_*, _ZN4core*, etc.)
+            // NOTE: We intentionally do NOT filter libc functions here because
+            // libc functions (malloc, free, etc.) can be FFI boundaries in
+            // cross-language ownership transfer scenarios (e.g., C malloc
+            // released by C++ operator delete). libc FP suppression is handled
+            // at the IssueGate level (Rule 3) instead.
+            && !crate::analysis::ffi_boundary_detector::is_runtime_intrinsic(&callee_name, callee_lang)
+            // Filter out compiler-generated drop/panic
+            && !callee_name.contains("drop_in_place")
+            && !callee_name.contains("panic");
 
             call_metas.push(CachedCallMeta {
                 call_index: idx,

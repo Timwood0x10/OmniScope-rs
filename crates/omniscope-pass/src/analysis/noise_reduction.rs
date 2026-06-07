@@ -140,6 +140,20 @@ impl NoiseReduction {
         suppressed
     }
 
+    /// Static version of `should_suppress_runtime_caller` that doesn't require
+    /// an instance. Used by IssueGate fallback rules in pass.rs.
+    pub fn runtime_caller_match(caller_name: &str) -> bool {
+        static PATTERNS: &[&str] = &[
+            "mem.Allocator",
+            "mem.alignForward",
+            "heap.c_allocator_impl",
+            "heap.page_allocator",
+            "heap.",
+            "start.known",
+        ];
+        PATTERNS.iter().any(|p| caller_name.contains(p))
+    }
+
     /// Returns the number of safe patterns registered.
     pub fn pattern_count(&self) -> usize {
         self.safe_patterns.len()

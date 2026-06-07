@@ -153,15 +153,21 @@ impl Pass for IssueVerifierPass {
             }
 
             // ── FFI Gate: suppress runtime-internal leaks without FFI evidence ──
-            // Only downgrade leak candidates where BOTH:
+            // Only downgrade leak candidates where ALL of:
             //   1. No FFI evidence attached (not from FFI boundary detection)
             //   2. The alloc function is a known runtime internal
+            //   3. The caller is also runtime-internal (not user code)
             // This preserves user-code leaks (real bugs) while suppressing
             // allocator/runtime noise. DoubleFree, UseAfterFree etc. always pass.
             let alloc_fn = candidate.alloc_function.clone();
+            let caller_is_runtime = candidate
+                .alloc_caller
+                .as_deref()
+                .is_none_or(is_runtime_internal);
             if !candidate.has_ffi_evidence()
                 && is_leak_candidate(&candidate)
                 && is_runtime_internal(&alloc_fn)
+                && caller_is_runtime
             {
                 tracing::debug!(
                     "FFI Gate: suppressing runtime-internal leak {} ({:?}) from {}",

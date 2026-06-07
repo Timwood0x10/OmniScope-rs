@@ -433,8 +433,31 @@ impl PassContext {
         // or WriteToImmutable — those are about wrong allocator/real bugs,
         // not about runtime-internal noise.
         //
+        // EXCEPTION: When the issue's location function (the caller) is
+        // user code (not runtime-internal), the issue represents a real bug
+        // in user code calling a runtime allocator — e.g., __rust_alloc
+        // called from user code that leaks the result. In that case, the
+        // issue should NOT be suppressed even though the symbol (alloc_fn)
+        // is runtime-internal.
+        //
         // Fixes: _ZN5alloc* FfiUnsafeCall, _Znam DefiniteLeak, etc.
-        if crate::resource::structural_inference_pass::is_runtime_internal(&issue.symbol)
+        let symbol_is_runtime_internal =
+            crate::resource::structural_inference_pass::is_runtime_internal(&issue.symbol);
+        let caller_is_user_code = issue
+            .location
+            .as_ref()
+            .and_then(|loc| loc.function.as_deref())
+            .map(|func| {
+                !crate::resource::structural_inference_pass::is_runtime_internal(func)
+                    && !crate::analysis::noise_reduction::NoiseReduction::runtime_caller_match(func)
+            })
+            .unwrap_or(false);
+
+        // ── Rule 1: Runtime-internal symbol suppression ──
+        // When the symbol is a runtime internal (e.g., __rust_alloc, _ZN5alloc*)
+        // and the caller is also runtime-internal, suppress leak-type issues.
+        if symbol_is_runtime_internal
+            && !caller_is_user_code
             && matches!(
                 issue.kind,
                 omniscope_core::IssueKind::FfiUnsafeCall
@@ -446,15 +469,109 @@ impl PassContext {
             )
         {
             tracing::debug!(
-                "IssueGate fallback: suppressing runtime-internal symbol '{}' for {:?}",
+                "IssueGate fallback: suppressing runtime-internal symbol '{}' for {:?} (location_func={:?})",
                 issue.symbol,
                 issue.kind,
+                issue.location.as_ref().and_then(|l| l.function.as_deref()),
             );
             self.suppressed_issues.push(issue);
             return EmitOutcome::Suppressed {
                 id,
                 reason: "runtime/compiler internal symbol, not a user-code FFI violation"
                     .to_string(),
+            };
+        }
+
+        // ── Rule 2: Runtime-internal caller leak suppression ──
+        // When the location function (caller) is runtime-internal (e.g.,
+        // posix.mmap, std.sort) and the issue is a leak, the leak is in
+        // runtime code, not user code. Suppress it regardless of whether
+        // the symbol itself is runtime-internal (e.g., mmap, free are libc
+        // but not in is_runtime_internal).
+        if !caller_is_user_code
+            && matches!(
+                issue.kind,
+                omniscope_core::IssueKind::ConditionalLeak
+                    | omniscope_core::IssueKind::DefiniteLeak
+                    | omniscope_core::IssueKind::OwnershipEscapeLeak
+            )
+        {
+            tracing::debug!(
+                "IssueGate fallback: suppressing runtime-caller leak '{}' for {:?} (location_func={:?})",
+                issue.symbol,
+                issue.kind,
+                issue.location.as_ref().and_then(|l| l.function.as_deref()),
+            );
+            self.suppressed_issues.push(issue);
+            return EmitOutcome::Suppressed {
+                id,
+                reason: "leak in runtime-internal code, not a user-code bug".to_string(),
+            };
+        }
+
+        // ── Rule 3: libc symbol DoubleFree suppression ──
+        // libc functions (free, mmap, etc.) are trusted C ABI interfaces.
+        // Reporting DoubleFree on free() is noise ONLY when the caller is
+        // also runtime-internal (e.g., a Zig allocator wrapper calling free
+        // twice). When the caller is user code (e.g., double_free() calling
+        // free twice on the same pointer), the DoubleFree is a real bug and
+        // must NOT be suppressed.
+        let symbol_is_libc = omniscope_types::call_graph_types::is_libc(&issue.symbol);
+        if symbol_is_libc
+            && !caller_is_user_code
+            && matches!(
+                issue.kind,
+                omniscope_core::IssueKind::DoubleFree | omniscope_core::IssueKind::UseAfterFree
+            )
+        {
+            tracing::debug!(
+                "IssueGate fallback: suppressing libc symbol '{}' for {:?} (caller={:?})",
+                issue.symbol,
+                issue.kind,
+                issue.location.as_ref().and_then(|l| l.function.as_deref()),
+            );
+            self.suppressed_issues.push(issue);
+            return EmitOutcome::Suppressed {
+                id,
+                reason: "libc function with runtime-internal caller, not the source of the bug"
+                    .to_string(),
+            };
+        }
+
+        // ── Rule 4: FFI bridge function DoubleFree suppression ──
+        // When a DoubleFree is reported on a function that is itself an
+        // FFI bridge (c_release_buffer, c_free_buffer, etc.), the real
+        // bug is in the caller (which calls the release function twice).
+        // The bridge function just executes the release — it's not at fault.
+        // This also applies to unknown-language declaration functions
+        // that are C ABI wrappers.
+        let loc_func = issue
+            .location
+            .as_ref()
+            .and_then(|loc| loc.function.as_deref())
+            .unwrap_or("");
+        let is_ffi_bridge = loc_func.starts_with("c_")
+            || loc_func.starts_with("rust_")
+            || loc_func.starts_with("zig_")
+            || loc_func.starts_with("py_")
+            || loc_func.starts_with("java_")
+            || loc_func.starts_with("go_");
+        if is_ffi_bridge
+            && !caller_is_user_code
+            && matches!(
+                issue.kind,
+                omniscope_core::IssueKind::DoubleFree | omniscope_core::IssueKind::UseAfterFree
+            )
+        {
+            tracing::debug!(
+                "IssueGate fallback: suppressing FFI bridge function '{}' for {:?}",
+                loc_func,
+                issue.kind,
+            );
+            self.suppressed_issues.push(issue);
+            return EmitOutcome::Suppressed {
+                id,
+                reason: "FFI bridge function is not the source of the double-free bug".to_string(),
             };
         }
 

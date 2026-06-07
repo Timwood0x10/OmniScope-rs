@@ -6,8 +6,7 @@ name: CI/CD
 on:
   push:
     branches:
-      #  must change
-      - dev
+      - master
       - dev
       - 'feature/**'
       - 'bugfix/**'
@@ -23,7 +22,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  LLVM_SYS_220_PREFIX: /usr/lib/llvm-22
+  # .cargo/config.toml sets rustc-wrapper = "sccache". CI installs sccache via
+  # mozilla-actions/sccache-action before running cargo; these env vars route
+  # the cache through the GitHub Actions cache backend.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+  # llvm-sys 221 is used by omniscope-ir when the llvm-backend feature is on.
+  # Linux runners install llvm-22-dev under /usr/lib/llvm-22 (matches llvm-sys major version).
+  LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
 
 jobs:
   # Job 1: Format Check
@@ -39,8 +45,11 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Check formatting
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
   # Job 2: Clippy Lints
   clippy:
@@ -53,7 +62,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev wget
+          sudo apt-get install -y libzstd-dev mold wget
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
           sudo apt-get install -y llvm-22-dev
 
@@ -62,36 +71,15 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   # Job 3: Test Suite
   test:
-    name: Test Suite
+    name: Test Suite (${{ matrix.os }} / ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -99,7 +87,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable, beta]
         exclude:
-          # Reduce CI load by excluding some combinations
+          # Reduce CI load: only run beta on Linux
           - os: windows-latest
             rust: beta
           - os: macos-latest
@@ -112,7 +100,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev wget
+          sudo apt-get install -y libzstd-dev mold wget
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
           sudo apt-get install -y llvm-22-dev
 
@@ -120,96 +108,26 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install zstd llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain (${{ matrix.rust }})
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-registry-
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-index-
+      # Windows has no easy llvm-22-dev; build/test without llvm-backend feature.
+      - name: Run tests (Linux / macOS, all features)
+        if: runner.os != 'Windows'
+        run: cargo test --workspace --all-features --verbose
 
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-${{ matrix.rust }}-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-target-
+      - name: Run tests (Windows, default features)
+        if: runner.os == 'Windows'
+        run: cargo test --workspace --verbose
 
-      - name: Run tests
-        run: cargo test --all-features --verbose
-
-  # Job 4: Build Release
-  build-release:
-    name: Build Release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-
-
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/omniscope-rs*
-
-  # Job 5: Documentation
+  # Job 4: Documentation
   docs:
     name: Documentation
     runs-on: ubuntu-latest
@@ -220,31 +138,18 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev wget
+          sudo apt-get install -y libzstd-dev mold wget
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
           sudo apt-get install -y llvm-22-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Build documentation
-        run: cargo doc --no-deps
+        run: cargo doc --workspace --no-deps
 
       - name: Upload documentation
         uses: actions/upload-artifact@v4
@@ -252,7 +157,7 @@ jobs:
           name: documentation
           path: target/doc
 
-  # Job 6: Security Audit
+  # Job 5: Security Audit
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -264,39 +169,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Run security audit
         run: cargo audit
 
-  # Job 7: Code Quality
-  quality:
-    name: Code Quality
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libzstd-dev wget
-          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
-          sudo apt-get install -y llvm-22-dev
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-outdated
-        run: cargo install cargo-outdated
-
-      - name: Check for outdated dependencies
-        run: cargo outdated || true
-
-      - name: Show dependency tree
-        run: cargo tree
-
-  # Job 8: Miri Check (for unsafe code)
+  # Job 6: Miri Check (for unsafe code)
   miri:
     name: Miri Check
     runs-on: ubuntu-latest
@@ -321,9 +199,9 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: nightly
 
-  # Job 9: Benchmark
+  # Job 7: Benchmark compile check
   bench:
-    name: Benchmark
+    name: Benchmark Compile
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -332,56 +210,15 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzstd-dev wget
+          sudo apt-get install -y libzstd-dev mold wget
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
           sudo apt-get install -y llvm-22-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-
-
-      - name: Run benchmarks
+      - name: Build benchmarks (no run)
         run: cargo bench --no-run
-
-  # Job 10: Notify on Success
-  notify-success:
-    name: Notify Success
-    needs: [fmt, clippy, test, build-release, docs, audit]
-    runs-on: ubuntu-latest
-    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/master'
-    steps:
-      - name: Success notification
-        run: echo "All CI checks passed successfully!"
-
-  # Job 11: Notify on Failure
-  notify-failure:
-    name: Notify Failure
-    needs: [fmt, clippy, test, build-release, docs, audit]
-    runs-on: ubuntu-latest
-    if: failure()
-    steps:
-      - name: Failure notification
-        run: echo "CI checks failed. Please review the logs."
