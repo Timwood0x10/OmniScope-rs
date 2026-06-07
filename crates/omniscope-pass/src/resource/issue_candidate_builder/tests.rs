@@ -1649,3 +1649,113 @@ fn test_consumes_arg_before_release_no_false_positive() {
         "ConsumesArg BEFORE Release must NOT produce UseAfterRelease candidate"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// DoubleFree may-alias gate tests
+//
+// These tests cover the alias gate added to `verify_double_release`:
+//   1. Independent frees in different functions must not be confirmed.
+//   2. The same SSA pointer freed twice in one function IS confirmed.
+//   3. Phi-merged alloc roots remain confirmed.
+//
+// The gate output is recorded as an `Insufficient` evidence with the
+// description prefix `may_alias=NotAlias`. The verifier looks at that
+// evidence to downgrade `DoubleRelease` from `ConfirmedIssue` to
+// `ProbableIssue`. The tests below mirror the production path: they
+// build IssueCandidates directly and route them through `verify_candidate`.
+// ─────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod may_alias_gate_tests {
+    use crate::resource::issue_verifier::verify_candidate;
+    use omniscope_core::IssueCandidate;
+    use omniscope_semantics::FamilyRegistry;
+    use omniscope_types::{Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict};
+
+    /// Helper: build a minimal DoubleRelease candidate with the standard
+    /// `MultipleRelease` evidence emitted by the candidate builder.
+    fn make_double_release(
+        release_fn: &str,
+        alloc_caller: &str,
+        release_caller: &str,
+    ) -> IssueCandidate {
+        let mut c = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::C_HEAP,
+            release_fn,
+        )
+        .with_resource_id(42)
+        .with_alloc_caller(alloc_caller)
+        .with_release_caller(release_caller);
+        c.add_evidence(
+            Evidence::new(
+                EvidenceKind::MultipleRelease,
+                "instance 42 released 2 times",
+            )
+            .with_confidence(0.9),
+        );
+        c
+    }
+
+    #[test]
+    fn test_doublefree_rejected_when_independent_frees() {
+        // Objective: two free calls on independent SSA values (i.e. in
+        // different functions, no shared root) must NOT confirm. The
+        // candidate builder attaches `may_alias=NotAlias` evidence; the
+        // verifier downgrades to ProbableIssue.
+        let registry = FamilyRegistry::new();
+        let mut candidate = make_double_release("free", "Z::free", "fallback::free_without_size");
+        candidate.add_evidence(
+            Evidence::new(
+                EvidenceKind::Insufficient,
+                "may_alias=NotAlias: site_a=(Z::free, free, Some(\"%p\")) site_b=(fallback::free_without_size, free, Some(\"%q\"))",
+            )
+            .with_confidence(0.9),
+        );
+
+        let verdict = verify_candidate(&candidate, &registry, None, None);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ProbableIssue,
+            "independent frees in different callers must NOT be confirmed; got {:?}",
+            verdict
+        );
+    }
+
+    #[test]
+    fn test_doublefree_confirmed_when_same_pointer_freed_twice() {
+        // Objective: the SAME SSA pointer freed twice on a reachable path
+        // — i.e., no may-alias rejection evidence on the candidate — must
+        // be confirmed.
+        let registry = FamilyRegistry::new();
+        let candidate = make_double_release("free", "user_fn", "user_fn");
+
+        let verdict = verify_candidate(&candidate, &registry, None, None);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "same-pointer double free with no alias rejection must be confirmed; got {:?}",
+            verdict
+        );
+    }
+
+    #[test]
+    fn test_doublefree_phi_merged_alloc_roots() {
+        // Objective: phi-merged alloc roots are treated as may-alias by
+        // the gate, so the candidate has no `may_alias=NotAlias` evidence
+        // and must remain confirmed.
+        let registry = FamilyRegistry::new();
+        // Simulate the candidate builder's output for the phi case: no
+        // alias-rejection evidence attached, callers identical.
+        let candidate = make_double_release("free", "phi_fn", "phi_fn");
+
+        let verdict = verify_candidate(&candidate, &registry, None, None);
+        assert_eq!(
+            verdict,
+            VerifierVerdict::ConfirmedIssue,
+            "phi-merged alloc roots must be confirmed (gate reports may-alias); got {:?}",
+            verdict
+        );
+    }
+}

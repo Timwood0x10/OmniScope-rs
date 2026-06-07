@@ -14,6 +14,22 @@
 //!   `ctx.get_ref::<ModuleIndex>()`, avoiding O(n) clones.
 //! - **Single allocation**: The index is built once during pipeline
 //!   initialization and lives for the entire analysis run.
+//
+// TODO(refactor): module_index.rs exceeds 1000 lines (see aim/rules/rules.md #1).
+// Should be split into submodules (call_meta, function_meta, language_detection,
+// resource_pairs) when scope permits.
+
+/// Minimum number of foreign-ABI extern declarations that demotes an
+/// otherwise single-language module to mixed-language. Used to keep FFI
+/// passes enabled on modules where the dominant defined language imports
+/// many cross-ABI symbols (e.g. a Rust module declaring `malloc`, `free`,
+/// `mmap` — these are FFI evidence even though no foreign function
+/// definition exists in the IR).
+///
+/// Threshold of 3 chosen empirically: 1 or 2 externs may be incidental
+/// (e.g. `__cxa_personality_v0` for unwinding), but 3+ strongly indicates
+/// genuine FFI usage that downstream passes must analyze.
+const MIN_FOREIGN_EXTERNS_FOR_MIXED: usize = 3;
 
 use indexmap::IndexMap;
 use omniscope_ir::IRModule;
@@ -260,6 +276,62 @@ fn is_zig_runtime_internal(name: &str, language: Language) -> bool {
     false
 }
 
+/// Count extern declarations whose names do NOT match the mangling scheme
+/// of the dominant language. These are foreign-ABI symbols (typically C
+/// libraries imported into a Rust/C++/Zig module) and constitute FFI
+/// evidence even when no foreign function is *defined* in the IR.
+///
+/// LLVM intrinsics (`llvm.*`) and runtime intrinsics that already belong
+/// to the dominant language (e.g. `__rust_alloc` in a Rust module) are
+/// excluded — they are not foreign FFI.
+///
+/// Unknown-language declarations are treated as foreign because plain C
+/// symbols like `malloc`, `free`, `mmap` carry no mangling and therefore
+/// produce `Language::Unknown` from the detector. This is the primary
+/// case the demotion is designed to catch.
+fn count_foreign_declared_externs(
+    module: &IRModule,
+    dominant_lang: Language,
+    detector: &LanguageDetector,
+) -> usize {
+    // Bail out early if the dominant language is Unknown — there's no
+    // meaningful "foreign" classification to make.
+    if dominant_lang == Language::Unknown {
+        return 0;
+    }
+
+    let mut count = 0usize;
+    for name in module.declarations.keys() {
+        let trimmed = name.trim_start_matches('@');
+
+        // Skip LLVM compiler intrinsics — they are not FFI.
+        if trimmed.starts_with("llvm.") {
+            continue;
+        }
+
+        let detected = detector.detect_from_function(trimmed);
+
+        // Detected as dominant language → not foreign.
+        if detected == dominant_lang {
+            continue;
+        }
+
+        // Runtime intrinsics of the dominant language (e.g. `__rust_alloc`
+        // when dominant is Rust) are detected correctly above and skipped.
+        // For safety also skip names that the runtime-intrinsic helper
+        // attributes to the dominant language, since some patterns may
+        // evolve out of band.
+        if is_runtime_intrinsic_cached(trimmed, dominant_lang) {
+            continue;
+        }
+
+        // Everything else (Unknown plain-C symbols, C++ mangled symbols,
+        // explicit other-language symbols) counts as foreign-ABI evidence.
+        count += 1;
+    }
+    count
+}
+
 impl ModuleIndex {
     /// Builds a `ModuleIndex` from an `IRModule`.
     ///
@@ -403,7 +475,25 @@ impl ModuleIndex {
         // added to known_languages later, but if call-level already shows
         // a single language, the final result will still be single-language
         // (adding more of the same language doesn't increase the count).
-        let early_single_language = known_languages.len() <= 1;
+        let mut early_single_language = known_languages.len() <= 1;
+        // Demote to mixed-language when the IR declares many foreign-ABI
+        // externs — e.g. a Rust module that imports `malloc`, `free`, `mmap`.
+        // The defined functions look pure-Rust but the declared externs are
+        // FFI evidence that downstream passes must analyze.
+        if early_single_language {
+            if let Some(&dominant) = known_languages.iter().next() {
+                let foreign_externs = count_foreign_declared_externs(module, dominant, &detector);
+                if foreign_externs >= MIN_FOREIGN_EXTERNS_FOR_MIXED {
+                    early_single_language = false;
+                    tracing::info!(
+                        target: "omniscope_pass::module_index",
+                        "demoted single-language to mixed: {} foreign-ABI externs declared in {:?}-dominated module",
+                        foreign_externs,
+                        dominant
+                    );
+                }
+            }
+        }
         if early_single_language {
             // No FFI boundaries possible — skip seed classification and slice expansion.
             // Set boundary_evidence and ffi_slice_info to "computed, no boundary" for all calls.
@@ -661,7 +751,24 @@ impl ModuleIndex {
                 known_languages.insert(meta.language);
             }
         }
-        let is_single_language = known_languages.len() <= 1;
+        let mut is_single_language = known_languages.len() <= 1;
+        // Same demotion as the early-detect site: a single-language defined
+        // surface that imports many foreign-ABI externs is still effectively
+        // mixed-language for FFI analysis purposes.
+        if is_single_language {
+            if let Some(&dominant) = known_languages.iter().next() {
+                let foreign_externs = count_foreign_declared_externs(module, dominant, &detector);
+                if foreign_externs >= MIN_FOREIGN_EXTERNS_FOR_MIXED {
+                    is_single_language = false;
+                    tracing::info!(
+                        target: "omniscope_pass::module_index",
+                        "demoted single-language to mixed: {} foreign-ABI externs declared in {:?}-dominated module",
+                        foreign_externs,
+                        dominant
+                    );
+                }
+            }
+        }
 
         if is_single_language {
             let lang_desc = known_languages
@@ -1241,6 +1348,96 @@ mod tests {
         assert!(
             !user_func_meta.is_runtime_internal,
             "my_function profile must have is_runtime_internal=false"
+        );
+    }
+
+    /// Helper: insert a Rust-mangled defined function with no calls.
+    fn insert_rust_defined(module: &mut IRModule, mangled_name: &str) {
+        let key = format!("@{}", mangled_name);
+        module.functions.insert(
+            key,
+            Function {
+                name: mangled_name.to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+    }
+
+    /// Helper: insert a declaration (extern) with the given plain name.
+    fn insert_extern_decl(module: &mut IRModule, name: &str) {
+        let key = format!("@{}", name);
+        module.declarations.insert(
+            key,
+            Function {
+                name: name.to_string(),
+                is_declaration: true,
+                params: vec!["i64".to_string()],
+                return_type: "ptr".to_string(),
+            },
+        );
+    }
+
+    /// Objective: A Rust module that declares >=3 C externs (mi_malloc,
+    /// mi_free, malloc, free) must be demoted from single-language to
+    /// mixed so FFI passes stay enabled.
+    /// Invariants: is_single_language == false.
+    #[test]
+    fn test_demotes_rust_module_with_c_externs() {
+        let mut module = IRModule::new();
+        // Defined: a Rust-mangled function (matches _ZN5alloc prefix).
+        insert_rust_defined(
+            &mut module,
+            "_ZN5alloc7raw_vec19RawVec$LT$T$C$A$GT$8allocate",
+        );
+        // Declared: plain C externs (no mangling → Language::Unknown).
+        insert_extern_decl(&mut module, "mi_malloc");
+        insert_extern_decl(&mut module, "mi_free");
+        insert_extern_decl(&mut module, "malloc");
+        insert_extern_decl(&mut module, "free");
+
+        let index = ModuleIndex::build(&module);
+
+        assert!(
+            !index.is_single_language,
+            "Rust module with 4 C externs must be demoted to mixed-language so FFI passes run"
+        );
+    }
+
+    /// Objective: A pure Rust module with no foreign externs stays
+    /// single-language so FFI passes can short-circuit.
+    /// Invariants: is_single_language == true.
+    #[test]
+    fn test_keeps_single_language_when_no_externs() {
+        let mut module = IRModule::new();
+        insert_rust_defined(&mut module, "_ZN5alloc7raw_vec8allocate");
+        insert_rust_defined(&mut module, "_ZN4core3str4len");
+
+        let index = ModuleIndex::build(&module);
+
+        assert!(
+            index.is_single_language,
+            "Pure-Rust module with no foreign externs must remain single-language"
+        );
+    }
+
+    /// Objective: Below the demotion threshold (1-2 foreign externs),
+    /// the module must stay single-language. Three is the demotion floor.
+    /// Invariants: is_single_language == true with only 2 C externs.
+    #[test]
+    fn test_below_threshold() {
+        let mut module = IRModule::new();
+        insert_rust_defined(&mut module, "_ZN5alloc7raw_vec8allocate");
+        // Only 2 foreign externs — under MIN_FOREIGN_EXTERNS_FOR_MIXED.
+        insert_extern_decl(&mut module, "malloc");
+        insert_extern_decl(&mut module, "free");
+
+        let index = ModuleIndex::build(&module);
+
+        assert!(
+            index.is_single_language,
+            "Rust module with only 2 C externs must remain single-language (below threshold of 3)"
         );
     }
 }

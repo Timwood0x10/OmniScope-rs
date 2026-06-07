@@ -6,12 +6,15 @@ rustflags = [
     "-L", "/usr/lib/x86_64-linux-gnu"
 ]
 
-[build]
-rustc-wrapper = "sccache"
+# NOTE: sccache is opt-in via environment variable, not project config.
+#   - CI: not used (the GHAC backend is flaky and project config forces it on every CI runner).
+#   - Local dev: add `export RUSTC_WRAPPER=sccache` to your shell profile.
+#     See COMPILE_SPEED.md for details.
 
 # Parallel compilation
 [env]
 CARGO_BUILD_JOBS = "14"
+# macOS Homebrew path. Linux CI overrides this via LLVM_SYS_221_PREFIX env.
 LLVM_SYS_221_PREFIX = "/opt/homebrew/opt/llvm@22"
 
 # Library search paths for macOS (homebrew)

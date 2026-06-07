@@ -14,7 +14,9 @@
 
 use omniscope_core::{Confidence, IssueCandidate, IssueKind, Result};
 use omniscope_semantics::SummaryStore;
-use omniscope_types::{Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind};
+use omniscope_types::{
+    Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict,
+};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
@@ -115,16 +117,59 @@ impl Pass for LeakDetectionPass {
         let summary_store: Option<SummaryStore> = ctx.get("summary_store");
         let summary_store = summary_store.unwrap_or_default();
 
-        if graph.is_none() {
+        let Some(graph) = graph else {
             let result = PassResult::new(self.name())
                 .with_nodes(0)
                 .with_duration(start.elapsed().as_millis() as u64);
             return Ok(result);
-        }
+        };
 
         // Retrieve raw facts for allocation sites.
         let raw_facts: Option<Vec<RawResourceFact>> = ctx.get("raw_resource_facts");
         let raw_facts = raw_facts.unwrap_or_default();
+
+        // Precompute per-family release sites from the contract graph.
+        //
+        // We populate this map by calling the public contract-graph API
+        // (`has_release_for_family` / `release_call_sites_for_family`) once
+        // per family that any allocation site references, and then drop the
+        // borrow on `ctx` so the later `ctx.store` for candidates compiles.
+        //
+        // This is the signal that fixes Blocker #3 in the v0.2.0 release
+        // readiness doc: `DefiniteLeak` was firing on `malloc`/`mi_malloc`
+        // even when paired `free`/`mi_free` call sites existed elsewhere in
+        // the same IR. The contract graph already knows about those
+        // pairings — we just weren't consulting it at emission time.
+        let release_sites_by_family: std::collections::HashMap<FamilyId, Vec<String>> = {
+            // Distinct families across all acquire raw facts.
+            let mut families: std::collections::HashSet<FamilyId> =
+                std::collections::HashSet::new();
+            for f in &raw_facts {
+                if f.is_acquire {
+                    families.insert(f.family.unwrap_or(FamilyId::C_HEAP));
+                }
+            }
+            let mut map: std::collections::HashMap<FamilyId, Vec<String>> =
+                std::collections::HashMap::with_capacity(families.len());
+            for fam in families {
+                if graph.has_release_for_family(fam) {
+                    let sites: Vec<String> = graph
+                        .release_call_sites_for_family(fam)
+                        .map(|s| s.to_string())
+                        .collect();
+                    map.insert(fam, sites);
+                }
+            }
+            map
+        };
+
+        // Drop the borrow on `ctx` (held by `graph`) so the later
+        // `ctx.store(...)` (which needs `&mut self`) compiles cleanly.
+        // The borrow ends at the last use of `graph`, which is the
+        // precomputation block above; this binding makes that explicit
+        // for human readers and prevents a future edit from accidentally
+        // re-using `graph` past this point.
+        let _ = graph;
 
         // Retrieve pointer states from ownership solver (reserved for future
         // path-sensitive analysis when per-allocation filtering is implemented).
@@ -168,7 +213,27 @@ impl Pass for LeakDetectionPass {
 
             match leak_type {
                 LeakType::Definite => {
-                    let candidate_kind = IssueCandidateKind::DefiniteLeak;
+                    // Blocker #3 fix: if the contract graph shows the alloc
+                    // family is released *somewhere* in this IR, downgrade
+                    // the verdict from DefiniteLeak to ConditionalLeak.
+                    // The existing per-function counting missed cross-function
+                    // pairings (e.g. allocator wrapper allocates, sibling
+                    // wrapper frees) and produced 100% FPs on `bun_alloc.ll`.
+                    let (candidate_kind, downgrade_with_sites): (
+                        IssueCandidateKind,
+                        Option<&Vec<String>>,
+                    ) = match release_sites_by_family.get(&family) {
+                        Some(sites) if !sites.is_empty() => {
+                            tracing::info!(
+                                target: "omniscope_pass::path_sensitive_leak::run",
+                                "downgraded leak on family {:?}: {} release sites paired",
+                                family,
+                                sites.len()
+                            );
+                            (IssueCandidateKind::ConditionalLeak, Some(sites))
+                        }
+                        _ => (IssueCandidateKind::DefiniteLeak, None),
+                    };
                     let _issue_kind = IssueKind::DefiniteLeak;
                     let _confidence = if alloc_count > 1 {
                         Confidence::High
@@ -186,21 +251,43 @@ impl Pass for LeakDetectionPass {
                     if !alloc.caller_name.is_empty() {
                         candidate = candidate.with_alloc_caller(&alloc.caller_name);
                     }
-                    candidate = candidate.with_description(format!(
-                        "allocation in '{}' of family {} has no same-family release on any analyzed path (definite leak)",
-                        alloc.function_name, family.display_name()
-                    ));
-                    candidate.add_evidence(
-                        Evidence::new(
-                            EvidenceKind::PathStateRefinement,
-                            format!(
-                                "no {}-family release found for allocation in '{}' (definite)",
-                                family.display_name(),
-                                alloc.function_name
-                            ),
-                        )
-                        .with_family(family),
-                    );
+                    if let Some(sites) = downgrade_with_sites {
+                        candidate = candidate.with_description(format!(
+                            "allocation in '{}' of family {} initially flagged as definite leak; downgraded: family has {} release sites at functions [{}]",
+                            alloc.function_name,
+                            family.display_name(),
+                            sites.len(),
+                            sites.join(", ")
+                        ));
+                        candidate.add_evidence(
+                            Evidence::new(
+                                EvidenceKind::PathStateRefinement,
+                                format!(
+                                    "downgraded DefiniteLeak → ConditionalLeak on family {}: {} paired release site(s) at [{}]",
+                                    family.display_name(),
+                                    sites.len(),
+                                    sites.join(", ")
+                                ),
+                            )
+                            .with_family(family),
+                        );
+                    } else {
+                        candidate = candidate.with_description(format!(
+                            "allocation in '{}' of family {} has no same-family release on any analyzed path (definite leak)",
+                            alloc.function_name, family.display_name()
+                        ));
+                        candidate.add_evidence(
+                            Evidence::new(
+                                EvidenceKind::PathStateRefinement,
+                                format!(
+                                    "no {}-family release found for allocation in '{}' (definite)",
+                                    family.display_name(),
+                                    alloc.function_name
+                                ),
+                            )
+                            .with_family(family),
+                        );
+                    }
 
                     let _candidate_description = candidate.description.clone().unwrap_or_else(|| {
                         format!(
@@ -214,6 +301,84 @@ impl Pass for LeakDetectionPass {
                     candidate_id += 1;
                 }
                 LeakType::Conditional => {
+                    // Blocker #3 fix (continued): the contract graph may show
+                    // that every alloc site of this family already has a
+                    // paired release elsewhere in the IR. In that case the
+                    // ConditionalLeak is noise — suppress the emission.
+                    // We compare per-family alloc-fact counts against the
+                    // number of distinct release sites the graph knows about.
+                    // The release-site count is a lower bound on actual
+                    // release calls (sites are deduped by enclosing
+                    // function), so `sites >= alloc_facts` is a strong
+                    // "every alloc has a sibling release" signal.
+                    if let Some(sites) = release_sites_by_family.get(&family) {
+                        if !sites.is_empty() {
+                            let family_alloc_count = raw_facts
+                                .iter()
+                                .filter(|f| f.is_acquire && f.family == Some(family))
+                                .count();
+                            if sites.len() >= family_alloc_count {
+                                tracing::info!(
+                                    target: "omniscope_pass::path_sensitive_leak::run",
+                                    "downgraded ConditionalLeak to Diagnostic on family {:?}: {} release sites paired (>= {} acquires)",
+                                    family,
+                                    sites.len(),
+                                    family_alloc_count
+                                );
+                                // Instead of silently swallowing the candidate,
+                                // emit it as Diagnostic so it stays visible for
+                                // auditing but does not surface as a reportable
+                                // issue. This avoids losing real TP leaks when
+                                // the release-site count is a false "fully paired"
+                                // signal (e.g., N allocs + N frees but one free
+                                // targets a different allocation).
+                                let mut candidate = IssueCandidate::new(
+                                    candidate_id,
+                                    IssueCandidateKind::ConditionalLeak,
+                                    family,
+                                    &alloc.function_name,
+                                );
+                                candidate_id += 1;
+                                candidate = candidate.with_alloc_contract(alloc.contract);
+                                if !alloc.caller_name.is_empty() {
+                                    candidate = candidate.with_alloc_caller(&alloc.caller_name);
+                                }
+                                candidate.verdict = Some(VerifierVerdict::Diagnostic);
+                                candidate = candidate.with_description(format!(
+                                    "allocation in '{}' of family {} paired with {} release site(s) at [{}] (downgraded: not a confirmed leak)",
+                                    alloc.function_name,
+                                    family.display_name(),
+                                    sites.len(),
+                                    sites.join(", ")
+                                ));
+                                candidate.add_evidence(
+                                    Evidence::new(
+                                        EvidenceKind::PathStateRefinement,
+                                        format!(
+                                            "paired-release downgrade: {} release site(s) for family {} at [{}]",
+                                            sites.len(),
+                                            family.display_name(),
+                                            sites.join(", ")
+                                        ),
+                                    )
+                                    .with_family(family),
+                                );
+                                leak_candidates.push(candidate);
+                                continue;
+                            } else {
+                                tracing::info!(
+                                    target: "omniscope_pass::path_sensitive_leak::run",
+                                    "downgraded leak on family {:?}: {} release sites paired (some acquires unpaired)",
+                                    family,
+                                    sites.len()
+                                );
+                                // Fall through — still emit ConditionalLeak,
+                                // but annotate the evidence with the partial
+                                // pairing so reviewers can audit.
+                            }
+                        }
+                    }
+
                     let mut candidate = IssueCandidate::new(
                         candidate_id,
                         IssueCandidateKind::ConditionalLeak,
@@ -224,19 +389,29 @@ impl Pass for LeakDetectionPass {
                     if !alloc.caller_name.is_empty() {
                         candidate = candidate.with_alloc_caller(&alloc.caller_name);
                     }
+                    let partial_sites = release_sites_by_family.get(&family);
+                    let partial_note = match partial_sites {
+                        Some(sites) if !sites.is_empty() => format!(
+                            "; partial graph pairing: {} release site(s) at [{}]",
+                            sites.len(),
+                            sites.join(", ")
+                        ),
+                        _ => String::new(),
+                    };
                     candidate = candidate.with_description(format!(
-                        "allocation in '{}' of family {} has partial same-family release ({} alloc, {} release) on analyzed paths (conditional leak)",
-                        alloc.function_name, family.display_name(), alloc_count, release_count
+                        "allocation in '{}' of family {} has partial same-family release ({} alloc, {} release) on analyzed paths (conditional leak){}",
+                        alloc.function_name, family.display_name(), alloc_count, release_count, partial_note
                 ));
                     candidate.add_evidence(
                         Evidence::new(
                             EvidenceKind::PathStateRefinement,
                             format!(
-                                "partial {}-family release: {} allocs, {} releases in '{}' (conditional)",
+                                "partial {}-family release: {} allocs, {} releases in '{}' (conditional){}",
                                 family.display_name(),
                                 alloc_count,
                                 release_count,
-                                alloc.function_name
+                                alloc.function_name,
+                                partial_note
                             ),
                         )
                         .with_family(family),
@@ -1018,5 +1193,176 @@ mod tests {
 
         assert_eq!(owned_count, 1, "Should have 1 Owned state");
         assert_eq!(escaped_count, 1, "Should have 1 EscapedToCaller state");
+    }
+
+    // ── Helpers for Blocker #3 (downgrade-on-paired-release) tests ──
+
+    /// Builds a `RawResourceFact` for an acquire call site.
+    fn alloc_fact(func_id: u64, callee: &str, caller: &str, family: FamilyId) -> RawResourceFact {
+        RawResourceFact {
+            function: func_id,
+            function_name: callee.to_string(),
+            caller_name: caller.to_string(),
+            family: Some(family),
+            boundary_evidence: None,
+            is_acquire: true,
+            contract: omniscope_types::PointerContract::Owned,
+            arg_index: Some(0),
+        }
+    }
+
+    /// Builds a `ContractGraph` containing one Release edge per
+    /// `(callee, caller)` pair for the given family. This mirrors how the
+    /// real builder records paired deallocator call sites.
+    fn graph_with_releases(
+        family: FamilyId,
+        sites: &[(&str, &str)],
+    ) -> crate::resource::contract_graph_builder::ContractGraph {
+        use crate::resource::contract_graph_builder::{ContractEdge, ContractGraph};
+        let mut g = ContractGraph::new();
+        for (i, (callee, caller)) in sites.iter().enumerate() {
+            let instance = g.alloc_instance();
+            g.add_edge(ContractEdge {
+                source: instance,
+                target: 0,
+                effect: Effect::Release { family, arg: 0 },
+                // function ID does not matter for these tests; use idx+100
+                // to keep IDs distinct from raw_facts func IDs.
+                function: (i as u64) + 100,
+                function_name: callee.to_string(),
+                caller_name: caller.to_string(),
+                family: Some(family),
+                boundary_evidence: None,
+            });
+        }
+        g
+    }
+
+    /// Objective: when the contract graph has at least one same-family
+    /// release site, an otherwise-`DefiniteLeak` allocation should be
+    /// downgraded to `ConditionalLeak` (Blocker #3 fix).
+    /// Invariant: emitted candidate kind is `ConditionalLeak`, and the
+    /// description mentions "downgraded" with the release site list.
+    #[test]
+    fn test_definite_leak_downgraded_when_release_present() {
+        let mut ctx = PassContext::new();
+        // raw_facts has ONE acquire of MIMALLOC, ZERO same-family releases —
+        // the per-function counter would classify this as DefiniteLeak.
+        let alloc = alloc_fact(1, "mi_malloc", "bun_alloc_aligned", FamilyId::MIMALLOC);
+        ctx.store("raw_resource_facts", vec![alloc]);
+        // The contract graph, however, already paired the family with TWO
+        // release sites in other functions in the same module.
+        let graph = graph_with_releases(
+            FamilyId::MIMALLOC,
+            &[("mi_free", "bun_free"), ("mi_free", "bun_free_aligned")],
+        );
+        ctx.store("contract_graph", graph);
+
+        let pass = LeakDetectionPass::new();
+        pass.run(&mut ctx).expect("LeakDetection pass must succeed");
+
+        let candidates: Vec<IssueCandidate> = ctx
+            .get::<Vec<IssueCandidate>>("leak_candidates")
+            .unwrap_or_default();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "exactly one candidate expected for the single alloc site"
+        );
+        let c = &candidates[0];
+        assert_eq!(
+            c.kind,
+            IssueCandidateKind::ConditionalLeak,
+            "DefiniteLeak must be downgraded to ConditionalLeak when family has release sites"
+        );
+        let desc = c.description.as_deref().unwrap_or("");
+        assert!(
+            desc.contains("downgraded"),
+            "description must explain the downgrade, got: {desc}"
+        );
+        assert!(
+            desc.contains("bun_free") || desc.contains("bun_free_aligned"),
+            "description must list paired release call sites, got: {desc}"
+        );
+    }
+
+    /// Objective: when the contract graph has NO same-family release, the
+    /// `DefiniteLeak` verdict must be preserved (no over-eager downgrade).
+    /// Invariant: emitted candidate kind is `DefiniteLeak`.
+    #[test]
+    fn test_definite_leak_preserved_when_no_release() {
+        let mut ctx = PassContext::new();
+        let alloc = alloc_fact(1, "mi_malloc", "bun_alloc_aligned", FamilyId::MIMALLOC);
+        ctx.store("raw_resource_facts", vec![alloc]);
+        // Empty graph — no release sites at all.
+        let graph = graph_with_releases(FamilyId::MIMALLOC, &[]);
+        ctx.store("contract_graph", graph);
+
+        let pass = LeakDetectionPass::new();
+        pass.run(&mut ctx).expect("LeakDetection pass must succeed");
+
+        let candidates: Vec<IssueCandidate> = ctx
+            .get::<Vec<IssueCandidate>>("leak_candidates")
+            .unwrap_or_default();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "exactly one candidate expected for the single alloc site"
+        );
+        assert_eq!(
+            candidates[0].kind,
+            IssueCandidateKind::DefiniteLeak,
+            "DefiniteLeak must be preserved when no release sites exist in the contract graph"
+        );
+    }
+
+    /// Objective: when every alloc site of a family has a paired release
+    /// site in the contract graph, the `ConditionalLeak` is downgraded to
+    /// `Diagnostic` (visible but non-reportable) instead of being silently
+    /// discarded, preserving auditability.
+    /// Invariant: all emitted candidates carry `VerifierVerdict::Diagnostic`.
+    #[test]
+    fn test_conditional_leak_suppressed_when_all_paired() {
+        let mut ctx = PassContext::new();
+        // Two acquires + one same-function release → counting says
+        // ConditionalLeak (partial coverage).
+        let alloc1 = alloc_fact(1, "mi_malloc", "bun_realloc", FamilyId::MIMALLOC);
+        let alloc2 = alloc_fact(1, "mi_malloc", "bun_realloc", FamilyId::MIMALLOC);
+        let release = RawResourceFact {
+            function: 1,
+            function_name: "mi_free".to_string(),
+            caller_name: "bun_realloc".to_string(),
+            family: Some(FamilyId::MIMALLOC),
+            boundary_evidence: None,
+            is_acquire: false,
+            contract: omniscope_types::PointerContract::Released,
+            arg_index: Some(0),
+        };
+        ctx.store("raw_resource_facts", vec![alloc1, alloc2, release]);
+        // Contract graph shows two distinct release sites — ≥ acquires
+        // count, so every alloc has a sibling release somewhere.
+        let graph = graph_with_releases(
+            FamilyId::MIMALLOC,
+            &[("mi_free", "bun_free"), ("mi_free", "bun_free_aligned")],
+        );
+        ctx.store("contract_graph", graph);
+
+        let pass = LeakDetectionPass::new();
+        pass.run(&mut ctx).expect("LeakDetection pass must succeed");
+
+        let candidates: Vec<IssueCandidate> = ctx
+            .get::<Vec<IssueCandidate>>("leak_candidates")
+            .unwrap_or_default();
+        assert!(
+            !candidates.is_empty(),
+            "ConditionalLeak must be downgraded to Diagnostic, not silently discarded"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c.verdict == Some(VerifierVerdict::Diagnostic)),
+            "all candidates must carry Diagnostic verdict, got {:?}",
+            candidates.iter().map(|c| &c.verdict).collect::<Vec<_>>()
+        );
     }
 }

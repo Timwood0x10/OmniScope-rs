@@ -297,8 +297,19 @@ pub struct IssueLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<u32>,
     /// Function name (optional).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// Skipped from serialization when absent OR when the stored value is
+    /// an empty string. The empty-string case is filtered because several
+    /// upstream call sites pass `&boundary.caller_name` directly via
+    /// `IssueLocation::with_function`, and that string may be empty —
+    /// emitting `"function": ""` in JSON output is noise, not signal.
+    #[serde(skip_serializing_if = "is_none_or_empty")]
     pub function: Option<String>,
+}
+
+/// Serde predicate: skip when the optional string is `None` or empty.
+fn is_none_or_empty(s: &Option<String>) -> bool {
+    s.as_ref().map(|v| v.is_empty()).unwrap_or(true)
 }
 
 impl IssueLocation {

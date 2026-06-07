@@ -21,6 +21,7 @@ pub mod issue_candidate_builder;
 pub mod issue_gate;
 pub mod issue_verifier;
 pub mod language_adapter_fact_pass;
+pub mod may_alias;
 pub mod ownership_solver;
 pub mod path_sensitive_leak;
 pub mod raw_fact_collector;

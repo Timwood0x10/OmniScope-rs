@@ -14,19 +14,11 @@ on:
     branches:
       - master
       - dev
-  schedule:
-    # Run daily at 2:00 AM UTC
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # .cargo/config.toml sets rustc-wrapper = "sccache". CI installs sccache via
-  # mozilla-actions/sccache-action before running cargo; these env vars route
-  # the cache through the GitHub Actions cache backend.
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
   # llvm-sys 221 is used by omniscope-ir when the llvm-backend feature is on.
   # Linux runners install llvm-22-dev under /usr/lib/llvm-22 (matches llvm-sys major version).
   LLVM_SYS_221_PREFIX: /usr/lib/llvm-22
@@ -44,9 +36,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -70,9 +59,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -115,9 +101,6 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
       # Windows has no easy llvm-22-dev; build/test without llvm-backend feature.
       - name: Run tests (Linux / macOS, all features)
         if: runner.os != 'Windows'
@@ -144,9 +127,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Build documentation
         run: cargo doc --workspace --no-deps
@@ -216,9 +196,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Build benchmarks (no run)
         run: cargo bench --no-run

@@ -105,6 +105,62 @@ impl ContractGraph {
     pub fn is_ffi_boundary(&self, function: &str) -> Option<(Language, Language)> {
         self.ffi_boundaries.get(function).map(|b| (b.from, b.to))
     }
+
+    /// Returns true if any edge in the graph releases the given `family`.
+    ///
+    /// "Release" here covers any effect classified as a release by
+    /// [`Effect::is_release`] — that is, `Release`, `ConditionalRelease`,
+    /// `CrossLanguageFree`, and `NullGuardedRelease`. The match is by
+    /// the *release* family carried on the effect, so a malloc paired
+    /// with a cross-language free of `MIMALLOC` still counts as having
+    /// a `MIMALLOC` release somewhere in the module.
+    ///
+    /// This is the signal used by `path_sensitive_leak` to downgrade a
+    /// `DefiniteLeak` to `ConditionalLeak` (and to suppress noisy
+    /// `ConditionalLeak`s) when the module clearly pairs allocator with
+    /// deallocator at *some* call site, even when per-function counting
+    /// missed the pairing.
+    ///
+    /// `# Examples` section omitted — see `path_sensitive_leak::run`.
+    pub fn has_release_for_family(&self, family: FamilyId) -> bool {
+        self.edges
+            .iter()
+            .any(|e| e.effect.is_release() && e.effect.family() == Some(family))
+    }
+
+    /// Returns an iterator of caller-function names where `family` is
+    /// released, deduplicated, in first-encountered order. Used to attach
+    /// auditable evidence ("downgraded: family has N release sites at
+    /// functions [...]") when a leak verdict is downgraded.
+    ///
+    /// `# Examples` section omitted — see `path_sensitive_leak::run`.
+    pub fn release_call_sites_for_family(&self, family: FamilyId) -> impl Iterator<Item = &str> {
+        // Collect distinct caller names that host a release for `family`.
+        // We dedupe via a small inline set, preserving insertion order for
+        // deterministic, human-readable evidence strings.
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut sites: Vec<&str> = Vec::new();
+        for edge in &self.edges {
+            if !edge.effect.is_release() {
+                continue;
+            }
+            if edge.effect.family() != Some(family) {
+                continue;
+            }
+            // Prefer the enclosing caller name (where the release CALL is
+            // located); fall back to the callee name for orphan-release
+            // edges that lack a caller.
+            let site = if !edge.caller_name.is_empty() {
+                edge.caller_name.as_str()
+            } else {
+                edge.function_name.as_str()
+            };
+            if seen.insert(site) {
+                sites.push(site);
+            }
+        }
+        sites.into_iter()
+    }
 }
 
 /// Contract graph builder pass.

@@ -312,6 +312,15 @@ impl PassManager {
         self.passes.len()
     }
 
+    /// Returns the names of all registered passes, in registration order.
+    ///
+    /// The names come directly from `Pass::name()`, so the result reflects
+    /// the actual passes currently in the manager rather than a hardcoded
+    /// list that can drift from reality.
+    pub fn pass_names(&self) -> Vec<&'static str> {
+        self.passes.iter().map(|p| p.name()).collect()
+    }
+
     /// Clears all passes
     pub fn clear(&mut self) {
         self.passes.clear();

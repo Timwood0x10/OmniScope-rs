@@ -159,6 +159,14 @@ impl Pipeline {
         self.pass_manager.pass_count()
     }
 
+    /// Returns the names of all registered passes, in registration order.
+    ///
+    /// Drives `omniscope info --passes` so the CLI display stays in sync
+    /// with `register_default_passes` instead of duplicating the list.
+    pub fn registered_pass_names(&self) -> Vec<&'static str> {
+        self.pass_manager.pass_names()
+    }
+
     /// Sets parallel execution mode
     pub fn set_parallel(&mut self, parallel: bool) {
         self.pass_manager.set_parallel(parallel);

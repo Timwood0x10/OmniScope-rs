@@ -527,6 +527,8 @@ fn filter_boundary_issues(
         stats: result.stats,
         issues: boundary_issues,
         pass_timings: filtered_pass_timings,
+        // Filtered view: dedup already happened upstream in `with_issues`.
+        dedup_dropped: result.dedup_dropped,
     }
 }
 
@@ -783,21 +785,21 @@ fn run_info(cmd: InfoCommand) -> anyhow::Result<()> {
     );
 
     if cmd.passes {
-        println!("\n{}", "Available Passes:".yellow().bold());
-        println!("  Foundation:");
-        println!("    - CFG (Control Flow Graph)");
-        println!("    - DFG (Data Flow Graph)");
-        println!("    - CallGraph (Call graph construction)");
-        println!("  Analysis:");
-        println!("    - FFIBoundary (FFI boundary detection)");
-        println!("    - SurfaceClassifier (Function surface classification)");
-        println!("    - DangerSurface (Danger surface analysis)");
-        println!("    - MemorySafety (Memory safety analysis)");
-        println!("    - PointerOwnership (Ownership tracking)");
-        println!("    - BufferOverflow (Buffer overflow detection)");
-        println!("  Filtering:");
-        println!("    - NoiseReduction (False positive suppression)");
-        println!("    - PrecisionMetrics (Precision gate with 88% threshold)");
+        // Drive the list from the real pipeline registration so this output
+        // cannot drift from `Pipeline::register_default_passes`.
+        let mut pipeline = Pipeline::new();
+        pipeline.register_default_passes();
+        let names = pipeline.registered_pass_names();
+
+        println!(
+            "\n{} ({})",
+            "Registered Passes:".yellow().bold(),
+            names.len()
+        );
+        for name in &names {
+            println!("    - {}", name);
+        }
+
         println!("\n{}", "Output Formats:".yellow().bold());
         println!("    - rich   (colored terminal output with detection paths)");
         println!("    - json   (machine-readable JSON)");

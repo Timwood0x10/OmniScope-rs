@@ -124,6 +124,21 @@ impl Pass for IssueVerifierPass {
         // Layer 1: NoiseReduction — fast string-based FP pre-filter.
         let noise = NoiseReduction::new();
 
+        // ── Collect user-defined function names from IR ──
+        // Functions with a body in the IR module are user-defined (not pure
+        // extern declarations). This is used by FFI Gate 1b-3 to avoid
+        // suppressing real bugs when a user wrapper happens to share a name
+        // with a runtime deallocator (e.g., a user-defined `@free` calling
+        // the real `@free` twice → genuine double-free, not runtime noise).
+        let user_defined_functions: std::collections::HashSet<String> = ctx
+            .get_ir_module()
+            .map(|m| m.function_bodies.keys().cloned().collect())
+            .unwrap_or_else(|| {
+                ctx.get_ref::<omniscope_ir::IRModule>("ir_module")
+                    .map(|m| m.function_bodies.keys().cloned().collect())
+                    .unwrap_or_default()
+            });
+
         // ── Single-language shortcut ──
         // If the module has only one language, skip FFI-specific issue types
         // (CrossLanguageFree, UncheckedFfiReturn, NullDereference, etc.)
@@ -375,6 +390,10 @@ impl Pass for IssueVerifierPass {
                 // If the caller is user code, it's a genuine double-free.
                 // If caller is unknown (None), default to NOT suppressing —
                 // it's better to report a potential bug than to hide it.
+                // CAVEAT: a user-defined wrapper that happens to share a
+                // runtime deallocator name (e.g., `@free` with a body) is
+                // NOT runtime-internal, even if `is_runtime_deallocator_function`
+                // matches on name alone.
                 if !candidate.has_ffi_evidence()
                     && is_runtime_deallocator_function(&candidate.alloc_function)
                 {
@@ -384,6 +403,12 @@ impl Pass for IssueVerifierPass {
                         .or(candidate.alloc_caller.as_deref());
                     let caller_is_runtime = caller
                         .map(|c| {
+                            // If the caller has a user-defined body in the IR,
+                            // it's NOT a runtime internal — even if the name
+                            // matches a known deallocator.
+                            if user_defined_functions.contains(c) {
+                                return false;
+                            }
                             noise.should_suppress_runtime_caller(c)
                                 || is_runtime_deallocator_function(c)
                         })
@@ -439,7 +464,6 @@ impl Pass for IssueVerifierPass {
                     issues.push(issue);
                 }
             }
-
             verified.push(candidate);
         }
 
@@ -714,7 +738,7 @@ fn is_ffi_specific_issue(candidate: &IssueCandidate) -> bool {
 /// * `registry` - Family registry for compatible-release checks.
 /// * `config` - Optional configuration for other checks.
 /// * `boundary_ctx` - Optional boundary context for FFI boundary verification.
-fn verify_candidate(
+pub(crate) fn verify_candidate(
     candidate: &IssueCandidate,
     registry: &FamilyRegistry,
     config: Option<&OmniScopeConfig>,
@@ -945,6 +969,22 @@ fn verify_double_release(candidate: &IssueCandidate) -> VerifierVerdict {
         }
     }
 
+    // ── May-alias gate ──
+    // The candidate builder runs an SSA-root alias check between the two
+    // release sites and attaches an `Insufficient` evidence prefixed with
+    // `may_alias=NotAlias` when the check fails. Refuse to confirm in
+    // that case — the two release sites are not provably aliasing, so
+    // reporting as [confirmed] DoubleFree would be a false positive.
+    if has_may_alias_rejection(candidate) {
+        tracing::debug!(
+            target: "omniscope_pass::issue_verifier",
+            "DoubleFree alias gate rejected: site_a={:?} site_b={:?} reason=NotAlias",
+            candidate.alloc_caller,
+            candidate.release_caller
+        );
+        return VerifierVerdict::ProbableIssue;
+    }
+
     // Null-guard alone does NOT make double-free safe.
     // `free(NULL)` is safe, but `free(ptr); free(ptr)` with non-null
     // ptr is undefined behavior (CWE-415). Without path analysis
@@ -957,6 +997,16 @@ fn verify_double_release(candidate: &IssueCandidate) -> VerifierVerdict {
 
     // Default: double-free is a confirmed issue
     VerifierVerdict::ConfirmedIssue
+}
+
+/// Returns true when the candidate carries an `Insufficient` evidence
+/// describing a may-alias gate rejection (description prefixed with
+/// `may_alias=NotAlias`). This is the contract between the candidate
+/// builder and `verify_double_release`.
+fn has_may_alias_rejection(candidate: &IssueCandidate) -> bool {
+    candidate.evidence.iter().any(|e| {
+        e.kind == EvidenceKind::Insufficient && e.description.starts_with("may_alias=NotAlias")
+    })
 }
 
 /// Verifies a definite leak candidate (all analyzed paths leak).

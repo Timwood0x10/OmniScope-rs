@@ -18,8 +18,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 
 jobs:
   # Resolve the tag/ref both for tag-push and manual dispatch.
@@ -86,9 +84,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.7
 
       # On non-native targets, the rustc-wrapper + linker config in
       # .cargo/config.toml (mold for x86_64-linux only) doesn't apply,

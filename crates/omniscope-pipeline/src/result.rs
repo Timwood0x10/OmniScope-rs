@@ -2,9 +2,12 @@
 //!
 //! This module provides result aggregation for the analysis pipeline.
 
-use omniscope_core::Issue;
+use omniscope_core::{Confidence, Issue, IssueKind, Severity};
 use omniscope_pass::{PassResult, PassTiming};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 /// Pipeline result aggregating all pass results
@@ -26,6 +29,19 @@ pub struct PipelineResult {
     /// Per-pass timing information for performance reporting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pass_timings: Vec<PassTiming>,
+    /// Number of issues dropped by dedup collisions in `with_issues`.
+    ///
+    /// A non-zero value means two findings collided on the precise dedup key
+    /// `(IssueKind, function, file, line, column, description-hash)` and the
+    /// lower-severity / lower-confidence one was discarded in favour of the
+    /// stronger one. Surfaced so users can detect lossy aggregation.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub dedup_dropped: usize,
+}
+
+/// Helper for `skip_serializing_if`: returns true when `n == 0`.
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 impl PipelineResult {
@@ -51,14 +67,18 @@ impl PipelineResult {
             stats,
             issues,
             pass_timings,
+            dedup_dropped: 0,
         }
     }
 
     /// Creates a pipeline result with explicit issues (from context collection).
     ///
-    /// Deduplicates issues by (kind, symbol, description) before counting.
-    /// This prevents the same bug from being reported multiple times when
-    /// multiple passes emit overlapping findings.
+    /// Deduplicates issues with a precise key — `(IssueKind, function, file,
+    /// line, column, description-hash)` — so two real findings at distinct
+    /// source positions inside the same function are both preserved. On a
+    /// true collision (identical precise key) the issue with the higher
+    /// `(severity, confidence)` is kept and the loser is counted in
+    /// `dedup_dropped`. Insertion order is preserved for the survivors.
     pub fn with_issues(
         pass_results: Vec<PassResult>,
         duration: Duration,
@@ -69,15 +89,19 @@ impl PipelineResult {
 
         let stats = PipelineStats::from_pass_results(&pass_results);
 
-        // Deduplicate: same (kind, symbol, description) → keep first occurrence.
-        let mut seen = std::collections::HashSet::new();
-        let deduped: Vec<Issue> = issues
-            .into_iter()
-            .filter(|issue| {
-                let key = (issue.kind, issue.symbol.clone(), issue.description.clone());
-                seen.insert(key)
-            })
-            .collect();
+        let original_count = issues.len();
+        let (deduped, dedup_dropped) = dedup_issues(issues);
+
+        // Invariant: every dropped issue must be accounted for. We never lose
+        // an issue silently — it is either kept or counted in `dedup_dropped`.
+        debug_assert_eq!(
+            deduped.len() + dedup_dropped,
+            original_count,
+            "issue dedup must conserve count: kept={} + dropped={} != original={}",
+            deduped.len(),
+            dedup_dropped,
+            original_count,
+        );
 
         let total_issues = deduped.len();
 
@@ -89,6 +113,7 @@ impl PipelineResult {
             stats,
             issues: deduped,
             pass_timings,
+            dedup_dropped,
         }
     }
 
@@ -156,6 +181,130 @@ impl PipelineResult {
             self.duration_ms()
         )
     }
+}
+
+/// Precise dedup key for a single issue.
+///
+/// The key captures every dimension we need to distinguish two real findings:
+/// the kind of bug, the function it lives in, the exact source position, and
+/// a stable hash of the description (used as a tiebreaker when the location
+/// is missing or shared by multiple distinct candidates emitted from the same
+/// line). Two issues only collide when *all* of these match.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct IssueDedupKey {
+    kind: IssueKind,
+    function: String,
+    file: String,
+    line: u32,
+    column: u32,
+    description_hash: u64,
+}
+
+/// Builds the precise dedup key for an issue.
+///
+/// Missing location fields are mapped to sentinel values (`""` / `0`) and we
+/// always mix the description hash in so that issues sharing kind+function
+/// but emitted from different abstract positions remain distinct.
+fn issue_dedup_key(issue: &Issue) -> IssueDedupKey {
+    let (file, line, column, function) = match &issue.location {
+        Some(loc) => (
+            loc.file.to_string_lossy().into_owned(),
+            loc.line,
+            loc.column.unwrap_or(0),
+            loc.function.clone().unwrap_or_default(),
+        ),
+        None => (String::new(), 0, 0, String::new()),
+    };
+
+    // Fall back to symbol when function is missing — empty function names
+    // (the `function: ""` bug) would otherwise collapse unrelated findings.
+    let function = if function.is_empty() {
+        issue.symbol.clone()
+    } else {
+        function
+    };
+
+    let mut hasher = DefaultHasher::new();
+    issue.description.hash(&mut hasher);
+    let description_hash = hasher.finish();
+
+    IssueDedupKey {
+        kind: issue.kind,
+        function,
+        file,
+        line,
+        column,
+        description_hash,
+    }
+}
+
+/// Ranks severity so that stronger severities win on dedup collision.
+fn severity_rank(s: Severity) -> u8 {
+    match s {
+        Severity::Error => 3,
+        Severity::Warning => 2,
+        Severity::Note => 1,
+        Severity::Help => 0,
+    }
+}
+
+/// Ranks confidence so that higher confidence wins on dedup collision.
+fn confidence_rank(c: Confidence) -> u8 {
+    match c {
+        Confidence::High => 2,
+        Confidence::Medium => 1,
+        Confidence::Low => 0,
+    }
+}
+
+/// Deduplicates issues by the precise key.
+///
+/// On collision the issue with the higher `(severity, confidence)` is kept;
+/// ties keep the first-seen issue (stable order). Returns the surviving
+/// issues in insertion order plus the number of dropped duplicates.
+fn dedup_issues(issues: Vec<Issue>) -> (Vec<Issue>, usize) {
+    // index_by_key: dedup-key -> position in `kept`.
+    let mut index_by_key: HashMap<IssueDedupKey, usize> = HashMap::with_capacity(issues.len());
+    let mut kept: Vec<Issue> = Vec::with_capacity(issues.len());
+    let mut dropped = 0usize;
+
+    for issue in issues {
+        let key = issue_dedup_key(&issue);
+        match index_by_key.get(&key).copied() {
+            None => {
+                index_by_key.insert(key, kept.len());
+                kept.push(issue);
+            }
+            Some(existing_idx) => {
+                let existing = &kept[existing_idx];
+                let new_rank = (
+                    severity_rank(issue.severity),
+                    confidence_rank(issue.confidence),
+                );
+                let old_rank = (
+                    severity_rank(existing.severity),
+                    confidence_rank(existing.confidence),
+                );
+                if new_rank > old_rank {
+                    tracing::debug!(
+                        target: "omniscope_pipeline::result",
+                        "issue dedup collision dropped: kept higher-severity finding at {:?}",
+                        issue.location
+                    );
+                    kept[existing_idx] = issue;
+                } else {
+                    tracing::debug!(
+                        target: "omniscope_pipeline::result",
+                        "issue dedup collision dropped: kept higher-severity finding at {:?}",
+                        existing.location
+                    );
+                }
+                dropped += 1;
+            }
+        }
+    }
+
+    (kept, dropped)
 }
 
 /// Pipeline statistics
@@ -578,6 +727,168 @@ mod tests {
         assert!(
             result.low_issues().is_empty(),
             "low_issues must be empty when no issues exist"
+        );
+    }
+
+    /// Helper: builds an issue with a precise location for dedup tests.
+    fn located_issue(
+        id: u64,
+        kind: omniscope_core::IssueKind,
+        severity: omniscope_core::Severity,
+        description: &str,
+        function: &str,
+        line: u32,
+    ) -> omniscope_core::Issue {
+        let location =
+            omniscope_core::IssueLocation::new(std::path::PathBuf::from("src/lib.rs"), line)
+                .with_function(function);
+        omniscope_core::Issue::new(id, kind, severity, description).with_location(location)
+    }
+
+    /// Objective: Two findings of the same kind in the same function but at
+    /// different source lines must both survive dedup.
+    /// Invariants: kept=2, dedup_dropped=0.
+    #[test]
+    fn test_dedup_preserves_distinct_findings_in_same_function() {
+        use omniscope_core::{IssueKind, Severity};
+
+        let issues = vec![
+            located_issue(
+                1,
+                IssueKind::MemoryLeak,
+                Severity::Warning,
+                "leak at first call",
+                "do_work",
+                42,
+            ),
+            located_issue(
+                2,
+                IssueKind::MemoryLeak,
+                Severity::Warning,
+                "leak at second call",
+                "do_work",
+                57,
+            ),
+        ];
+
+        let result = PipelineResult::with_issues(
+            vec![PassResult::new("verifier")],
+            Duration::from_millis(1),
+            issues,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            result.issues.len(),
+            2,
+            "distinct lines in the same function must both survive dedup"
+        );
+        assert_eq!(
+            result.total_issues, 2,
+            "total_issues must reflect both surviving findings"
+        );
+        assert_eq!(
+            result.dedup_dropped, 0,
+            "no collisions expected for distinct lines"
+        );
+    }
+
+    /// Objective: Two issues that are byte-identical on the precise dedup
+    /// key collapse to one and the drop counter increments.
+    /// Invariants: kept=1, dedup_dropped=1.
+    #[test]
+    fn test_dedup_collapses_identical_findings() {
+        use omniscope_core::{IssueKind, Severity};
+
+        let issues = vec![
+            located_issue(
+                1,
+                IssueKind::CrossLanguageFree,
+                Severity::Warning,
+                "duplicate finding",
+                "ffi_callee",
+                10,
+            ),
+            located_issue(
+                2,
+                IssueKind::CrossLanguageFree,
+                Severity::Warning,
+                "duplicate finding",
+                "ffi_callee",
+                10,
+            ),
+        ];
+
+        let result = PipelineResult::with_issues(
+            vec![PassResult::new("verifier")],
+            Duration::from_millis(1),
+            issues,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            result.issues.len(),
+            1,
+            "identical findings must collapse to a single survivor"
+        );
+        assert_eq!(
+            result.total_issues, 1,
+            "total_issues must reflect the single survivor"
+        );
+        assert_eq!(
+            result.dedup_dropped, 1,
+            "the discarded duplicate must be counted"
+        );
+    }
+
+    /// Objective: On a precise-key collision the issue with the higher
+    /// severity wins regardless of arrival order.
+    /// Invariants: surviving issue has Severity::Error, dedup_dropped=1.
+    #[test]
+    fn test_dedup_keeps_higher_severity_on_collision() {
+        use omniscope_core::{IssueKind, Severity};
+
+        // The weaker (Note) issue arrives first; the stronger (Error) issue
+        // must displace it.
+        let issues = vec![
+            located_issue(
+                1,
+                IssueKind::NullDereference,
+                Severity::Note,
+                "weaker variant",
+                "consumer",
+                7,
+            ),
+            located_issue(
+                2,
+                IssueKind::NullDereference,
+                Severity::Error,
+                "weaker variant",
+                "consumer",
+                7,
+            ),
+        ];
+
+        let result = PipelineResult::with_issues(
+            vec![PassResult::new("verifier")],
+            Duration::from_millis(1),
+            issues,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            result.issues.len(),
+            1,
+            "collision must collapse to a single survivor"
+        );
+        assert_eq!(
+            result.issues[0].severity,
+            Severity::Error,
+            "the higher-severity finding must win the collision"
+        );
+        assert_eq!(
+            result.dedup_dropped, 1,
+            "the discarded lower-severity issue must be counted"
         );
     }
 }

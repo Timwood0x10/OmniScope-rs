@@ -14,12 +14,14 @@
 
 ### 已发现真实漏洞
 
-| 项目 | 问题 | 严重程度 |
-|-------|------|---------|
-| [bun](https://github.com/oven-sh/bun) | `bun_jsc` 中的命令注入 | CRITICAL |
-| [bun](https://github.com/oven-sh/bun) | `bun_boringssl` 中的跨语言内存泄漏 | HIGH |
-| [wasmtime](https://github.com/bytecodealliance/wasmtime) | 1720 个 issue 中确认 1 个 CRITICAL | — |
-| [bun_alloc](https://github.com/oven-sh/bun) | 泄漏分析 100% 准确率 (1/1) | — |
+| 项目 | 状态 | 备注 |
+|---|---|---|
+| ffi-demo（Zig↔C 语料） | `zig_main.ll` 上 95% precision、100% recall | 当前最强结果，详见 `docs/release/ffi_demo_validation.md`。 |
+| ffi-demo（整体） | 10 个 IR 文件平均 68% precision、62% recall | 详见验证报告中的逐文件表。 |
+| bun `bun_alloc` | 当前 0/19 TP，单语言门控调整（`bd21984`）引入的回归，已纳入 v0.3.0 跟踪。 | 详见 `docs/release/bun_validation.md`。 |
+| wasmtime | 早期扫描：1720 个候选，1 个确认 CRITICAL（v0.2.0 未重新验证）。 | 重新验证待开展。 |
+
+> 说明：早期 README 曾声称在 bun 的 `bun_jsc` 和 `bun_boringssl` 中发现独立漏洞，但独立复核无法复现（bun 中并不存在这两个 crate 名，且未提供 IR 与复现物料），上表已替换那些声明。
 
 ## 支持的语言
 
@@ -35,6 +37,8 @@ C、C++、Rust、Zig、Go、Python、Java、C# — 通过 IR 元数据（mangled
        └── Plan B（回退）：纯文本解析（零外部依赖）
 ```
 
+> 实际加载器暴露 8 种 `LoadStrategy` 变体，Plan A/B/C 是高层叙述。全部 8 种策略详见 `docs/en/architecture.md`。
+
 ```
 原始事实 → IR 行为摘要 → 结构推断
      → 契约图 → 所有权求解器 → 问题候选 → 验证器
@@ -46,14 +50,14 @@ C、C++、Rust、Zig、Go、Python、Java、C# — 通过 IR 元数据（mangled
 |-------|------|
 | `omniscope-cli` | 用户 CLI 入口（`analyze`、`audit`、`info` 子命令） |
 | `omniscope-pipeline` | 分析流水线编排，Pass 调度 |
-| `omniscope-pass` | 20+ 分析 Pass（FFI 边界、RAII、borrow escape、契约图、所有权求解器） |
+| `omniscope-pass` | 20 个默认分析 Pass（FFI 边界、RAII、borrow escape、契约图、所有权求解器） |
 | `omniscope-semantics` | 语义推导引擎，结构推断，语言检测 |
 | `omniscope-ir` | LLVM IR 加载器、解析器、IR Model（三层加载策略） |
 | `omniscope-dataflow` | 通用前向/后向数据流分析框架 |
-| `omniscope-core` | 诊断、Issue 模型（23 类问题）、Profiler、内存池 |
+| `omniscope-core` | 诊断、Issue 模型（28 类问题）、Profiler、内存池 |
 | `omniscope-types` | 公共类型定义、ResourceFamily 系统、ABI 类型 |
 
-## 新功能（v0.2.0）
+## 新功能（v0.2.0-rc，预览版）
 
 ### 多语言语义扩展
 
@@ -101,6 +105,12 @@ OmniScope 现在支持 7 种编程语言的 19 个语义变体：
 - 对象生命周期检测（创建、借用、窃取）
 - GIL（全局解释器锁）管理分析
 - Python 特定 FFI 模式识别
+
+### 已知限制
+
+v0.2.0 当前以发布候选（release candidate）形式提供，并非稳定版。已知回归（特别是
+单语言门控调整后 `bun_alloc` 的精度回归）以及待重新验证的工作均记录在
+[`docs/release/release_readiness_v0.2.0.md`](docs/release/release_readiness_v0.2.0.md)。
 
 ## 核心特性
 

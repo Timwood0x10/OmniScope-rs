@@ -39,6 +39,7 @@ use omniscope_types::{
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
+use crate::resource::may_alias::{first_call_arg_register, may_alias, FreeSite, MayAliasResult};
 use grouping::InstanceEdgeGroups;
 
 /// Converts a SemanticFact into an Evidence attachment for issue candidates.
@@ -152,6 +153,7 @@ impl Pass for IssueCandidateBuilderPass {
         // Use get_ref to avoid cloning large collections.
         let graph = ctx.get_ref::<ContractGraph>("contract_graph");
         let ownership_states = ctx.get_ref::<Vec<ResourceInstance>>("ownership_states");
+        let ir_module = ctx.get_ir_module();
         let registry = ctx
             .get_ref::<FamilyRegistry>("family_registry")
             .cloned()
@@ -502,6 +504,15 @@ impl Pass for IssueCandidateBuilderPass {
                             first_caller
                         );
 
+                        // ── May-alias gate ──
+                        // Build a FreeSite for both the first and the i-th release
+                        // edge and run the alias check. The result is recorded on
+                        // the candidate; the verifier consults it before upgrading
+                        // the verdict to ConfirmedIssue.
+                        let site_a = build_free_site_for_edge(graph, release_indices[0], ir_module);
+                        let site_b = build_free_site_for_edge(graph, ri, ir_module);
+                        let alias_result = may_alias(&site_a, &site_b, ir_module);
+
                         let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
                         let id = next_id;
                         next_id += 1;
@@ -512,7 +523,9 @@ impl Pass for IssueCandidateBuilderPass {
                             family,
                             &graph.edges[ri].function_name,
                         )
-                        .with_resource_id(*instance_id);
+                        .with_resource_id(*instance_id)
+                        .with_alloc_caller(&graph.edges[release_indices[0]].caller_name)
+                        .with_release_caller(&graph.edges[ri].caller_name);
 
                         // Add MultipleRelease evidence
                         candidate.add_evidence(
@@ -526,6 +539,34 @@ impl Pass for IssueCandidateBuilderPass {
                             )
                             .with_confidence(0.9),
                         );
+
+                        // Record the alias-gate verdict. The description prefix
+                        // `may_alias=` is the contract with `verify_double_release`
+                        // — that function downgrades the verdict when it sees
+                        // `may_alias=NotAlias` here.
+                        if !matches!(alias_result, MayAliasResult::MayAlias) {
+                            tracing::debug!(
+                                target: "omniscope_pass::issue_verifier",
+                                "DoubleFree alias gate rejected at candidate-build: site_a={:?} site_b={:?} reason=NoSharedSsaRoot",
+                                site_a,
+                                site_b
+                            );
+                            candidate.add_evidence(
+                                Evidence::new(
+                                    EvidenceKind::Insufficient,
+                                    format!(
+                                        "may_alias=NotAlias: site_a=({}, {}, {:?}) site_b=({}, {}, {:?})",
+                                        site_a.caller,
+                                        site_a.callee,
+                                        site_a.arg_register,
+                                        site_b.caller,
+                                        site_b.callee,
+                                        site_b.arg_register,
+                                    ),
+                                )
+                                .with_confidence(0.9),
+                            );
+                        }
 
                         // Add NullGuardedRelease evidence if applicable
                         if all_null_guarded {
@@ -1085,6 +1126,54 @@ pub fn build_cross_family_candidate(
         "cross-family release: {} ({:?}) released by {} ({:?})",
         alloc_func, alloc_family, release_func, release_family
     ))
+}
+
+/// Build a `FreeSite` describing a release edge for the may-alias gate.
+///
+/// Walks the caller's function body, counts release calls to the edge's
+/// callee, and returns the n-th such call's first SSA argument — where
+/// n is determined by how many release edges to the same callee already
+/// appeared in the caller. This best-effort mapping matches the order in
+/// which the contract graph builder discovers release calls.
+fn build_free_site_for_edge(
+    graph: &ContractGraph,
+    edge_idx: usize,
+    ir_module: Option<&omniscope_ir::IRModule>,
+) -> FreeSite {
+    let edge = &graph.edges[edge_idx];
+    let arg = ir_module.and_then(|m| {
+        // How many earlier release edges (in graph order) target the same
+        // (caller, callee) pair as this edge? That is the index of the
+        // matching call instruction in the caller's body.
+        let nth = graph.edges[..edge_idx]
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.effect,
+                    Effect::Release { .. } | Effect::ConditionalRelease { .. }
+                ) && e.caller_name == edge.caller_name
+                    && e.function_name == edge.function_name
+            })
+            .count();
+        let body = m.function_bodies.get(&edge.caller_name)?;
+        let mut seen = 0usize;
+        for inst in &body.instructions {
+            if !matches!(inst.kind, omniscope_ir::IRInstructionKind::Call) {
+                continue;
+            }
+            let Some(callee) = &inst.callee else { continue };
+            if callee != &edge.function_name {
+                continue;
+            }
+            if seen == nth {
+                // Reuse the parsing helper from contract_graph_builder via raw text.
+                return first_call_arg_register(&inst.raw_text);
+            }
+            seen += 1;
+        }
+        None
+    });
+    FreeSite::new(&edge.caller_name, &edge.function_name, arg)
 }
 
 /// Checks if a release function is null-guarded.

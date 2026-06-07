@@ -14,12 +14,14 @@ FFI boundaries are blind spots for every traditional tool. When C calls into Rus
 
 ### Real Bugs Found
 
-| Project | Issue | Severity |
-|---------|-------|----------|
-| [bun](https://github.com/oven-sh/bun) | Command injection in `bun_jsc` | CRITICAL |
-| [bun](https://github.com/oven-sh/bun) | Cross-language memory leak in `bun_boringssl` | HIGH |
-| [wasmtime](https://github.com/bytecodealliance/wasmtime) | 1720 issues analyzed, 1 confirmed CRITICAL | — |
-| [bun_alloc](https://github.com/oven-sh/bun) | 100% precision on leak analysis (1/1) | — |
+| Project | Status | Notes |
+|---|---|---|
+| ffi-demo (Zig↔C corpus) | 95% precision, 100% recall on `zig_main.ll` | Strongest result. See `docs/release/ffi_demo_validation.md`. |
+| ffi-demo (overall) | 68% precision, 62% recall across 10 IR files | See per-file table in validation report. |
+| bun `bun_alloc` | Currently 0/19 TP — known regression after single-language gate change (`bd21984`). Tracked for v0.3.0. | See `docs/release/bun_validation.md`. |
+| wasmtime | Earlier scan: 1720 candidates, 1 confirmed CRITICAL (not re-verified for v0.2.0). | Re-validation pending. |
+
+> Note: earlier drafts of this README claimed independent bun findings in `bun_jsc` and `bun_boringssl`. Triage could not reproduce those (no such crate names exist in bun, and no IR / repro was shipped). The table above replaces those claims.
 
 ## Supported Languages
 
@@ -35,6 +37,8 @@ User IR (.ll / .bc)
        └── Plan B (fallback): Pure-text IR parser (zero deps)
 ```
 
+> The loader actually exposes 8 `LoadStrategy` variants — Plan A/B/C is the high-level narrative. See `docs/en/architecture.md` for all 8 strategies.
+
 ```
 Raw Facts → IR Behavior Summary → Structural Inference
        → Contract Graph → Ownership Solver → Issue Candidates → Verifier
@@ -46,14 +50,14 @@ Raw Facts → IR Behavior Summary → Structural Inference
 |-------|------|
 | `omniscope-cli` | User-facing CLI (`analyze`, `audit`, `info` commands) |
 | `omniscope-pipeline` | Top-level pipeline orchestration, pass scheduling |
-| `omniscope-pass` | 20+ analysis passes (FFI boundary, RAII, borrow escape, contract graph, ownership solver) |
+| `omniscope-pass` | 20 default analysis passes (FFI boundary, RAII, borrow escape, contract graph, ownership solver) |
 | `omniscope-semantics` | Semantic derivation engine, structural inference, language detection |
 | `omniscope-ir` | LLVM IR loader, parser, IR model (three-tier loading strategy) |
 | `omniscope-dataflow` | Generic forward/backward dataflow analysis framework |
-| `omniscope-core` | Diagnostics, issue model (23 issue kinds), profiler, memory pool |
+| `omniscope-core` | Diagnostics, issue model (28 issue kinds), profiler, memory pool |
 | `omniscope-types` | Shared type definitions, ResourceFamily system, ABI types |
 
-## New Features (v0.2.0)
+## New Features (v0.2.0-rc, preview)
 
 ### Multi-Language Semantic Extensions
 
@@ -101,6 +105,13 @@ OmniScope now supports comprehensive semantic analysis for 7 programming languag
 - Object lifecycle detection (creation, borrowing, stealing)
 - GIL (Global Interpreter Lock) management analysis
 - Python-specific FFI pattern recognition
+
+### Known limitations
+
+v0.2.0 is shipped as a release candidate, not a stable release. Known regressions
+(notably `bun_alloc` precision after the single-language gate change) and pending
+re-validation work are tracked in
+[`docs/release/release_readiness_v0.2.0.md`](docs/release/release_readiness_v0.2.0.md).
 
 ## Key Features
 
