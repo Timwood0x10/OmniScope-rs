@@ -126,6 +126,13 @@ pub struct ModuleIndex {
     /// Cached FunctionKind classification for each unique function name.
     /// Avoids repeated classify_function() calls in call_graph and other passes.
     pub function_kind_cache: HashMap<String, FunctionKind>,
+    /// Whether the entire module uses a single known language.
+    ///
+    /// When true, there are no cross-language FFI boundaries, so
+    /// FFI-specific passes can short-circuit and skip their work.
+    /// This is determined by checking whether all detected languages
+    /// (from both call_metas and function_metas) are the same.
+    pub is_single_language: bool,
 }
 
 /// Check if a function signature involves pointer types (params or return).
@@ -272,6 +279,10 @@ impl ModuleIndex {
         let mut callee_callers: HashMap<String, Vec<usize>> = HashMap::new();
         let mut caller_calls: HashMap<String, Vec<usize>> = HashMap::new();
 
+        // Collect known languages during Phase 1 for early single-language detection
+        let mut known_languages: std::collections::HashSet<Language> =
+            std::collections::HashSet::new();
+
         for (idx, call) in module.calls.iter().enumerate() {
             let callee_name = call.callee.trim_start_matches('@').to_string();
             let caller_name = call.caller.trim_start_matches('@').to_string();
@@ -350,6 +361,14 @@ impl ModuleIndex {
                 ffi_slice_info: None,
             });
 
+            // Collect known languages for single-language detection
+            if caller_lang != Language::Unknown {
+                known_languages.insert(caller_lang);
+            }
+            if callee_lang != Language::Unknown {
+                known_languages.insert(callee_lang);
+            }
+
             callee_callers
                 .entry(callee_name.clone())
                 .or_default()
@@ -365,7 +384,25 @@ impl ModuleIndex {
         // boundary_seeds module, then expand the FFI slice from strong seeds.
         // This populates the boundary_evidence and ffi_slice_info fields that
         // were left as None in Phase 1.
-        {
+        //
+        // If the module is single-language (only one known language detected
+        // from call metadata), skip the entire Phase 2 — there are no FFI
+        // boundaries to classify or expand. Function-level languages will be
+        // added to known_languages later, but if call-level already shows
+        // a single language, the final result will still be single-language
+        // (adding more of the same language doesn't increase the count).
+        let early_single_language = known_languages.len() <= 1;
+        if early_single_language {
+            // No FFI boundaries possible — skip seed classification and slice expansion.
+            // Set boundary_evidence and ffi_slice_info to "computed, no boundary" for all calls.
+            for meta in call_metas.iter_mut() {
+                meta.boundary_evidence = Some(vec![]);
+                meta.ffi_slice_info = Some(FfiSliceInfo::outside());
+            }
+            tracing::debug!(
+                "ModuleIndex: single-language module — skipping Phase 2 boundary seed classification"
+            );
+        } else {
             let ffi_detector = FFIBoundaryDetector::with_detector(detector.clone());
 
             // Classify each call site
@@ -602,6 +639,27 @@ impl ModuleIndex {
             function_kind_cache.insert(name.clone(), kind);
         }
 
+        // Finalize single-language detection by adding function-level languages.
+        // known_languages was already populated from call metadata in Phase 1.
+        for meta in function_metas.values() {
+            if meta.language != Language::Unknown {
+                known_languages.insert(meta.language);
+            }
+        }
+        let is_single_language = known_languages.len() <= 1;
+
+        if is_single_language {
+            let lang_desc = known_languages
+                .iter()
+                .next()
+                .map(|l| format!("{:?}", l))
+                .unwrap_or_else(|| "Unknown".to_string());
+            tracing::info!(
+                "ModuleIndex: single-language module detected ({}) — FFI passes will be skipped",
+                lang_desc
+            );
+        }
+
         Self {
             call_metas,
             function_metas,
@@ -615,6 +673,7 @@ impl ModuleIndex {
             language_detector: detector,
             syscall_cache,
             function_kind_cache,
+            is_single_language,
         }
     }
 

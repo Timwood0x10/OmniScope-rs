@@ -465,7 +465,43 @@ impl Pass for IssueCandidateBuilderPass {
                         .iter()
                         .all(|&ri| is_null_guarded_release(&graph.edges[ri].function_name));
 
+                    // ── Caller-consistency filter for DoubleRelease candidates ──
+                    //
+                    // When the alloc_function is a pure deallocator (free, munmap,
+                    // __rust_dealloc, etc.), multiple release edges in the same
+                    // instance often result from the contract graph merging
+                    // unrelated `free(p)` calls from different functions into one
+                    // instance. This produces false-positive DoubleFree reports
+                    // like "double release in 'free'".
+                    //
+                    // A genuine double-free from user code (e.g., `free(p); free(p)`
+                    // in the same function) has all release edges sharing the same
+                    // caller_name. Contract-graph-merged FP edges have different
+                    // caller_names. So when alloc_function is a deallocator, we
+                    // only create DoubleRelease candidates for edges whose
+                    // caller_name matches the first release edge's caller_name.
+                    let first_caller = &graph.edges[release_indices[0]].caller_name;
+                    let alloc_is_deallocator =
+                        is_pure_deallocator(&graph.edges[release_indices[0]].function_name);
+
                     for &ri in release_indices.iter().skip(1) {
+                        // Skip candidate if alloc is a deallocator and callers differ
+                        if alloc_is_deallocator && graph.edges[ri].caller_name != *first_caller {
+                            eprintln!(
+                                "[DR-FILTER] instance={} skipped: dealloc caller {} != first caller {}",
+                                instance_id, graph.edges[ri].caller_name, first_caller
+                            );
+                            continue;
+                        }
+
+                        eprintln!(
+                            "[DR-CREATE] instance={} alloc_fn={} caller={} first_caller={}",
+                            instance_id,
+                            graph.edges[ri].function_name,
+                            graph.edges[ri].caller_name,
+                            first_caller
+                        );
+
                         let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
                         let id = next_id;
                         next_id += 1;
@@ -922,19 +958,26 @@ impl Pass for IssueCandidateBuilderPass {
         let allocator_detector = AllocatorShimDetector::new();
 
         // Attach semantic facts as evidence to matching candidates (Phase 3).
-        // Facts are indexed by function name (SemanticKey::Symbol); the key is
-        // the *enclosing function* where a behavior was detected (e.g., "main"),
-        // not the allocation callee (e.g., "malloc"). Candidates carry
-        // alloc_caller/release_caller for enclosing function context, so we
-        // match on those — not on alloc_function/release_function which are
-        // typically generic allocator names like "malloc" or "_Znwm".
+        //
+        // Two lookup strategies:
+        // 1. Caller-keyed facts (alloc_caller / release_caller): These match
+        //    IRBehaviorSummary facts whose key is the *enclosing function*
+        //    where a behavior was detected (e.g., "main").
+        // 2. Callee-keyed facts (alloc_function / release_function): These
+        //    match LanguageAdapter facts whose key is the *API function name*
+        //    (e.g., "Py_DECREF", "JNI_NewGlobalRef"). Without this, adapter
+        //    facts become "orphan facts" — generated but never attached to
+        //    any candidate.
         let mut facts_attached: usize = 0;
         for candidate in &mut candidates {
             // Collect lookup keys as owned Strings to avoid borrow conflict
             // with the mutable borrow from add_evidence below.
+            // Priority: caller context first, then callee/API names.
             let lookup_keys: Vec<String> = vec![
                 candidate.alloc_caller.clone().unwrap_or_default(),
                 candidate.release_caller.clone().unwrap_or_default(),
+                candidate.alloc_function.clone(),
+                candidate.release_function.clone().unwrap_or_default(),
             ];
             for key in &lookup_keys {
                 if key.is_empty() {
@@ -1049,6 +1092,20 @@ pub fn build_cross_family_candidate(
 /// Null-guarded release functions check if the pointer is NULL before
 /// releasing it. For example, `free(NULL)` is safe in C, and many
 /// libraries implement null-guarded release functions.
+/// Checks if a function name is a pure deallocator — a function whose sole
+/// purpose is to release a previously allocated resource (e.g., `free`,
+/// `munmap`, `__rust_dealloc`). When such a function appears as the
+/// `alloc_function` (Callee name) of a DoubleRelease candidate, it indicates
+/// the candidate was generated from multiple `free(p)` calls merged into one
+/// contract-graph instance, rather than a genuine user-code double-free.
+fn is_pure_deallocator(function_name: &str) -> bool {
+    matches!(
+        function_name,
+        "free" | "munmap" | "__rust_dealloc"
+    ) || function_name.starts_with("_ZdlPv")  // C++ operator delete
+      || function_name.starts_with("_ZdaPv") // C++ operator delete[]
+}
+
 fn is_null_guarded_release(function_name: &str) -> bool {
     // Known null-guarded release functions. Only exact matches are used
     // to avoid false positives from pattern-based heuristics.

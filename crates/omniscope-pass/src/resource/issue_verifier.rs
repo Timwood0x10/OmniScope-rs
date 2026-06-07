@@ -124,12 +124,34 @@ impl Pass for IssueVerifierPass {
         // Layer 1: NoiseReduction — fast string-based FP pre-filter.
         let noise = NoiseReduction::new();
 
+        // ── Single-language shortcut ──
+        // If the module has only one language, skip FFI-specific issue types
+        // (CrossLanguageFree, UncheckedFfiReturn, NullDereference, etc.)
+        // and only keep generic bug types (DoubleRelease, UseAfterFree, etc.)
+        let is_single_language = ctx
+            .get_ref::<crate::module_index::ModuleIndex>("module_index")
+            .map(|idx| idx.is_single_language)
+            .unwrap_or(false);
+
         let mut verified: Vec<IssueCandidate> = Vec::new();
         let mut issues: Vec<Issue> = Vec::new();
         let mut noise_suppressed: usize = 0;
         let mut ffi_gate_suppressed: usize = 0;
+        let mut single_lang_suppressed: usize = 0;
 
         for mut candidate in candidates {
+            // ── Single-language filter ──
+            // For single-language modules, skip FFI-specific issue types.
+            // Only keep generic bug types that don't require cross-language
+            // interaction: DoubleRelease, UseAfterFree, UseAfterRelease.
+            // Leak types are also kept as they represent real resource bugs.
+            if is_single_language && is_ffi_specific_issue(&candidate) {
+                single_lang_suppressed += 1;
+                candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                verified.push(candidate);
+                continue;
+            }
+
             // ── FFI Gate: suppress runtime-internal leaks without FFI evidence ──
             // Only downgrade leak candidates where BOTH:
             //   1. No FFI evidence attached (not from FFI boundary detection)
@@ -301,6 +323,74 @@ impl Pass for IssueVerifierPass {
                 continue;
             }
 
+            // Layer 1b: Runtime-caller FP suppression — for generic C functions
+            // (free, malloc, etc.) that produce double_free / use_after_free,
+            // the function name alone is too generic. Check if the *caller*
+            // is a known runtime internal (e.g., Zig mem.Allocator.reallocAdvanced).
+            // Only applies to double_free / use_after_free kinds — leak issues
+            // from user code must always be reported.
+            if matches!(
+                candidate.kind,
+                IssueCandidateKind::DoubleRelease
+                    | IssueCandidateKind::UseAfterRelease
+                    | IssueCandidateKind::UseAfterFree
+            ) {
+                // 1b-1: Check caller context
+                let caller = candidate
+                    .release_caller
+                    .as_deref()
+                    .or(candidate.alloc_caller.as_deref());
+                if let Some(caller_name) = caller {
+                    if noise.should_suppress_runtime_caller(caller_name) {
+                        noise_suppressed += 1;
+                        candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                        verified.push(candidate);
+                        continue;
+                    }
+                }
+                // 1b-2: Check if alloc_function is a C runtime function
+                // (free, malloc, munmap, etc.) without FFI evidence.
+                // When alloc_function IS a deallocator (free/munmap/_ZdlPv/_ZdaPv),
+                // it means the "allocation" was actually a release call — this is
+                // a genuine double-free from user code, so only suppress if the
+                // caller is also a runtime internal (not user code).
+                // When alloc_function is an allocator (malloc/new/etc.), the
+                // double-free was detected inside the allocator itself — always FP.
+                if !candidate.has_ffi_evidence()
+                    && is_runtime_allocator_function(&candidate.alloc_function)
+                {
+                    noise_suppressed += 1;
+                    candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                    verified.push(candidate);
+                    continue;
+                }
+                // 1b-3: If alloc_function is a pure deallocator (free, munmap, etc.)
+                // and the caller is also a runtime internal, suppress as FP.
+                // If the caller is user code, it's a genuine double-free.
+                // If caller is unknown (None), default to NOT suppressing —
+                // it's better to report a potential bug than to hide it.
+                if !candidate.has_ffi_evidence()
+                    && is_runtime_deallocator_function(&candidate.alloc_function)
+                {
+                    let caller = candidate
+                        .release_caller
+                        .as_deref()
+                        .or(candidate.alloc_caller.as_deref());
+                    let caller_is_runtime = caller
+                        .map(|c| {
+                            noise.should_suppress_runtime_caller(c)
+                                || is_runtime_deallocator_function(c)
+                        })
+                        .unwrap_or(false);
+                    if caller_is_runtime {
+                        noise_suppressed += 1;
+                        candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                        verified.push(candidate);
+                        continue;
+                    }
+                }
+            }
+
             if candidate.is_reportable() {
                 let issue_id = ctx.next_issue_id();
                 let mut issue = Issue::new(
@@ -360,6 +450,7 @@ impl Pass for IssueVerifierPass {
         result.add_stat("gate_suppressed", gate_suppressed);
         result.add_stat("noise_suppressed", noise_suppressed);
         result.add_stat("ffi_gate_suppressed", ffi_gate_suppressed);
+        result.add_stat("single_lang_suppressed", single_lang_suppressed);
 
         Ok(result)
     }
@@ -518,6 +609,46 @@ fn deduplicate_leak_candidates(candidates: &mut Vec<IssueCandidate>) {
     }
 }
 
+/// Checks if a function name is a known C/C runtime allocator.
+///
+/// These functions (malloc, calloc, new, etc.) are C/C++ standard library
+/// allocators. When they appear as the `alloc_function` in a DoubleRelease /
+/// UseAfterFree candidate without FFI evidence, it means the double-free was
+/// detected *inside* the runtime allocator/deallocator itself — typically a
+/// false positive from runtime bookkeeping rather than a user bug.
+///
+/// Note: Pure deallocators (free, _ZdlPv, _ZdaPv) are NOT listed here
+/// because if `alloc_function` is a deallocator (e.g., free→free), it's
+/// a genuine double-free bug that should be reported.
+/// Checks if a function name is a known C/C++ runtime allocator.
+///
+/// These functions (malloc, calloc, new, etc.) are C/C++ standard library
+/// allocators. When they appear as the `alloc_function` in a DoubleRelease /
+/// UseAfterFree candidate without FFI evidence, it means the double-free was
+/// detected *inside* the runtime allocator itself — typically a false positive
+/// from runtime bookkeeping rather than a user bug.
+fn is_runtime_allocator_function(name: &str) -> bool {
+    matches!(
+        name,
+        "malloc" | "calloc" | "realloc" | "mmap"
+    ) || name.starts_with("_Znam")   // C++ operator new[]
+      || name.starts_with("_Znwm") // C++ operator new
+}
+
+/// Checks if a function name is a known C/C++ runtime deallocator.
+///
+/// Pure deallocators (free, munmap, _ZdlPv, _ZdaPv) when appearing as
+/// `alloc_function` indicate a double-release (e.g., free→free).
+/// This is only a genuine bug when called from user code; if the caller
+/// is also runtime-internal, it's typically a false positive.
+fn is_runtime_deallocator_function(name: &str) -> bool {
+    matches!(
+        name,
+        "free" | "munmap" | "__rust_dealloc"
+    ) || name.starts_with("_ZdlPv")  // C++ operator delete
+      || name.starts_with("_ZdaPv") // C++ operator delete[]
+}
+
 /// Checks if a candidate is a leak type issue.
 ///
 /// Leak type issues are those that represent memory leaks or resource leaks.
@@ -534,6 +665,31 @@ fn is_leak_candidate(candidate: &IssueCandidate) -> bool {
         IssueCandidateKind::DefiniteLeak
             | IssueCandidateKind::ConditionalLeak
             | IssueCandidateKind::OwnershipEscapeLeak
+    )
+}
+
+/// Checks if a candidate is an FFI-specific issue type.
+///
+/// These issue types only make sense in the context of cross-language
+/// FFI interaction. In single-language modules, they are suppressed:
+/// - `CrossLanguageFree` — only occurs across language boundaries
+/// - `UncheckedFfiReturn` — only occurs at FFI call sites
+/// - `NullDereference` — only occurs from unchecked FFI returns
+/// - `CallbackEscape` — only occurs across FFI callback boundaries
+/// - `BorrowEscape` — only meaningful across FFI boundaries
+/// - `CrossFamilyFree` — typically a cross-language family mismatch
+///
+/// Generic bug types that apply to any language are NOT FFI-specific:
+/// - `DoubleRelease`, `UseAfterFree`, `UseAfterRelease` — real bugs in any context
+/// - `DefiniteLeak`, `ConditionalLeak` — real resource leaks in any context
+fn is_ffi_specific_issue(candidate: &IssueCandidate) -> bool {
+    matches!(
+        candidate.kind,
+        IssueCandidateKind::CrossLanguageFree
+            | IssueCandidateKind::UncheckedFfiReturn
+            | IssueCandidateKind::NullDereference
+            | IssueCandidateKind::CallbackEscape
+            | IssueCandidateKind::BorrowEscape
     )
 }
 

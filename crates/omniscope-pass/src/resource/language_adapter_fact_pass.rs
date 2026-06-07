@@ -6,6 +6,16 @@
 //! pass context's `semantic_facts` store for downstream consumption
 //! by `IssueCandidateBuilderPass`.
 //!
+//! # Language Detection Strategy
+//!
+//! Language is determined in priority order:
+//! 1. `ModuleIndex.call_metas` — `caller_lang`/`callee_lang`/`is_ffi_boundary`
+//!    from the boundary seed detector (most reliable).
+//! 2. `ModuleIndex.function_metas` — `language` field from function-level
+//!    detection.
+//! 3. Name heuristics (`looks_like_cpp`, etc.) — fallback only, used
+//!    when ModuleIndex has no language hint for a given function.
+//!
 //! # Pipeline Position
 //!
 //! Runs after `ModuleIndex` (which provides function names and
@@ -17,6 +27,7 @@ use omniscope_core::Result;
 use omniscope_semantics::{
     CSharpAdapter, CppAdapter, GoAdapter, JavaAdapter, PythonAdapter, SemanticFact,
 };
+use omniscope_types::config::Language;
 
 use crate::module_index::ModuleIndex;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -24,7 +35,8 @@ use crate::pass::{Pass, PassContext, PassKind, PassResult};
 /// Language adapter semantic fact extraction pass.
 ///
 /// For each function in the module index, this pass:
-/// 1. Detects the language from the function name.
+/// 1. Detects the language from ModuleIndex metadata (priority) or
+///    name heuristics (fallback).
 /// 2. Calls the appropriate language adapter's `analyze_function`.
 /// 3. Converts the adapter's result into `SemanticFact` records
 ///    via each adapter's `to_semantic_facts()` method.
@@ -54,14 +66,22 @@ impl Pass for LanguageAdapterFactPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
-        // Get function names from ModuleIndex
-        let module_index: Option<ModuleIndex> = ctx.get("module_index");
-        let Some(index) = module_index else {
+        // Use get_ref to avoid cloning the entire ModuleIndex (§7.5 perf).
+        let index = ctx.get_ref::<ModuleIndex>("module_index");
+        let Some(index) = index else {
             let result = PassResult::new(self.name())
                 .with_nodes(0)
                 .with_duration(start.elapsed().as_millis() as u64);
             return Ok(result);
         };
+
+        // Short-circuit: if the module is single-language, there are no
+        // cross-language FFI boundaries, so language adapters are not needed.
+        if index.is_single_language {
+            return Ok(PassResult::new(self.name())
+                .with_nodes(0)
+                .with_duration(start.elapsed().as_millis() as u64));
+        }
 
         // Initialize language adapters
         let cpp_adapter = CppAdapter::new();
@@ -77,51 +97,93 @@ impl Pass for LanguageAdapterFactPass {
         let mut go_count: usize = 0;
         let mut csharp_count: usize = 0;
 
-        // Collect all function names from call metas and function metas
+        // Build language map from ModuleIndex metadata (priority source).
+        // Maps function_name → Language, preferring FFI boundary call info
+        // over function-level detection.
+        let mut lang_map: std::collections::HashMap<String, Language> =
+            std::collections::HashMap::new();
+
+        // Priority 1: call_metas with known caller/callee languages
+        for meta in &index.call_metas {
+            if meta.caller_lang != Language::Unknown {
+                lang_map
+                    .entry(meta.caller_name.clone())
+                    .or_insert(meta.caller_lang);
+            }
+            if meta.callee_lang != Language::Unknown {
+                lang_map
+                    .entry(meta.callee_name.clone())
+                    .or_insert(meta.callee_lang);
+            }
+        }
+
+        // Priority 2: function_metas with detected language
+        for (name, fmeta) in &index.function_metas {
+            if fmeta.language != Language::Unknown {
+                lang_map.entry(name.clone()).or_insert(fmeta.language);
+            }
+        }
+
+        // Collect unique function names from call metas and function metas
         let mut func_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for meta in &index.call_metas {
-            func_names.insert(meta.callee_name.clone());
             func_names.insert(meta.caller_name.clone());
+            func_names.insert(meta.callee_name.clone());
         }
         for name in index.function_metas.keys() {
             func_names.insert(name.clone());
         }
 
         for func_name in &func_names {
-            // C++ adapter: detect C++ mangled names and patterns
-            if looks_like_cpp(func_name) {
+            // Determine language: ModuleIndex first, heuristic fallback
+            let lang = lang_map
+                .get(func_name)
+                .copied()
+                .unwrap_or(Language::Unknown);
+
+            // Only run adapters when we have a confident language assignment
+            // or when the heuristic matches. This avoids false positives
+            // from overly broad heuristic rules on non-FFI functions.
+            let run_cpp =
+                lang == Language::Cpp || (lang == Language::Unknown && looks_like_cpp(func_name));
+            let run_python = lang == Language::Python
+                || (lang == Language::Unknown && looks_like_python(func_name));
+            let run_java =
+                lang == Language::Java || (lang == Language::Unknown && looks_like_jni(func_name));
+            let run_go =
+                lang == Language::Go || (lang == Language::Unknown && looks_like_go(func_name));
+            let run_csharp = lang == Language::CSharp
+                || (lang == Language::Unknown && looks_like_csharp(func_name));
+
+            if run_cpp {
                 let analysis = cpp_adapter.analyze_function(func_name, None);
                 let facts = analysis.to_semantic_facts();
                 cpp_count += facts.len();
                 adapter_facts.extend(facts);
             }
 
-            // Python adapter: detect Python C API function names
-            if looks_like_python(func_name) {
+            if run_python {
                 if let Some(semantic) = python_adapter.analyze_function(func_name) {
                     adapter_facts.push(semantic.to_semantic_fact());
                     python_count += 1;
                 }
             }
 
-            // Java/JNI adapter: detect JNI function names
-            if looks_like_jni(func_name) {
+            if run_java {
                 let analysis = java_adapter.analyze_function(func_name, None);
                 let facts = analysis.to_semantic_facts();
                 java_count += facts.len();
                 adapter_facts.extend(facts);
             }
 
-            // Go adapter: detect Go/CGO function names
-            if looks_like_go(func_name) {
+            if run_go {
                 let analysis = go_adapter.analyze_function(func_name, None);
                 let facts = analysis.to_semantic_facts();
                 go_count += facts.len();
                 adapter_facts.extend(facts);
             }
 
-            // C# adapter: detect C#/P/Invoke function names
-            if looks_like_csharp(func_name) {
+            if run_csharp {
                 let analysis = csharp_adapter.analyze_function(func_name, None);
                 let facts = analysis.to_semantic_facts();
                 csharp_count += facts.len();
@@ -129,16 +191,19 @@ impl Pass for LanguageAdapterFactPass {
             }
         }
 
-        // Merge into existing semantic_facts from IRBehaviorSummaryPass
+        let adapter_fact_count = adapter_facts.len();
+
+        // Merge into existing semantic_facts from IRBehaviorSummaryPass.
+        // Avoid cloning adapter_facts — move directly into the merged vec.
         let mut existing_facts: Vec<SemanticFact> = ctx.get("semantic_facts").unwrap_or_default();
-        existing_facts.extend(adapter_facts.clone());
+        existing_facts.extend(adapter_facts);
         ctx.store("semantic_facts", existing_facts);
 
         let mut result = PassResult::new(self.name())
             .with_nodes(func_names.len())
             .with_duration(start.elapsed().as_millis() as u64);
 
-        result.add_stat("adapter_facts_emitted", adapter_facts.len());
+        result.add_stat("adapter_facts_emitted", adapter_fact_count);
         result.add_stat("cpp_facts", cpp_count);
         result.add_stat("python_facts", python_count);
         result.add_stat("java_facts", java_count);
@@ -156,6 +221,8 @@ impl Default for LanguageAdapterFactPass {
 }
 
 /// Check if a function name looks like C++ (mangled Itanium/MSVC names).
+///
+/// **Fallback only** — ModuleIndex language detection takes priority.
 fn looks_like_cpp(name: &str) -> bool {
     name.starts_with("_Z")
         || name.starts_with("__Z")
@@ -166,6 +233,8 @@ fn looks_like_cpp(name: &str) -> bool {
 }
 
 /// Check if a function name looks like Python C API.
+///
+/// **Fallback only** — ModuleIndex language detection takes priority.
 fn looks_like_python(name: &str) -> bool {
     name.starts_with("Py")
         || name.starts_with("_Py")
@@ -179,6 +248,8 @@ fn looks_like_python(name: &str) -> bool {
 }
 
 /// Check if a function name looks like Java/JNI.
+///
+/// **Fallback only** — ModuleIndex language detection takes priority.
 fn looks_like_jni(name: &str) -> bool {
     name.starts_with("Java_")
         || name.starts_with("JNI_")
@@ -192,21 +263,24 @@ fn looks_like_jni(name: &str) -> bool {
 }
 
 /// Check if a function name looks like Go/CGO.
+///
+/// **Fallback only** — ModuleIndex language detection takes priority.
+/// Note: `main.` prefix is deliberately excluded because it matches
+/// too many ordinary Go functions; use ModuleIndex language detection
+/// for those instead.
 fn looks_like_go(name: &str) -> bool {
     name.starts_with("runtime.")
         || name.starts_with("_cgo_")
         || name.starts_with("_Cfunc_")
-        || name.starts_with("main.")
         || name.contains("crossboundary2")
 }
 
 /// Check if a function name looks like C#/P/Invoke.
+///
+/// **Fallback only** — ModuleIndex language detection takes priority.
+/// Note: broad patterns like `Dispose`, `System_`, `Microsoft_` are
+/// deliberately excluded to avoid false positives on non-FFI .NET code;
+/// use ModuleIndex language detection for those instead.
 fn looks_like_csharp(name: &str) -> bool {
-    name.starts_with("System_")
-        || name.starts_with("Microsoft_")
-        || name.contains("Marshal")
-        || name.contains("SafeHandle")
-        || name.contains("GCHandle")
-        || name.contains("IDisposable")
-        || name.contains("Dispose")
+    name.contains("Marshal") || name.contains("SafeHandle") || name.contains("GCHandle")
 }

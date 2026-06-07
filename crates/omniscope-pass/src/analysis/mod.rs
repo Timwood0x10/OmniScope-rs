@@ -80,6 +80,17 @@ impl Pass for FFIBoundaryPass {
     fn run(&self, ctx: &mut PassContext) -> Result<PassResult> {
         let start = std::time::Instant::now();
 
+        // Short-circuit: if the module is single-language, there are no
+        // cross-language FFI boundaries to detect.
+        if let Some(index) = ctx.get_ref::<crate::module_index::ModuleIndex>("module_index") {
+            if index.is_single_language {
+                info!("FFIBoundaryPass: skipping — single-language module");
+                return Ok(PassResult::new(self.name())
+                    .with_nodes(0)
+                    .with_duration(start.elapsed().as_millis() as u64));
+            }
+        }
+
         // Try to get cross-lang edges from CallGraphPass (if registered)
         let cross_lang_edges: Vec<CrossLangEdge> = ctx.get("cross_lang_edges").unwrap_or_default();
 

@@ -35,6 +35,10 @@ use tracing::debug;
 pub struct NoiseReduction {
     /// Patterns that indicate safe operations (not FFI issues).
     safe_patterns: Vec<&'static str>,
+    /// Patterns for runtime-internal *caller* functions.
+    /// When a generic C function (free/malloc) is called FROM one of these
+    /// callers, the resulting issue is a runtime false positive.
+    runtime_caller_patterns: Vec<&'static str>,
 }
 
 impl NoiseReduction {
@@ -68,10 +72,36 @@ impl NoiseReduction {
                 // Zig runtime internals
                 "Io.Threaded",
                 "posix.mmap",
+                "posix.munmap",
+                "posix.",
                 "Thread.PosixThreadImpl",
                 "zig_allocator_",
                 // Zig C allocator wrapper — legitimate Zig→C malloc/free bridge
                 "heap.c_allocator_impl",
+                "heap.page_allocator",
+                "heap.",
+                // Zig memory management internals — manage their own arenas
+                "mem.Allocator",
+                "mem.alignForward",
+                "mem.alignBackward",
+                "mem.isValidAlign",
+                // Zig runtime startup / OS abstraction
+                "start.known",
+                "os.argv",
+                // Zig munmap / mmap wrappers (runtime-internal)
+                "munmap",
+            ],
+            // Patterns for runtime-internal *caller* functions.
+            // When a generic C function (free/malloc) is called FROM one of these
+            // callers, the resulting issue is a runtime false positive.
+            runtime_caller_patterns: vec![
+                // Zig memory management internals
+                "mem.Allocator",
+                "mem.alignForward",
+                "heap.c_allocator_impl",
+                "heap.page_allocator",
+                "heap.",
+                "start.known",
             ],
         }
     }
@@ -84,6 +114,28 @@ impl NoiseReduction {
         let suppressed = self.safe_patterns.iter().any(|p| func_name.contains(p));
         if suppressed {
             debug!("NoiseReduction: suppressing FP for '{}'", func_name);
+        }
+        suppressed
+    }
+
+    /// Checks if an issue should be suppressed using caller context.
+    ///
+    /// For generic C functions (free, malloc, etc.) that produce double_free
+    /// or use_after_free issues, the function name alone is too generic to
+    /// suppress. However, if the *caller* is a known runtime internal
+    /// (e.g., Zig's mem.Allocator.reallocAdvanced), the issue is a FP.
+    ///
+    /// Returns true if the caller matches a runtime-internal pattern.
+    pub fn should_suppress_runtime_caller(&self, caller_name: &str) -> bool {
+        let suppressed = self
+            .runtime_caller_patterns
+            .iter()
+            .any(|p| caller_name.contains(p));
+        if suppressed {
+            debug!(
+                "NoiseReduction: suppressing FP — runtime caller '{}'",
+                caller_name
+            );
         }
         suppressed
     }
