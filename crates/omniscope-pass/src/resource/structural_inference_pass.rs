@@ -28,8 +28,8 @@ use std::collections::HashMap;
 
 use omniscope_core::Result;
 use omniscope_semantics::{
-    behavior_to_summary, infer_summary_for_symbol, FamilyRegistry, FunctionBehavior, SemanticKind,
-    SummaryStore,
+    behavior_to_summary, infer_summary_for_symbol, FamilyRegistry, FunctionBehavior, SemanticFact,
+    SemanticKind, SummaryStore,
 };
 use omniscope_types::EvidenceKind;
 
@@ -523,6 +523,72 @@ impl Pass for StructuralInferencePass {
         ctx.store("srt_resolutions", srt_resolutions);
         ctx.store("srt_key_resolutions", srt_key_resolutions);
 
+        // ── Build srt_facts: semantic facts indexed by symbol/resource key ──
+        // This preserves confidence and source information that srt_resolutions
+        // (Vec<SemanticKind>) loses. Downstream consumers (EvidenceBundle,
+        // verifier) can make confidence-aware decisions.
+        let mut srt_facts: HashMap<String, Vec<SemanticFact>> = HashMap::new();
+
+        // Merge facts from IRBehaviorSummaryPass and LanguageAdapterFactPass.
+        let semantic_facts: Vec<SemanticFact> = ctx.get("semantic_facts").unwrap_or_default();
+        for fact in &semantic_facts {
+            let keys = match &fact.key {
+                omniscope_semantics::SemanticKey::Symbol(s) => vec![s.clone()],
+                omniscope_semantics::SemanticKey::Resource(id) => {
+                    vec![format!("resource:{id}")]
+                }
+                omniscope_semantics::SemanticKey::Path(func, _id) => vec![func.clone()],
+                omniscope_semantics::SemanticKey::Owner(name) => vec![name.clone()],
+                omniscope_semantics::SemanticKey::Value(reg) => vec![format!("value:{reg}")],
+                omniscope_semantics::SemanticKey::CallSite {
+                    caller,
+                    callee,
+                    index,
+                } => {
+                    vec![
+                        caller.clone(),
+                        callee.clone(),
+                        format!("{caller}::{callee}::{index}"),
+                    ]
+                }
+            };
+            for key in keys {
+                srt_facts.entry(key).or_default().push(fact.clone());
+            }
+        }
+
+        // Also synthesize SemanticFacts from srt_resolutions entries that
+        // were produced by structural inference (not from behavior patterns).
+        // These get medium confidence since they're inferred from evidence
+        // rather than directly observed from IR patterns.
+        for (symbol, kinds) in ctx
+            .get_ref::<HashMap<String, Vec<SemanticKind>>>("srt_resolutions")
+            .unwrap_or(&HashMap::new())
+        {
+            let existing_kinds: Vec<SemanticKind> = srt_facts
+                .get(symbol)
+                .map(|facts| facts.iter().map(|f| f.kind).collect())
+                .unwrap_or_default();
+
+            for kind in kinds {
+                if !existing_kinds.contains(kind) {
+                    srt_facts
+                        .entry(symbol.clone())
+                        .or_default()
+                        .push(SemanticFact::new(
+                            omniscope_semantics::SemanticKey::symbol(symbol),
+                            *kind,
+                            omniscope_semantics::FactConfidence::Medium,
+                            omniscope_semantics::FactSource::ContractDB,
+                            format!("inferred from structural inference for {symbol}"),
+                        ));
+                }
+            }
+        }
+
+        let srt_fact_entry_count = srt_facts.len();
+        ctx.store("srt_facts", srt_facts);
+
         let mut result = PassResult::new(self.name())
             .with_nodes(raw_facts.len())
             .with_duration(start.elapsed().as_millis() as u64);
@@ -535,6 +601,7 @@ impl Pass for StructuralInferencePass {
         result.add_stat("behavior_override_count", behavior_override_count);
         result.add_stat("srt_resolution_entries", srt_entry_count);
         result.add_stat("srt_key_resolution_entries", srt_key_entry_count);
+        result.add_stat("srt_fact_entries", srt_fact_entry_count);
 
         Ok(result)
     }

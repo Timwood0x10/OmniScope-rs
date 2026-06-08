@@ -186,6 +186,16 @@ pub enum SemanticKind {
     /// Resource is alias of already-released resource.
     /// Double-free detection should consider this.
     AliasOfReleased,
+
+    // ── Phase 5: Additional semantic kinds for suppression confidence ──
+    /// Allocation aborts on OOM (e.g., malloc that calls abort/exit on
+    /// failure, or Rust's global allocator which panics). The OOM path
+    /// is not a leak — the process terminates.
+    AbortOnOom,
+    /// Reference count transfer (e.g., Py_INCREF + Py_DECREF pair, or
+    /// Rust Arc::into_raw + Arc::from_raw). The resource is managed by
+    /// a reference counting system and the transfer is by-design.
+    RefcountTransfer,
 }
 
 /// Semantic key for querying the semantic tree.
@@ -630,6 +640,11 @@ impl SemanticKind {
             return SemanticKind::JavaWeakRef;
         }
 
+        // ── Refcount transfer patterns ──
+        if func_name.contains("Arc::into_raw") || func_name.contains("Arc::from_raw") {
+            return SemanticKind::RefcountTransfer;
+        }
+
         // ── Default: no pattern matched ──
         SemanticKind::Unknown
     }
@@ -704,6 +719,10 @@ impl SemanticKind {
             SemanticKind::NullOnErrorPath => 0.8,        // Defensive NULLing
             SemanticKind::ReleaseOnAllExitPaths => 0.9,  // Cleanup complete
             SemanticKind::AliasOfReleased => 0.3,        // Double-free risk
+
+            // ── Phase 5: Additional semantic kinds ──
+            SemanticKind::AbortOnOom => 0.9, // Process terminates, no leak
+            SemanticKind::RefcountTransfer => 0.7, // Refcount-managed transfer
 
             // ── Default ──
             SemanticKind::Unknown => 0.5,

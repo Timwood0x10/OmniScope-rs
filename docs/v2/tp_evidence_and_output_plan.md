@@ -126,19 +126,20 @@ Acceptance:
 - [x] File is under 1000 lines.
 - [x] Functions are under 120 lines except rare, justified cases.
 - [ ] Public APIs have doc comments if exported.
-- [x] No existing issue verifier behavior changes yet.
+- [x] Initial data model landed without verifier behavior changes; later Phase 2/3/4 bundle verifier routing is now intentional and tested.
 
 Implementation note:
 
 - Added internal `resource::evidence_bundle` with `EvidenceBundle::from_candidate(...)`.
 - The bundle resolves `MemoryGraph` state by `resource_id`, collects SRT semantic facts by symbol and `resource:<id>`, copies candidate evidence kinds, and exposes derived booleans for boundary evidence, same-resource evidence, reachable release evidence, and alias rejection.
-- The verifier does not consume the bundle yet, so Phase 1 is a data-model-only change.
+- The verifier first used the bundle for trace-only audit context, then Phase 2/3/4 intentionally routed CrossFamily, DoubleFree, and Leak decisions through bundle-based verification.
 
 Verification notes:
 
 - `make fmt` passed after adding `resource::evidence_bundle`.
 - `cargo test -p omniscope-pass resource::evidence_bundle` passed with 5 focused unit tests.
-- `cargo test -p omniscope-pass resource::issue_verifier` passed after confirming the bundle is not yet in the verifier decision path.
+- `cargo test -p omniscope-pass resource::issue_verifier` passed after confirming Phase 1 bundle construction and later Phase 2/3/4 routing tests.
+- `RUSTC_WRAPPER= make check` passed. Plain `make check` failed in this environment because `RUSTC_WRAPPER=sccache` returned `Operation not permitted`.
 - `crates/omniscope-pass/src/resource/evidence_bundle.rs` is 334 lines.
 
 ## Phase 2: CrossFamily TP Closure
@@ -153,15 +154,15 @@ Files:
 
 Tasks:
 
-- [ ] Add `verify_cross_family_with_bundle(bundle, registry)`.
-- [ ] Confirm TP when:
+- [x] Add `verify_cross_family_with_bundle(bundle, registry)`.
+- [x] Confirm TP when:
   - allocation family and release family are present
   - families are incompatible in `FamilyRegistry`
   - release is reachable or present in the same resource flow
   - semantic facts do not mark the resource as runtime-managed, static lifetime, stored owner, or returned to caller
-- [ ] Preserve `CrossFamilyFree` issue kind for family mismatch.
-- [ ] Attach cross-language evidence as a secondary fact.
-- [ ] Suppress only when SRT has a real ownership explanation:
+- [x] Preserve `CrossFamilyFree` issue kind for family mismatch.
+- [x] Attach cross-language evidence as a secondary fact.
+- [x] Suppress only when SRT has a real ownership explanation:
   - `RuntimeManagedResource`
   - `StoredToOwner`
   - `StoredToRuntime`
@@ -182,7 +183,7 @@ Tests:
 - [x] Python `PyMem_Malloc -> free` reports `CrossFamilyFree`.
 - [x] Go `_cgo_allocate -> free` reports `CrossFamilyFree`.
 - [x] Same-language allocator thunk wrapping `mi_malloc/mi_free` is suppressed when both sides are wrappers.
-- [ ] Cross-language evidence remains attached where applicable.
+- [x] Cross-language evidence remains attached where applicable.
 
 Acceptance:
 
@@ -195,6 +196,8 @@ Implementation note:
 - Tightened `is_same_language_allocator_wrapper_noise` in `issue_verifier.rs` so suppression requires the candidate alloc function and release function themselves to be non-declaration wrapper/runtime bodies. Plain allocator/deallocator names are no longer enough to suppress a family mismatch.
 - Added `tests/tp_evidence_boundary_tests.rs` to keep these true positives locked by small, focused IR fixtures.
 - Added shared `resource::noreturn` recognition so OOM/abort-path logic can be reused without private cross-module calls.
+- `verify_cross_family_with_bundle` now requires reachable release or same-resource evidence before confirming an incompatible family pair; bare family mismatch is only probable.
+- Family-mismatched `CrossLanguageFree` candidates are promoted to `CrossFamilyFree` before report emission, with `CrossLanguageFree` retained as secondary evidence.
 
 ## Phase 3: DoubleFree TP Closure
 
@@ -209,14 +212,14 @@ Files:
 
 Tasks:
 
-- [ ] Require same resource instance for confirmed double-release.
-- [ ] Require `may_alias == MayAlias` or equivalent positive evidence.
+- [x] Require same resource instance for confirmed double-release.
+- [x] Require `may_alias == MayAlias` or equivalent positive evidence.
 - [x] Reject declaration-only releases.
-- [ ] Reject unrelated releases merged only by family.
+- [x] Reject unrelated releases merged only by family.
 - [ ] Track release order when instructions are in the same function.
 - [ ] Treat branch-dependent second release as TP when the same pointer can reach both releases.
 - [ ] Do not suppress `free(p); if (err) free(p);`.
-- [ ] Suppress only when:
+- [x] Suppress only when:
   - second release is proven null-only
   - pointer was set to null after first release and path state proves that branch
   - alias gate rejects same-resource assumption
@@ -227,8 +230,8 @@ Tests:
 - [x] `free(p); if (err) free(p);` reports confirmed or probable `DoubleFree`.
 - [x] `free(a); free(b);` with independent allocations does not report confirmed `DoubleFree`.
 - [x] extern declaration-only `free` does not report `DoubleFree`.
-- [ ] user-defined wrapper calling extern `free` can report `DoubleFree`.
-- [ ] null-store-after-release safe pattern is suppressed only with path evidence.
+- [x] user-defined wrapper calling extern `free` can report `DoubleFree`.
+- [x] null-store-after-release safe pattern is suppressed only with path evidence.
 
 Acceptance:
 
@@ -241,6 +244,7 @@ Verification notes:
 - `cargo test --test tp_evidence_boundary_tests` passed with direct double-free, conditional double-free, independent-allocation FP, and cross-family TP cases.
 - `cargo test -p omniscope-pass resource::may_alias` passed.
 - `cargo test -p omniscope-pass resource::issue_verifier` passed after keeping declaration-only suppression limited to `DoubleRelease`; cross-family candidates with extern release callees remain eligible for TP reporting.
+- `UseAfterFree` evidence alone is not accepted as positive same-instance proof for `DoubleFree`; confirmed `DoubleFree` requires `resource_id` or `MultipleRelease` evidence and no alias rejection.
 - `cargo test --test corpus_tests` passed after the Phase 3 boundary additions.
 
 ## Phase 4: ConditionalLeak TP Closure
@@ -256,7 +260,7 @@ Files:
 
 Tasks:
 
-- [ ] Define path exit categories:
+- [x] Define path exit categories:
   - `OwnedAtExit`
   - `ReleasedAtExit`
   - `EscapedToCaller`
@@ -265,29 +269,45 @@ Tasks:
   - `RuntimeManaged`
   - `StaticLifetime`
   - `AbortOrUnreachable`
-- [ ] Reuse existing `PointerStateMap` where possible.
-- [ ] Treat `OwnedAtExit` on any reachable exit as `ConditionalLeak`.
-- [ ] Treat all reachable exits owned as `DefiniteLeak`.
-- [ ] Treat `AbortOrUnreachable` as non-leak terminal.
-- [ ] Treat `RuntimeManaged`, `StaticLifetime`, `StoredToOwner`, and valid out-param ownership as safe.
-- [ ] Add evidence describing which exit path leaks.
-- [ ] Keep counting fallback only when path state is unavailable.
+- [x] Reuse existing `PointerStateMap` where possible.
+- [x] Treat `OwnedAtExit` on any reachable exit as `ConditionalLeak`.
+- [x] Treat all reachable exits owned as `DefiniteLeak`.
+- [x] Treat `AbortOrUnreachable` as non-leak terminal.
+- [x] Treat `RuntimeManaged`, `StaticLifetime`, `StoredToOwner`, and valid out-param ownership as safe.
+- [x] Add evidence describing which exit path leaks.
+- [x] Keep counting fallback only when path state is unavailable.
 
 Tests:
 
-- [ ] malloc then early return before free reports `ConditionalLeak`.
-- [ ] malloc then free on all exits reports no leak.
-- [ ] malloc then return pointer reports no local leak.
-- [ ] malloc then store to owner reports no local leak.
-- [ ] malloc then abort/unreachable on OOM path does not report leak.
-- [ ] nested allocation failure reports leak of first allocation.
-- [ ] process-lifetime arena is suppressed only with runtime/static semantic evidence.
+- [x] malloc then early return before free reports `ConditionalLeak`.
+- [x] malloc then free on all exits reports no leak.
+- [x] malloc then return pointer reports no local leak.
+- [x] malloc then store to owner reports no local leak.
+- [x] malloc then abort/unreachable on OOM path does not report leak.
+- [x] nested allocation failure reports leak of first allocation.
+- [x] process-lifetime arena is suppressed only with runtime/static semantic evidence.
 
 Acceptance:
 
-- [ ] Leak TPs increase on nested allocation and early-return patterns.
-- [ ] Arena/global lifetime FPs decrease without whitelist.
-- [ ] Leak output includes leaking path evidence.
+- [x] Leak TPs increase on nested allocation and early-return patterns.
+- [x] Arena/global lifetime FPs decrease without whitelist.
+- [x] Leak output includes leaking path evidence.
+
+Implementation note:
+
+- Enabled `collect_exit_states` + `determine_leak_type` in `LeakDetectionPass::run()`, replacing pure counting-based logic with path-sensitive analysis as primary path and counting as fallback.
+- Added `format_exit_state_summary()` and `path_state_label()` helpers for exit state evidence description.
+- Added exit-state evidence to both DefiniteLeak and ConditionalLeak candidates, showing the distribution of exit states (e.g. "2 Owned, 1 Released").
+- Added `has_leak_suppression()` to `EvidenceBundle` for leak-specific safe exit categories (RuntimeManaged, StaticLifetime, GlobalProvenance, ReturnToCaller, FieldStoreToOwner, etc.).
+- Added `verify_definite_leak_with_bundle()` and `verify_conditional_leak_with_bundle()` in issue_verifier.rs with bundle-based evidence fusion.
+- Modified `verify_candidate_inner` to route leak candidates through bundle-based verification when bundle is available.
+
+Verification notes:
+
+- `cargo test -p omniscope-pass` passed with 365 tests (18 new Phase 4 tests).
+- `cargo test --test corpus_tests` passed.
+- `cargo test --test tp_evidence_boundary_tests` passed.
+- `cargo test -p omniscope-pass resource::evidence_bundle` passed.
 
 ## Phase 5: SemanticTree as Explanation and Suppression Layer
 
