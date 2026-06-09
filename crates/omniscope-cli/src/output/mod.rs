@@ -9,7 +9,6 @@ pub mod json;
 pub mod rich;
 pub mod sarif;
 
-use omniscope_core::Issue;
 use omniscope_pipeline::PipelineResult;
 
 /// Output format selection.
@@ -40,21 +39,11 @@ pub trait OutputFormatter {
     fn format(&self, result: &PipelineResult) -> String;
 }
 
-/// Format a single issue ID as OMI-NNN.
-pub fn format_issue_id(id: u64) -> String {
-    format!("OMI-{:03}", id)
-}
-
-/// Classify issue severity as HIGH/LOW for display.
-pub fn severity_label(issue: &Issue) -> &'static str {
-    if issue.severity.is_error() || issue.severity.is_warning() {
-        "HIGH"
-    } else {
-        "LOW"
-    }
-}
-
 /// Convert IssueKind to a snake_case string for display.
+///
+/// Used by the SARIF formatter to build rule IDs. The Rich and JSON
+/// formatters now use `FindingView::kind` instead, which carries the
+/// same mapping in `finding_view::issue_kind_snake`.
 pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
     use omniscope_core::IssueKind;
     match kind {
@@ -86,15 +75,5 @@ pub fn issue_kind_label(kind: &omniscope_core::IssueKind) -> &'static str {
         IssueKind::DoubleReclaim => "double_reclaim",
         IssueKind::OwnershipEscapeLeak => "ownership_escape_leak",
         IssueKind::Unknown => "unknown",
-    }
-}
-
-/// Convert Confidence to display string with percentage.
-pub fn confidence_label(confidence: &omniscope_core::Confidence) -> String {
-    use omniscope_core::Confidence;
-    match confidence {
-        Confidence::High => "HIGH (100%)".to_string(),
-        Confidence::Medium => "MEDIUM (85%)".to_string(),
-        Confidence::Low => "HEURISTIC (50%)".to_string(),
     }
 }

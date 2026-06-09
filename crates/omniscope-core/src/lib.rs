@@ -27,6 +27,7 @@
 pub mod diagnostics;
 pub mod error;
 pub mod fact;
+pub mod finding_view;
 pub mod issue;
 pub mod issue_candidate;
 pub mod memory_pool;
@@ -38,6 +39,7 @@ pub mod terminal_report;
 pub use diagnostics::{Diagnostic, DiagnosticAggregator, DiagnosticId, Severity, SourceLocation};
 pub use error::{AnalysisError, ConfigError, DiagnosticError, IRLoadError, OmniScopeError, Result};
 pub use fact::{Fact, FactId, FactKind, FactLocation, FactStore};
+pub use finding_view::{FindingView, ResourceFlowStep};
 pub use issue::{
     BoundaryKind, Confidence, FFIBoundary, Issue, IssueId, IssueKind, IssueLocation, TraceEntry,
 };

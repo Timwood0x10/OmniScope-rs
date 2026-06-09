@@ -365,7 +365,7 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
     let format_start = Instant::now();
     let fmt = OutputFormat::from_str_ignore_case(&cmd.format);
     let output = match fmt {
-        OutputFormat::Rich => RichFormatter::new().format(&result),
+        OutputFormat::Rich => RichFormatter::with_verbosity(cmd.verbose, cmd.debug).format(&result),
         OutputFormat::Json => {
             // Use compact JSON for file output, pretty for terminal
             let formatter = if cmd.output.is_some() {
@@ -373,7 +373,10 @@ fn run_analyze(cmd: AnalyzeCommand, start: Instant) -> anyhow::Result<()> {
             } else {
                 JsonFormatter::from_pretty(true)
             };
-            formatter.format(&result)
+            formatter
+                .with_verbose(cmd.verbose)
+                .with_debug(cmd.debug)
+                .format(&result)
         }
         OutputFormat::Sarif => SarifFormatter::new().format(&result),
     };

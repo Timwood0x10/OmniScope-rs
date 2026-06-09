@@ -28,10 +28,7 @@ mod leak;
 mod tests;
 
 use omniscope_core::{Issue, IssueCandidate, Result};
-#[allow(unused_imports)]
-use omniscope_semantics::resource::memory_graph::{
-    family_to_resource_class, MemoryGraph, ResourceClass, ResourceState,
-};
+use omniscope_semantics::resource::memory_graph::MemoryGraph;
 use omniscope_semantics::{FamilyRegistry, SemanticKind};
 use omniscope_types::{EvidenceKind, IssueCandidateKind, OmniScopeConfig, VerifierVerdict};
 
@@ -252,116 +249,73 @@ impl Pass for IssueVerifierPass {
                 continue;
             }
 
-            // Check MemoryGraph state first for leak candidates
-            let verdict = if let Some(resource_id) = candidate.resource_id {
-                if let Some(ref graph) = memory_graph {
-                    if let Some(node) = graph.get_node(resource_id) {
-                        match node.state {
-                            ResourceState::StoredToOwner
-                            | ResourceState::StoredToRuntime
-                            | ResourceState::EscapedToCaller
-                            | ResourceState::EscapedToOutParam
-                            | ResourceState::RuntimeManaged => {
-                                if is_leak_candidate(&candidate) {
-                                    tracing::debug!(
-                                        "Resource {} in {:?} state: ExplainedSafe (leak candidate)",
-                                        resource_id,
-                                        node.state
-                                    );
-                                    VerifierVerdict::ExplainedSafe
-                                } else {
-                                    verify_candidate_inner(
-                                        &candidate,
-                                        &registry,
-                                        config.as_ref(),
-                                        boundary_ctx.as_ref(),
-                                        Some(&evidence_bundle),
-                                    )
-                                }
-                            }
-                            _ => {
-                                let symbol = candidate
-                                    .release_function
-                                    .as_deref()
-                                    .unwrap_or(&candidate.alloc_function);
-                                if let Some(ref resolutions) = srt_resolutions {
-                                    if let Some(kinds) = resolutions.get(symbol) {
-                                        if kinds.contains(&SemanticKind::StoredToOwner)
-                                            || kinds.contains(&SemanticKind::StoredToRuntime)
-                                            || kinds.contains(&SemanticKind::RuntimeManagedResource)
-                                            || kinds.contains(&SemanticKind::EscapedToCaller)
-                                            || kinds.contains(&SemanticKind::EscapedToOutParam)
-                                        {
-                                            if is_leak_candidate(&candidate) {
-                                                tracing::debug!(
-                                                    "SRT has suppression for '{}': ExplainedSafe (leak candidate)",
-                                                    symbol
-                                                );
-                                                VerifierVerdict::ExplainedSafe
-                                            } else {
-                                                verify_candidate_inner(
-                                                    &candidate,
-                                                    &registry,
-                                                    config.as_ref(),
-                                                    boundary_ctx.as_ref(),
-                                                    Some(&evidence_bundle),
-                                                )
-                                            }
-                                        } else {
-                                            verify_candidate_inner(
-                                                &candidate,
-                                                &registry,
-                                                config.as_ref(),
-                                                boundary_ctx.as_ref(),
-                                                Some(&evidence_bundle),
-                                            )
-                                        }
-                                    } else {
-                                        verify_candidate_inner(
-                                            &candidate,
-                                            &registry,
-                                            config.as_ref(),
-                                            boundary_ctx.as_ref(),
-                                            Some(&evidence_bundle),
-                                        )
-                                    }
-                                } else {
-                                    verify_candidate_inner(
-                                        &candidate,
-                                        &registry,
-                                        config.as_ref(),
-                                        boundary_ctx.as_ref(),
-                                        Some(&evidence_bundle),
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        verify_candidate_inner(
-                            &candidate,
-                            &registry,
-                            config.as_ref(),
-                            boundary_ctx.as_ref(),
-                            Some(&evidence_bundle),
-                        )
-                    }
-                } else {
-                    verify_candidate_inner(
-                        &candidate,
-                        &registry,
-                        config.as_ref(),
-                        boundary_ctx.as_ref(),
-                        Some(&evidence_bundle),
-                    )
-                }
+            // ── Confidence-aware semantic suppression via EvidenceBundle ──
+            // Phase 5: Use bundle-based confidence for suppression decisions.
+            // High-confidence semantic facts → ExplainedSafe (full suppression).
+            // Medium-confidence semantic facts → downgrade ConfirmedIssue to ProbableIssue.
+            // Resource evidence (same_resource, reachable_release) can override
+            // semantic suppression when stronger.
+
+            let is_leak = is_leak_candidate(&candidate);
+
+            // Check high-confidence suppression first.
+            let high_conf_suppress = if is_leak {
+                evidence_bundle.has_leak_suppression_high_confidence()
             } else {
-                verify_candidate_inner(
+                evidence_bundle.has_semantic_suppression_high_confidence()
+            };
+
+            // Check medium-confidence suppression (for downgrade, not full suppress).
+            let med_conf_suppress = if is_leak {
+                evidence_bundle.has_leak_suppression_medium_confidence()
+            } else {
+                evidence_bundle.has_semantic_suppression_medium_confidence()
+            };
+
+            // Resource evidence strength: same-resource + reachable release
+            // is strong enough to override medium-confidence semantic suppression.
+            let strong_resource_evidence =
+                evidence_bundle.has_same_resource_evidence && evidence_bundle.has_reachable_release;
+
+            let verdict = if high_conf_suppress && !strong_resource_evidence {
+                tracing::debug!(
+                    "High-confidence semantic suppression for candidate {} ({:?})",
+                    candidate.id,
+                    candidate.kind
+                );
+                semantic_suppressed += 1;
+                if candidate.description.is_none() {
+                    candidate.description = evidence_bundle
+                        .suppression_reason(is_leak)
+                        .or_else(|| Some("high-confidence semantic suppression".to_string()));
+                }
+                VerifierVerdict::ExplainedSafe
+            } else {
+                // Compute base verdict from inner verification.
+                let base = verify_candidate_inner(
                     &candidate,
                     &registry,
                     config.as_ref(),
                     boundary_ctx.as_ref(),
                     Some(&evidence_bundle),
-                )
+                );
+
+                // Medium-confidence semantic facts can downgrade ConfirmedIssue
+                // to ProbableIssue, unless resource evidence is stronger.
+                if med_conf_suppress
+                    && !high_conf_suppress
+                    && !strong_resource_evidence
+                    && base == VerifierVerdict::ConfirmedIssue
+                {
+                    tracing::debug!(
+                        "Medium-confidence semantic downgrade for candidate {} ({:?}): ConfirmedIssue → ProbableIssue",
+                        candidate.id,
+                        candidate.kind
+                    );
+                    VerifierVerdict::ProbableIssue
+                } else {
+                    base
+                }
             };
             candidate.verdict = Some(verdict);
 

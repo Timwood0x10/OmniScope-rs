@@ -92,6 +92,9 @@ impl EvidenceBundle {
     }
 
     /// Returns true when semantic evidence explains safe ownership transfer.
+    /// This is used for non-leak issue kinds (cross-family, double-free, etc.).
+    /// Leak-specific kinds (GlobalProvenance, AbortOnOom, RefcountTransfer,
+    /// StaticLifetimeSink) are NOT included — they only suppress leak candidates.
     pub(crate) fn has_semantic_suppression(&self) -> bool {
         self.semantic_kinds.iter().any(|kind| {
             matches!(
@@ -103,7 +106,7 @@ impl EvidenceBundle {
                     | SemanticKind::EscapedToOutParam
                     | SemanticKind::RaiiDropRelease
                     | SemanticKind::CppDestructor
-                    | SemanticKind::RefcountTransfer
+                    | SemanticKind::DestructorRelease
             )
         })
     }
@@ -131,6 +134,8 @@ impl EvidenceBundle {
                     | SemanticKind::GlobalProvenance
                     | SemanticKind::AbortOnOom
                     | SemanticKind::RefcountTransfer
+                    | SemanticKind::StaticLifetimeSink
+                    | SemanticKind::DestructorRelease
             )
         });
         if has_safe_semantic {
@@ -180,6 +185,7 @@ impl EvidenceBundle {
     /// as sufficient), this requires the suppressing fact to have high
     /// confidence. Medium-confidence facts can only *downgrade* (e.g.,
     /// ConfirmedIssue → ProbableIssue), not suppress entirely.
+    /// Used for non-leak issue kinds (cross-family, double-free, etc.).
     pub(crate) fn has_semantic_suppression_high_confidence(&self) -> bool {
         let safe_kinds = [
             SemanticKind::RuntimeManagedResource,
@@ -189,6 +195,7 @@ impl EvidenceBundle {
             SemanticKind::EscapedToOutParam,
             SemanticKind::RaiiDropRelease,
             SemanticKind::CppDestructor,
+            SemanticKind::DestructorRelease,
         ];
         safe_kinds.iter().any(|k| self.has_high_confidence_kind(*k))
     }
@@ -197,7 +204,7 @@ impl EvidenceBundle {
     /// with at least **medium** confidence.
     ///
     /// This is used for downgrading confirmed issues to probable, not for
-    /// full suppression.
+    /// full suppression. Used for non-leak issue kinds.
     pub(crate) fn has_semantic_suppression_medium_confidence(&self) -> bool {
         let safe_kinds = [
             SemanticKind::RuntimeManagedResource,
@@ -207,6 +214,7 @@ impl EvidenceBundle {
             SemanticKind::EscapedToOutParam,
             SemanticKind::RaiiDropRelease,
             SemanticKind::CppDestructor,
+            SemanticKind::DestructorRelease,
         ];
         safe_kinds
             .iter()
@@ -233,6 +241,8 @@ impl EvidenceBundle {
                     | SemanticKind::GlobalProvenance
                     | SemanticKind::AbortOnOom
                     | SemanticKind::RefcountTransfer
+                    | SemanticKind::StaticLifetimeSink
+                    | SemanticKind::DestructorRelease
             ) && f.is_high_confidence()
         });
         if has_safe_semantic {
@@ -271,9 +281,85 @@ impl EvidenceBundle {
                     | SemanticKind::GlobalProvenance
                     | SemanticKind::AbortOnOom
                     | SemanticKind::RefcountTransfer
+                    | SemanticKind::StaticLifetimeSink
+                    | SemanticKind::DestructorRelease
             ) && f.confidence.score() >= FactConfidence::Medium.score()
         });
         has_safe_semantic
+    }
+
+    /// Returns a human-readable suppression reason string based on the
+    /// semantic facts present in this bundle.
+    ///
+    /// Returns `None` if no suppressing semantic facts are found.
+    /// The reason string includes the kind, confidence, and source of
+    /// the first matching high-confidence suppression fact.
+    pub(crate) fn suppression_reason(&self, is_leak: bool) -> Option<String> {
+        let safe_kinds: &[SemanticKind] = if is_leak {
+            &[
+                SemanticKind::RuntimeManagedResource,
+                SemanticKind::StoredToOwner,
+                SemanticKind::StoredToRuntime,
+                SemanticKind::EscapedToCaller,
+                SemanticKind::EscapedToOutParam,
+                SemanticKind::RaiiDropRelease,
+                SemanticKind::CppDestructor,
+                SemanticKind::GlobalProvenance,
+                SemanticKind::AbortOnOom,
+                SemanticKind::RefcountTransfer,
+                SemanticKind::StaticLifetimeSink,
+                SemanticKind::DestructorRelease,
+            ]
+        } else {
+            &[
+                SemanticKind::RuntimeManagedResource,
+                SemanticKind::StoredToOwner,
+                SemanticKind::StoredToRuntime,
+                SemanticKind::EscapedToCaller,
+                SemanticKind::EscapedToOutParam,
+                SemanticKind::RaiiDropRelease,
+                SemanticKind::CppDestructor,
+                SemanticKind::DestructorRelease,
+            ]
+        };
+
+        // Check semantic facts (with provenance) first.
+        for fact in &self.semantic_facts {
+            if safe_kinds.contains(&fact.kind) {
+                return Some(format!(
+                    "semantic suppression: {:?} (confidence={}, source={})",
+                    fact.kind, fact.confidence, fact.source
+                ));
+            }
+        }
+
+        // Fall back to semantic kinds (no provenance, but still valid).
+        for kind in &self.semantic_kinds {
+            if safe_kinds.contains(kind) {
+                return Some(format!(
+                    "semantic suppression: {kind:?} (confidence=unknown)"
+                ));
+            }
+        }
+
+        // Check evidence kinds for leak suppression.
+        if is_leak {
+            let leak_evidence_kinds = [
+                EvidenceKind::ReturnToCaller,
+                EvidenceKind::OutParamInit,
+                EvidenceKind::OutParamOwnedOnSuccess,
+                EvidenceKind::OutParamNullOnError,
+                EvidenceKind::FieldStoreToOwner,
+                EvidenceKind::StaticLifetimeSink,
+            ];
+            for ek in &self.evidence_kinds {
+                if leak_evidence_kinds.contains(ek) {
+                    return Some(format!("evidence suppression: {ek:?}"));
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -811,6 +897,137 @@ mod tests {
         assert!(
             !bundle.has_leak_suppression_high_confidence(),
             "No leak suppression without semantic facts or evidence kinds"
+        );
+    }
+
+    /// Objective: Verify that RefcountTransfer semantic kind does NOT
+    /// suppress double-free (over-release). RefcountTransfer explains
+    /// legitimate ownership transfer for *leak* suppression, but a
+    /// double-release is still a bug even with refcounting.
+    /// Invariants: RefcountTransfer is NOT in the semantic suppression
+    /// list for non-leak issue kinds.
+    #[test]
+    fn bundle_refcount_transfer_does_not_suppress_double_free() {
+        let mut srt_resolutions: HashMap<String, Vec<SemanticKind>> = HashMap::new();
+        srt_resolutions.insert(
+            "Py_DECREF".to_string(),
+            vec![SemanticKind::RefcountTransfer],
+        );
+        let mut srt_facts: HashMap<String, Vec<SemanticFact>> = HashMap::new();
+        srt_facts.insert(
+            "Py_DECREF".to_string(),
+            vec![SemanticFact::new(
+                omniscope_semantics::SemanticKey::symbol("Py_DECREF"),
+                SemanticKind::RefcountTransfer,
+                FactConfidence::High,
+                omniscope_semantics::FactSource::BehaviorSummary,
+                "refcount transfer — over-release is still a bug",
+            )],
+        );
+
+        let candidate = IssueCandidate::new(
+            18,
+            IssueCandidateKind::DoubleRelease,
+            FamilyId::PYTHON_MEM,
+            "Py_DECREF",
+        )
+        .with_release_function("Py_DECREF");
+
+        let bundle = EvidenceBundle::from_candidate(
+            &candidate,
+            None,
+            Some(&srt_resolutions),
+            Some(&srt_facts),
+        );
+
+        // RefcountTransfer is NOT in has_semantic_suppression() because
+        // it only suppresses leak candidates, not double-free.
+        assert!(
+            !bundle.has_semantic_suppression(),
+            "RefcountTransfer must NOT be in non-leak semantic suppression kinds"
+        );
+        // But it IS in has_leak_suppression().
+        assert!(
+            bundle.has_leak_suppression(),
+            "RefcountTransfer must be in leak suppression kinds"
+        );
+    }
+
+    /// Objective: Verify that StaticLifetimeSink (SemanticKind) suppresses
+    /// process-lifetime allocation leak. Global variable initialization
+    /// should not be reported as a leak because the resource has
+    /// process lifetime.
+    /// Invariants: High-confidence StaticLifetimeSink → leak suppression.
+    #[test]
+    fn bundle_static_lifetime_sink_suppresses_process_lifetime_leak() {
+        let mut srt_facts: HashMap<String, Vec<SemanticFact>> = HashMap::new();
+        srt_facts.insert(
+            "__cxx_global_var_init".to_string(),
+            vec![SemanticFact::new(
+                omniscope_semantics::SemanticKey::symbol("__cxx_global_var_init"),
+                SemanticKind::StaticLifetimeSink,
+                FactConfidence::High,
+                omniscope_semantics::FactSource::IRPattern,
+                "global variable initializer — process lifetime",
+            )],
+        );
+
+        let candidate = IssueCandidate::new(
+            19,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::CPP_NEW_SCALAR,
+            "__cxx_global_var_init",
+        );
+
+        let bundle = EvidenceBundle::from_candidate(&candidate, None, None, Some(&srt_facts));
+
+        assert!(
+            bundle.has_leak_suppression_high_confidence(),
+            "High-confidence StaticLifetimeSink must suppress process-lifetime leak"
+        );
+        // StaticLifetimeSink is NOT in has_semantic_suppression()
+        // because it only suppresses leak candidates, not cross-family.
+        assert!(
+            !bundle.has_semantic_suppression(),
+            "StaticLifetimeSink must NOT be in non-leak semantic suppression"
+        );
+    }
+
+    /// Objective: Verify that DestructorRelease (SemanticKind) suppresses
+    /// leak when high-confidence. A destructor/RAII cleanup path means
+    /// the resource is managed by compiler-inserted cleanup, not a leak.
+    /// Invariants: High-confidence DestructorRelease → leak suppression
+    /// and semantic suppression.
+    #[test]
+    fn bundle_destructor_release_suppresses_leak_high_confidence() {
+        let mut srt_facts: HashMap<String, Vec<SemanticFact>> = HashMap::new();
+        srt_facts.insert(
+            "~MyClass".to_string(),
+            vec![SemanticFact::new(
+                omniscope_semantics::SemanticKey::symbol("~MyClass"),
+                SemanticKind::DestructorRelease,
+                FactConfidence::High,
+                omniscope_semantics::FactSource::BehaviorSummary,
+                "C++ destructor release — compiler-managed cleanup",
+            )],
+        );
+
+        let candidate = IssueCandidate::new(
+            20,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::CPP_NEW_SCALAR,
+            "~MyClass",
+        );
+
+        let bundle = EvidenceBundle::from_candidate(&candidate, None, None, Some(&srt_facts));
+
+        assert!(
+            bundle.has_leak_suppression_high_confidence(),
+            "High-confidence DestructorRelease must suppress leak"
+        );
+        assert!(
+            bundle.has_semantic_suppression_high_confidence(),
+            "High-confidence DestructorRelease must be in semantic suppression"
         );
     }
 }

@@ -30,6 +30,10 @@ serde_json = "1.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[[test]]
+name = "accuracy_regression"
+path = "tests/accuracy_regression/mod.rs"
+
 [[bench]]
 name = "ir_parsing"
 harness = false

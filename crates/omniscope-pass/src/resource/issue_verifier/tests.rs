@@ -1594,3 +1594,110 @@ fn test_phase5_ownership_escape_overrides_medium_confidence_suppression() {
         "OwnershipEscapeLeak must override medium-confidence semantic suppression"
     );
 }
+
+/// Objective: Verify that StaticLifetimeSink (SemanticKind) suppresses
+/// process-lifetime DefiniteLeak via the verifier route.
+/// Invariants: High-confidence StaticLifetimeSink → ExplainedSafe for leak.
+#[test]
+fn test_phase5_static_lifetime_sink_suppresses_process_lifetime_leak() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        107,
+        IssueCandidateKind::DefiniteLeak,
+        FamilyId::CPP_NEW_SCALAR,
+        "__cxx_global_var_init",
+    );
+    let mut srt_facts: std::collections::HashMap<String, Vec<omniscope_semantics::SemanticFact>> =
+        std::collections::HashMap::new();
+    srt_facts.insert(
+        "__cxx_global_var_init".to_string(),
+        vec![omniscope_semantics::SemanticFact::new(
+            omniscope_semantics::SemanticKey::symbol("__cxx_global_var_init"),
+            SemanticKind::StaticLifetimeSink,
+            omniscope_semantics::FactConfidence::High,
+            omniscope_semantics::FactSource::IRPattern,
+            "global variable initializer — process lifetime",
+        )],
+    );
+    let bundle = EvidenceBundle::from_candidate(&candidate, None, None, Some(&srt_facts));
+    let verdict = verify_candidate_inner(&candidate, &registry, None, None, Some(&bundle));
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ExplainedSafe,
+        "DefiniteLeak with high-confidence StaticLifetimeSink must be ExplainedSafe"
+    );
+}
+
+/// Objective: Verify that DestructorRelease (SemanticKind) suppresses
+/// leak via the verifier route with high confidence.
+/// Invariants: High-confidence DestructorRelease → ExplainedSafe for leak.
+#[test]
+fn test_phase5_destructor_release_suppresses_leak() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        108,
+        IssueCandidateKind::DefiniteLeak,
+        FamilyId::CPP_NEW_SCALAR,
+        "~MyClass",
+    );
+    let mut srt_facts: std::collections::HashMap<String, Vec<omniscope_semantics::SemanticFact>> =
+        std::collections::HashMap::new();
+    srt_facts.insert(
+        "~MyClass".to_string(),
+        vec![omniscope_semantics::SemanticFact::new(
+            omniscope_semantics::SemanticKey::symbol("~MyClass"),
+            SemanticKind::DestructorRelease,
+            omniscope_semantics::FactConfidence::High,
+            omniscope_semantics::FactSource::BehaviorSummary,
+            "C++ destructor release — compiler-managed cleanup",
+        )],
+    );
+    let bundle = EvidenceBundle::from_candidate(&candidate, None, None, Some(&srt_facts));
+    let verdict = verify_candidate_inner(&candidate, &registry, None, None, Some(&bundle));
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ExplainedSafe,
+        "DefiniteLeak with high-confidence DestructorRelease must be ExplainedSafe"
+    );
+}
+
+/// Objective: Verify that function-local leak without StaticLifetimeSink
+/// is NOT suppressed even when StaticLifetimeSink is present on a
+/// different symbol. A global init function having static lifetime
+/// should not suppress a local_malloc leak.
+/// Invariants: Semantic fact for different symbol → no suppression.
+#[test]
+fn test_phase5_static_lifetime_does_not_suppress_function_local_leak() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        109,
+        IssueCandidateKind::DefiniteLeak,
+        FamilyId::C_HEAP,
+        "local_malloc",
+    );
+    // StaticLifetimeSink fact is for a *different* function.
+    let mut srt_facts: std::collections::HashMap<String, Vec<omniscope_semantics::SemanticFact>> =
+        std::collections::HashMap::new();
+    srt_facts.insert(
+        "__cxx_global_var_init".to_string(),
+        vec![omniscope_semantics::SemanticFact::new(
+            omniscope_semantics::SemanticKey::symbol("__cxx_global_var_init"),
+            SemanticKind::StaticLifetimeSink,
+            omniscope_semantics::FactConfidence::High,
+            omniscope_semantics::FactSource::IRPattern,
+            "global variable initializer",
+        )],
+    );
+    let bundle = EvidenceBundle::from_candidate(&candidate, None, None, Some(&srt_facts));
+    // Bundle should not find suppression for local_malloc.
+    assert!(
+        !bundle.has_leak_suppression_high_confidence(),
+        "StaticLifetimeSink for different symbol must not suppress local_malloc leak"
+    );
+    let verdict = verify_candidate_inner(&candidate, &registry, None, None, Some(&bundle));
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ConfirmedIssue,
+        "Function-local DefiniteLeak without StaticLifetimeSink must remain ConfirmedIssue"
+    );
+}

@@ -3,15 +3,19 @@
 //! Produces colored, tabular output with detection paths and
 //! language→language arrows for resource contract issues.
 
-use super::{confidence_label, format_issue_id, issue_kind_label, severity_label, OutputFormatter};
+use super::OutputFormatter;
 use colored::*;
+use omniscope_core::FindingView;
 use omniscope_pipeline::PipelineResult;
-use omniscope_types::LanguageHint;
 
 /// Rich terminal formatter with ANSI colors.
 pub struct RichFormatter {
     /// Whether to use ANSI colors.
     use_color: bool,
+    /// Whether to include verbose fields (confidence_breakdown).
+    verbose: bool,
+    /// Whether to include debug fields (suppression_reason).
+    debug: bool,
 }
 
 impl RichFormatter {
@@ -20,13 +24,29 @@ impl RichFormatter {
         use std::io::IsTerminal;
         Self {
             use_color: std::io::stdout().is_terminal(),
+            verbose: false,
+            debug: false,
+        }
+    }
+
+    /// Creates a formatter with explicit verbose/debug flags.
+    pub fn with_verbosity(verbose: bool, debug: bool) -> Self {
+        use std::io::IsTerminal;
+        Self {
+            use_color: std::io::stdout().is_terminal(),
+            verbose,
+            debug,
         }
     }
 
     /// Creates a formatter with explicit color control (used in tests).
     #[cfg(test)]
     pub fn with_color(use_color: bool) -> Self {
-        Self { use_color }
+        Self {
+            use_color,
+            verbose: false,
+            debug: false,
+        }
     }
 
     /// Applies color if enabled, otherwise returns plain string.
@@ -55,95 +75,6 @@ impl RichFormatter {
     /// Renders a section divider.
     fn divider(&self) -> String {
         "─".repeat(63)
-    }
-
-    /// Formats a severity badge with color.
-    fn severity_badge(&self, issue: &omniscope_core::Issue) -> String {
-        let label = severity_label(issue);
-        match label {
-            "HIGH" => self.maybe_color(&format!("[{label}]"), "red"),
-            "LOW" => self.maybe_color(&format!("[{label}]"), "yellow"),
-            _ => self.maybe_color(&format!("[{label}]"), "blue"),
-        }
-    }
-
-    /// Formats the language arrow for a resource contract issue.
-    fn language_arrow_for_issue(&self, issue: &omniscope_core::Issue) -> Option<String> {
-        use omniscope_core::IssueKind;
-        if !issue.kind.is_resource_contract() {
-            return None;
-        }
-
-        // Try to extract language info from FFI boundary or description
-        if let Some(ref ffi) = issue.ffi_boundary {
-            let caller = lang_label(ffi.caller_lang);
-            let callee = lang_label(ffi.callee_lang);
-            let is_mismatch = issue.kind == IssueKind::CrossFamilyFree;
-            let arrow = if is_mismatch {
-                self.maybe_color("──✕──>", "red")
-            } else {
-                self.maybe_color("──✓──>", "green")
-            };
-            Some(format!("{} {} {}", caller, arrow, callee))
-        } else {
-            // Infer from issue description patterns
-            let desc = &issue.description;
-            if desc.contains("cross-family") || desc.contains("cross_family") {
-                Some(self.infer_arrow_from_description(desc))
-            } else if issue.kind == IssueKind::ConditionalLeak {
-                let lang = self.infer_lang_from_description(desc);
-                Some(self.maybe_color(&format!("({})", language_label_str(lang)), "cyan"))
-            } else {
-                None
-            }
-        }
-    }
-
-    /// Infers language arrow from issue description text.
-    fn infer_arrow_from_description(&self, desc: &str) -> String {
-        // Common patterns in verifier descriptions:
-        // "c_heap allocated ... released as cpp_new_scalar"
-        let alloc_lang = if desc.contains("c_heap") || desc.contains("malloc") {
-            LanguageHint::C
-        } else if desc.contains("rust_global") || desc.contains("__rust") {
-            LanguageHint::Rust
-        } else if desc.contains("cpp_new") || desc.contains("operator") {
-            LanguageHint::Cpp
-        } else if desc.contains("python") {
-            LanguageHint::Python
-        } else {
-            LanguageHint::Unknown
-        };
-
-        let release_lang = if desc.contains("cpp_new_scalar") || desc.contains("operator delete") {
-            LanguageHint::Cpp
-        } else if desc.contains("c_heap") && desc.contains("released as") {
-            LanguageHint::C
-        } else if desc.contains("rust_global") && desc.contains("released as") {
-            LanguageHint::Rust
-        } else if desc.contains("python") {
-            LanguageHint::Python
-        } else {
-            LanguageHint::Unknown
-        };
-
-        let alloc_str = self.maybe_color(language_label_str(alloc_lang), "cyan");
-        let arrow = self.maybe_color("──✕──>", "red");
-        let release_str = self.maybe_color(language_label_str(release_lang), "cyan");
-        format!("{} {} {}", alloc_str, arrow, release_str)
-    }
-
-    /// Infers a language from description text.
-    fn infer_lang_from_description(&self, desc: &str) -> LanguageHint {
-        if desc.contains("rust") || desc.contains("__rust") {
-            LanguageHint::Rust
-        } else if desc.contains("python") || desc.contains("Py") {
-            LanguageHint::Python
-        } else if desc.contains("cpp") || desc.contains("operator") {
-            LanguageHint::Cpp
-        } else {
-            LanguageHint::C
-        }
     }
 
     /// Formats the coverage section.
@@ -208,70 +139,91 @@ impl RichFormatter {
         out
     }
 
-    /// Formats a single issue with detection path and language arrow.
+    /// Formats a single issue using the V2 FindingView model.
+    ///
+    /// V2 output includes a title, resource flow, why explanation,
+    /// evidence list, and fix hint — all derived from the `FindingView`.
     fn format_single_issue(&self, issue: &&omniscope_core::Issue) -> String {
-        let badge = self.severity_badge(issue);
-        let id = self.maybe_color(&format_issue_id(issue.id), "bold");
-        let kind = self.maybe_color(issue_kind_label(&issue.kind), "cyan");
-        let conf = confidence_label(&issue.confidence);
+        let view = FindingView::from_issue(issue, self.verbose, self.debug);
 
-        // Extract function name from location or FFI boundary
-        let function = if let Some(ref loc) = issue.location {
-            loc.function.as_deref().unwrap_or("unknown")
-        } else if let Some(ref ffi) = issue.ffi_boundary {
-            &ffi.caller_name
-        } else {
-            "unknown"
+        // Header line: [SEVERITY] OMI-NNN kind
+        let badge = match view.severity.as_str() {
+            "HIGH" => self.maybe_color(&format!("[{}]", view.severity), "red"),
+            "LOW" => self.maybe_color(&format!("[{}]", view.severity), "yellow"),
+            _ => self.maybe_color(&format!("[{}]", view.severity), "blue"),
         };
+        let id = self.maybe_color(&view.id, "bold");
+        let kind = self.maybe_color(&view.kind, "cyan");
 
-        let mut detail = issue.description.clone();
+        let mut out = format!("\n  {} {} {}", badge, id, kind);
 
-        // Sanitize IR-level variable names (%call, %0, etc.) to be
-        // more readable for end users.
-        detail = sanitize_ir_vars(&detail);
+        // Title — human-readable one-liner
+        out.push_str(&format!(
+            "\n    Title:     {}",
+            self.maybe_color(&view.title, "bold")
+        ));
 
-        // Append language arrow for resource contract issues
-        if let Some(arrow) = self.language_arrow_for_issue(issue) {
-            detail = format!("{} [{}]", detail, arrow);
+        // Function (skip if empty)
+        if let Some(ref function) = view.function {
+            out.push_str(&format!("\n    Function:  {}", function));
         }
 
-        let mut out = format!(
-            "\n  {} {}\n    Type:       {}\n    Confidence: {}\n    Function:   {}\n    Detail:     {}",
-            badge, id, kind, conf, function, detail
-        );
-
-        // CWE annotation
-        if let Some(cwe) = issue.cwe_id {
-            out.push_str(&format!(" (CWE-{})", cwe));
+        // CWE
+        if let Some(ref cwe) = view.cwe {
+            out.push_str(&format!("\n    CWE:       {}", cwe));
         }
 
-        // Detection path (trace entries)
-        if !issue.trace.is_empty() {
-            out.push_str("\n    ┌─ Detection Path ──");
-            let last = issue.trace.len() - 1;
-            for (i, entry) in issue.trace.iter().enumerate() {
+        // Confidence
+        out.push_str(&format!("\n    Confidence: {}", view.confidence));
+
+        // Resource flow
+        if !view.resource_flow.is_empty() {
+            out.push_str("\n    ┌─ Resource Flow ──");
+            let last = view.resource_flow.len() - 1;
+            for (i, step) in view.resource_flow.iter().enumerate() {
+                let mut step_line = format!(
+                    "{}. {:10} {}",
+                    step.step,
+                    format!("{}:", step.operation),
+                    step.function
+                );
+                if let Some(ref family) = step.family {
+                    step_line = format!("{}  family={}", step_line, family);
+                }
                 if i == last {
                     let cross = self.maybe_color("✗", "red");
-                    out.push_str(&format!(
-                        "\n    └── [{}] {}  {}",
-                        i + 1,
-                        entry.description,
-                        cross
-                    ));
+                    out.push_str(&format!("\n    └── {}  {}", step_line, cross));
                 } else {
-                    out.push_str(&format!("\n    ├── [{}] {}", i + 1, entry.description));
+                    out.push_str(&format!("\n    ├── {}", step_line));
                 }
             }
         }
 
-        // FFI boundary info
-        if let Some(ref ffi) = issue.ffi_boundary {
-            let caller_lang = self.maybe_color(lang_label(ffi.caller_lang), "cyan");
-            let callee_lang = self.maybe_color(lang_label(ffi.callee_lang), "cyan");
-            out.push_str(&format!(
-                "\n    ┌─ FFI Boundary ──\n    ├── Caller: {} ({})\n    ├── Callee: {} ({})\n    └── Kind: {:?}",
-                ffi.caller_name, caller_lang, ffi.callee_name, callee_lang, ffi.boundary_kind
-            ));
+        // Why explanation
+        out.push_str(&format!("\n    Why:\n      {}", view.why));
+
+        // Evidence list
+        if !view.evidence.is_empty() {
+            out.push_str("\n    Evidence:");
+            for ev in &view.evidence {
+                let marker = self.maybe_color("+", "green");
+                out.push_str(&format!("\n      {} {}", marker, ev));
+            }
+        }
+
+        // Fix hint
+        if let Some(ref fix) = view.fix_hint {
+            out.push_str(&format!("\n    Fix:\n      {}", fix));
+        }
+
+        // Confidence breakdown (verbose mode)
+        if let Some(ref breakdown) = view.confidence_breakdown {
+            out.push_str(&format!("\n    Confidence Breakdown:\n      {}", breakdown));
+        }
+
+        // Suppression reason (debug mode)
+        if let Some(ref reason) = view.suppression_reason {
+            out.push_str(&format!("\n    Suppression: {}", reason));
         }
 
         out
@@ -335,76 +287,6 @@ impl Default for RichFormatter {
     }
 }
 
-/// Converts a Language type to a short display label.
-fn lang_label(lang: omniscope_types::Language) -> &'static str {
-    use omniscope_types::Language;
-    match lang {
-        Language::C => "C",
-        Language::Cpp => "C++",
-        Language::Rust => "Rust",
-        Language::Python => "Python",
-        Language::Java => "Java",
-        Language::CSharp => "C#",
-        Language::Go => "Go",
-        Language::Zig => "Zig",
-        Language::Unknown => "?",
-    }
-}
-
-/// Sanitizes LLVM IR variable names in display text.
-///
-/// Replaces `%call`, `%call2`, etc. with "return value" and
-/// `%0`, `%1` with "<ir-reg>" so end users don't see raw IR.
-/// Preserves multi-byte UTF-8 characters by iterating over chars
-/// instead of raw bytes.
-fn sanitize_ir_vars(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '%' && i + 1 < chars.len() {
-            // Check for %call pattern
-            let remaining: String = chars[i..].iter().collect();
-            if remaining.starts_with("%call") {
-                out.push_str("return value");
-                i += 5; // skip '%' + "call"
-                        // Skip optional trailing digits
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-                continue;
-            }
-            // Check for %digit pattern (SSA register like %0, %42)
-            if chars[i + 1].is_ascii_digit() {
-                out.push_str("<ir-reg>");
-                i += 2;
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-                continue;
-            }
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
-/// Converts a LanguageHint to a short display label.
-fn language_label_str(hint: LanguageHint) -> &'static str {
-    match hint {
-        LanguageHint::C => "C",
-        LanguageHint::Cpp => "C++",
-        LanguageHint::Rust => "Rust",
-        LanguageHint::Python => "Python",
-        LanguageHint::Java => "Java",
-        LanguageHint::CSharp => "C#",
-        LanguageHint::Go => "Go",
-        LanguageHint::Zig => "Zig",
-        LanguageHint::Unknown => "?",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,11 +297,8 @@ mod tests {
     fn test_rich_formatter_sections() {
         let formatter = RichFormatter::with_color(false);
         let pass_results = vec![omniscope_pass::PassResult::new("test")];
-        let result = PipelineResult::from_pass_results(
-            pass_results,
-            Duration::from_millis(10),
-            Vec::new(), // No pass timings in test
-        );
+        let result =
+            PipelineResult::from_pass_results(pass_results, Duration::from_millis(10), Vec::new());
 
         let output = formatter.format(&result);
         assert!(output.contains("OmniScope"), "Must contain header");
@@ -444,25 +323,61 @@ mod tests {
         let result = PipelineResult::from_pass_results(
             vec![pass_result],
             Duration::from_millis(16),
-            Vec::new(), // No pass timings in test
+            Vec::new(),
         );
         let output = formatter.format(&result);
 
+        // V2 output checks: title, kind, function must appear.
         assert!(output.contains("HIGH"), "Must show HIGH severity label");
         assert!(output.contains("OMI-001"), "Must show issue ID");
         assert!(output.contains("invalid_free"), "Must show issue kind");
-        assert!(output.contains("MEDIUM"), "Must show confidence");
         assert!(output.contains("test_func"), "Must show function name");
+        // V2 specific: title and why/evidence/fix sections.
+        assert!(output.contains("Title:"), "V2 must show Title section");
+        assert!(output.contains("Why:"), "V2 must show Why section");
+        assert!(output.contains("Fix:"), "V2 must show Fix section");
+    }
+
+    #[test]
+    fn test_rich_formatter_cross_family_issue() {
+        // Verify V2 resource flow rendering for a cross-family issue.
+        let formatter = RichFormatter::with_color(false);
+        let issue = Issue::new(
+            3,
+            IssueKind::CrossFamilyFree,
+            Severity::Error,
+            "c_heap allocated by malloc released as sqlite3_free",
+        );
+
+        let mut pass_result = omniscope_pass::PassResult::new("ResourceContract").with_nodes(10);
+        pass_result.add_issue(issue);
+
+        let result = PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(5),
+            Vec::new(),
+        );
+        let output = formatter.format(&result);
+
+        assert!(
+            output.contains("malloc buffer released by sqlite3_free"),
+            "V2 title must describe cross-family free"
+        );
+        assert!(
+            output.contains("Resource Flow"),
+            "V2 must show resource flow section"
+        );
+        assert!(
+            output.contains("alloc") && output.contains("release"),
+            "V2 flow must show alloc and release steps"
+        );
     }
 
     #[test]
     fn test_rich_formatter_no_issues() {
         let formatter = RichFormatter::with_color(false);
-        let result = PipelineResult::from_pass_results(
-            vec![],
-            Duration::from_millis(1),
-            Vec::new(), // No pass timings in test
-        );
+        let result =
+            PipelineResult::from_pass_results(vec![], Duration::from_millis(1), Vec::new());
         let output = formatter.format(&result);
         assert!(
             output.contains("No issues detected"),
@@ -471,60 +386,29 @@ mod tests {
     }
 
     #[test]
-    fn test_language_labels() {
-        assert_eq!(
-            lang_label(omniscope_types::Language::C),
-            "C",
-            "C language should display as 'C'"
+    fn test_rich_formatter_function_not_shown_when_empty() {
+        // When no location is set, the Function line must not appear.
+        let formatter = RichFormatter::with_color(false);
+        let issue = Issue::new(
+            1,
+            IssueKind::MemoryLeak,
+            Severity::Note,
+            "allocation may leak",
         );
-        assert_eq!(
-            lang_label(omniscope_types::Language::Cpp),
-            "C++",
-            "C++ language should display as 'C++'"
-        );
-        assert_eq!(
-            lang_label(omniscope_types::Language::Rust),
-            "Rust",
-            "Rust language should display as 'Rust'"
-        );
-        assert_eq!(
-            lang_label(omniscope_types::Language::Python),
-            "Python",
-            "Python language should display as 'Python'"
-        );
-        assert_eq!(
-            lang_label(omniscope_types::Language::Unknown),
-            "?",
-            "Unknown language should display as '?'"
-        );
-    }
 
-    #[test]
-    fn test_sanitize_ir_vars() {
-        assert_eq!(
-            sanitize_ir_vars("'%call'"),
-            "'return value'",
-            "IR variable '%call' should be sanitized to 'return value'"
+        let mut pass_result = omniscope_pass::PassResult::new("Leak").with_nodes(3);
+        pass_result.add_issue(issue);
+
+        let result = PipelineResult::from_pass_results(
+            vec![pass_result],
+            Duration::from_millis(1),
+            Vec::new(),
         );
-        assert_eq!(
-            sanitize_ir_vars("'%call2'"),
-            "'return value'",
-            "IR variable '%call2' should be sanitized to 'return value'"
-        );
-        assert_eq!(
-            sanitize_ir_vars("'%0'"),
-            "'<ir-reg>'",
-            "IR variable '%0' should be sanitized to '<ir-reg>'"
-        );
-        assert_eq!(
-            sanitize_ir_vars("no IR vars"),
-            "no IR vars",
-            "Text without IR variables should remain unchanged"
-        );
-        assert_eq!(
-            sanitize_ir_vars("'%call' and '%1'"),
-            "'return value' and '<ir-reg>'",
-            "Multiple IR variables should be sanitized correctly"
+        let output = formatter.format(&result);
+
+        assert!(
+            !output.contains("Function:"),
+            "Function line must not appear when no function is set"
         );
     }
 }

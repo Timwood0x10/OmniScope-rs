@@ -196,6 +196,13 @@ pub enum SemanticKind {
     /// Rust Arc::into_raw + Arc::from_raw). The resource is managed by
     /// a reference counting system and the transfer is by-design.
     RefcountTransfer,
+    /// Resource has static/process lifetime (e.g., global variable init,
+    /// __cxx_global_var_init). Not a local leak — the resource outlives
+    /// the function and is never expected to be freed.
+    StaticLifetimeSink,
+    /// Destructor/RAII release pattern (e.g., C++ ~ClassName(), Rust Drop).
+    /// The release is compiler-inserted cleanup, not a user bug.
+    DestructorRelease,
 }
 
 /// Semantic key for querying the semantic tree.
@@ -723,6 +730,8 @@ impl SemanticKind {
             // ── Phase 5: Additional semantic kinds ──
             SemanticKind::AbortOnOom => 0.9, // Process terminates, no leak
             SemanticKind::RefcountTransfer => 0.7, // Refcount-managed transfer
+            SemanticKind::StaticLifetimeSink => 0.9, // Process lifetime, safe
+            SemanticKind::DestructorRelease => 1.0, // Compiler-managed cleanup
 
             // ── Default ──
             SemanticKind::Unknown => 0.5,
