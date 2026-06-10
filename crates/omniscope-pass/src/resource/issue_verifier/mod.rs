@@ -172,6 +172,10 @@ impl Pass for IssueVerifierPass {
         let mut ffi_gate_suppressed: usize = 0;
         let mut single_lang_suppressed: usize = 0;
         let mut semantic_suppressed: usize = 0;
+        // Pass A: indices of candidates that passed the verifier and are
+        // reportable. Actual emission is deferred to Pass B (reconcile).
+        let mut reportable_indices: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
 
         for mut candidate in candidates {
             let evidence_bundle = EvidenceBundle::from_candidate(
@@ -399,6 +403,7 @@ impl Pass for IssueVerifierPass {
                 }
             }
 
+            // ── Pass A: collect reportable candidates (do NOT emit yet) ──
             if candidate.is_reportable() {
                 if candidate.kind == IssueCandidateKind::CrossLanguageFree
                     && should_report_as_cross_family(&candidate, &registry)
@@ -416,41 +421,155 @@ impl Pass for IssueVerifierPass {
                         candidate.verdict.unwrap_or(VerifierVerdict::ProbableIssue),
                     ));
                 }
-                let issue_id = ctx.next_issue_id();
-                let mut issue = Issue::new(
-                    issue_id,
-                    candidate.to_issue_kind(),
-                    candidate.severity(),
-                    candidate.description.clone().unwrap_or_default(),
-                );
-
-                let symbol = candidate
-                    .release_function
-                    .as_deref()
-                    .unwrap_or(&candidate.alloc_function);
-                issue = issue.with_symbol(symbol);
-
-                let location_func = match candidate.kind {
-                    IssueCandidateKind::NullDereference
-                    | IssueCandidateKind::UncheckedFfiReturn => candidate
-                        .alloc_caller
-                        .as_deref()
-                        .unwrap_or(&candidate.alloc_function),
-                    _ => &candidate.alloc_function,
-                };
-                if !location_func.is_empty() && location_func != "unknown" {
-                    let location =
-                        omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
-                            .with_function(location_func);
-                    issue = issue.with_location(location);
-                }
-
-                let outcome = ctx.emit_issue(issue.clone());
-                if outcome.is_allowed() {
-                    issues.push(issue);
-                }
+                reportable_indices.insert(verified.len());
             }
             verified.push(candidate);
+        } // end for mut candidate in candidates
+
+        // ── Pass B: reconcile + emit ──
+        // Group candidates by resource identity, then arbitrate using the
+        // subsumption matrix and same-class dedup. Only Keep candidates
+        // are emitted; SubsumedBy / DuplicateOf are suppressed (auditable).
+        let reportable_set: std::collections::HashSet<usize> =
+            reportable_indices.iter().cloned().collect();
+
+        // Diagnostic: log all candidates before reconciliation when any
+        // cross-family or leak candidate exists (helps debug TP→FN regressions).
+        let has_cross_or_leak = verified.iter().any(|c| {
+            matches!(
+                c.kind,
+                IssueCandidateKind::CrossFamilyFree
+                    | IssueCandidateKind::CrossLanguageFree
+                    | IssueCandidateKind::ConditionalLeak
+                    | IssueCandidateKind::DefiniteLeak
+            )
+        });
+        if has_cross_or_leak {
+            tracing::debug!(
+                count = verified.len(),
+                reportable_count = reportable_set.len(),
+                "Pass B: before reconcile — dumping candidates"
+            );
+            for (idx, c) in verified.iter().enumerate() {
+                tracing::debug!(
+                    idx,
+                    kind = ?c.kind,
+                    verdict = ?c.verdict,
+                    resource_id = ?c.resource_id,
+                    is_reportable = reportable_set.contains(&idx),
+                    alloc_func = %c.alloc_function,
+                    "candidate[{idx}]"
+                );
+            }
+        }
+
+        let actions = super::reconcile::reconcile_candidates(&verified, Some(&reportable_set));
+        let mut reconcile_subsumed: usize = 0;
+        let mut reconcile_deduped: usize = 0;
+
+        // Collect indices to emit (Keep + reportable) before mutating verified.
+        let mut emit_indices: Vec<usize> = Vec::new();
+        for (idx, action) in actions.iter().enumerate() {
+            match action {
+                super::reconcile::ReconcileAction::Keep => {
+                    if reportable_set.contains(&idx) {
+                        emit_indices.push(idx);
+                    }
+                }
+                super::reconcile::ReconcileAction::SubsumedBy { class, by_idx } => {
+                    reconcile_subsumed += 1;
+                    let candidate = &mut verified[idx];
+                    candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                    let by_emitted =
+                        matches!(actions[*by_idx], super::reconcile::ReconcileAction::Keep)
+                            && reportable_set.contains(by_idx);
+                    candidate.description.get_or_insert_with(|| {
+                        if by_emitted {
+                            format!(
+                                "reconcile: subsumed by {:?} (candidate {}) on same resource",
+                                class, by_idx
+                            )
+                        } else {
+                            format!(
+                                "reconcile: subsumed by {:?} (non-emitted candidate {}) on same resource",
+                                class, by_idx
+                            )
+                        }
+                    });
+                }
+                super::reconcile::ReconcileAction::DuplicateOf(kept_idx) => {
+                    reconcile_deduped += 1;
+                    let candidate = &mut verified[idx];
+                    candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                    let kept_emitted =
+                        matches!(actions[*kept_idx], super::reconcile::ReconcileAction::Keep)
+                            && reportable_set.contains(kept_idx);
+                    candidate.description.get_or_insert_with(|| {
+                        if kept_emitted {
+                            format!(
+                                "reconcile: duplicate of candidate {} (same FaultClass on same resource)",
+                                kept_idx
+                            )
+                        } else {
+                            format!(
+                                "reconcile: duplicate of non-emitted candidate {} (same FaultClass)",
+                                kept_idx
+                            )
+                        }
+                    });
+                }
+            }
+        }
+
+        // Diagnostic: log reconcile actions and emit set for cross/leak candidates.
+        if has_cross_or_leak {
+            for (idx, action) in actions.iter().enumerate() {
+                tracing::debug!(
+                    idx,
+                    action = ?action,
+                    will_emit = emit_indices.contains(&idx),
+                    "reconcile_action[{idx}]"
+                );
+            }
+        }
+
+        // Emit only Keep + reportable candidates.
+        for idx in emit_indices {
+            let candidate = &verified[idx];
+            let issue_id = ctx.next_issue_id();
+            let mut issue = Issue::new(
+                issue_id,
+                candidate.to_issue_kind(),
+                candidate.severity(),
+                candidate.description.clone().unwrap_or_default(),
+            );
+
+            let symbol = candidate
+                .release_function
+                .as_deref()
+                .unwrap_or(&candidate.alloc_function);
+            issue = issue.with_symbol(symbol);
+
+            let location_func = match candidate.kind {
+                IssueCandidateKind::NullDereference | IssueCandidateKind::UncheckedFfiReturn => {
+                    candidate
+                        .alloc_caller
+                        .as_deref()
+                        .unwrap_or(&candidate.alloc_function)
+                }
+                _ => &candidate.alloc_function,
+            };
+            if !location_func.is_empty() && location_func != "unknown" {
+                let location =
+                    omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
+                        .with_function(location_func);
+                issue = issue.with_location(location);
+            }
+
+            let outcome = ctx.emit_issue(issue.clone());
+            if outcome.is_allowed() {
+                issues.push(issue);
+            }
         }
 
         let verified_count = verified.len();
@@ -468,6 +587,8 @@ impl Pass for IssueVerifierPass {
         result.add_stat("ffi_gate_suppressed", ffi_gate_suppressed);
         result.add_stat("single_lang_suppressed", single_lang_suppressed);
         result.add_stat("semantic_suppressed", semantic_suppressed);
+        result.add_stat("reconcile_subsumed", reconcile_subsumed);
+        result.add_stat("reconcile_deduped", reconcile_deduped);
 
         Ok(result)
     }

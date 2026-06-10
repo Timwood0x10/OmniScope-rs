@@ -27,6 +27,7 @@ pub mod noreturn;
 pub mod ownership_solver;
 pub mod path_sensitive_leak;
 pub mod raw_fact_collector;
+pub(crate) mod reconcile;
 pub mod risk_scoring;
 pub mod rust_drop_tracker;
 pub mod structural_inference_pass;

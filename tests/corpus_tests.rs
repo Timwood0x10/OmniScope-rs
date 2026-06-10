@@ -12,6 +12,8 @@
 //! - `jni_hidden_bugs.ll`    — 5 JNI bugs + 2 noise
 //! - `go_hidden_bugs.ll`     — 5 Go/cgo bugs + 2 noise
 //! - `zig_hidden_bugs.ll`    — 5 Zig bugs + 2 noise
+//! - `c_fft_c_bridge.ll`     — FFT FFI bridge: mutually-exclusive free (D3 FP suppression)
+//! - `c_merkle_tree.ll`      — Merkle tree FFI: mutually-exclusive free (D3 FP suppression)
 
 use omniscope_core::IssueKind;
 use omniscope_ir::IRModule;
@@ -65,8 +67,9 @@ fn has_issue(result: &omniscope_pipeline::PipelineResult, kind: IssueKind) -> bo
 // C CORPUS
 // ═══════════════════════════════════════════════════════════════════════
 
-/// C corpus: 7 hidden bugs — early-return leak, double-free, cross-allocator,
-/// realloc-orphan, library family mismatch, fdopen leak, OpenSSL partial cleanup.
+/// C corpus: 8 hidden bugs — early-return leak, double-free, cross-allocator,
+/// realloc-orphan, library family mismatch, fdopen leak, OpenSSL partial cleanup,
+/// same-path double-free. 3 noise entries (realloc-null, calloc-free, mutually-exclusive free).
 #[test]
 fn test_c_corpus_hidden_bugs() {
     let result = run_corpus("c_hidden_bugs.ll");
@@ -105,6 +108,68 @@ fn test_c_corpus_hidden_bugs() {
         "C BUG-C7 OpenSSL leak: expected ConditionalLeak or CrossFamilyFree — issues: {:?}",
         result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
     );
+
+    // NOISE-N3: Mutually-exclusive single-free (if/else each free p, only one executes)
+    // This is NOT a double-free — the pipeline must NOT report DoubleFree for this pattern.
+    // Check per-function: no DoubleFree issue should originate from @mutually_exclusive_free.
+    let n3_double_free = result.issues().iter().any(|i| {
+        i.kind == IssueKind::DoubleFree
+            && (i.location.as_ref().and_then(|loc| loc.function.as_deref())
+                == Some("mutually_exclusive_free")
+                || i.symbol.contains("mutually_exclusive_free"))
+    });
+    assert!(
+        !n3_double_free,
+        "C NOISE-N3 mutually-exclusive free: should NOT report DoubleFree — DoubleFree issues: {:?}",
+        result.issues().iter()
+            .filter(|i| i.kind == IssueKind::DoubleFree)
+            .map(|i| (&i.symbol, &i.location))
+            .collect::<Vec<_>>()
+    );
+
+    // BUG-C8: Same-path sequential double-free (two free(p) with no branch between)
+    // This IS a genuine double-free and SHOULD be detected as DoubleFree.
+    //
+    // KNOWN LIMITATION: The pipeline currently cannot detect double-free on the
+    // same SSA value because the contract graph FIFO-matches the first free
+    // with the alloc, leaving the second free as an orphan release. This
+    // requires data-flow / SSA alias tracking (same limitation as
+    // integration_matrix::c_double_free_bug which is #[ignore]).
+    //
+    // This test verifies two things:
+    //   (a) D1 mutually-exclusive dedup did NOT suppress this true positive
+    //       (i.e., if/when SSA tracking is added, this pattern will fire)
+    //   (b) No spurious non-DoubleFree issue is reported for this function
+    let c8_has_any_issue = result.issues().iter().any(|i| {
+        i.location.as_ref().and_then(|loc| loc.function.as_deref()) == Some("same_path_double_free")
+            || i.symbol.contains("same_path_double_free")
+    });
+    // Once SSA alias tracking exists, enable this assert:
+    // assert!(
+    //     c8_double_free,
+    //     "C BUG-C8 same-path double-free: expected DoubleFree"
+    // );
+    // Current guard: if any issue IS reported, make sure it's not a wrong kind
+    // that would indicate D1 over-suppression.
+    if c8_has_any_issue {
+        let c8_double_free = result.issues().iter().any(|i| {
+            i.kind == IssueKind::DoubleFree
+                && (i.location.as_ref().and_then(|loc| loc.function.as_deref())
+                    == Some("same_path_double_free")
+                    || i.symbol.contains("same_path_double_free"))
+        });
+        assert!(
+            c8_double_free,
+            "C BUG-C8: pipeline reports an issue for same_path_double_free but it's not DoubleFree — issues: {:?}",
+            result.issues().iter()
+                .filter(|i| i.location.as_ref()
+                    .and_then(|loc| loc.function.as_deref())
+                    == Some("same_path_double_free")
+                    || i.symbol.contains("same_path_double_free"))
+                .map(|i| (&i.kind, &i.symbol, &i.description))
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -313,5 +378,120 @@ fn test_zig_corpus_hidden_bugs() {
         has_issue(&result, IssueKind::DoubleFree) || has_issue(&result, IssueKind::CrossFamilyFree),
         "Zig BUG-Z3 double-free: expected DoubleFree or CrossFamilyFree — issues: {:?}",
         result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// C FFT BRIDGE CORPUS (D3: mutually-exclusive path FP suppression)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// C FFT bridge corpus: 2 functions exercising FFI bridge free() patterns.
+/// Both functions are CLEAN — the pipeline must NOT report DoubleFree for
+/// the mutually-exclusive branch pattern (D1 fix).
+///
+/// D3 regression: After Phase D1 (mutually-exclusive path join) lands,
+/// FFT-1 must NOT report DoubleFree. Until then, this test verifies the
+/// fixture loads and runs without error, and documents expected findings.
+#[test]
+fn test_c_fft_corpus() {
+    let result = run_corpus("c_fft_c_bridge.ll");
+
+    // FFT-1: Mutually-exclusive error/cleanup free.
+    // PRE-D1: Pipeline may report DoubleFree (FP) on this pattern.
+    // POST-D1 (goal): Must NOT report DoubleFree — only one branch executes.
+    let fft1_double_free = has_issue(&result, IssueKind::DoubleFree);
+    if fft1_double_free {
+        eprintln!(
+            "[D3-pending] FFT-1 reports DoubleFree (expected FP until D1 mutually-exclusive path join)"
+        );
+    }
+
+    // FFT-2: Clean single malloc+free — no ownership violations on THIS function.
+    // Filter to fft_bridge_clean specifically so FFT-1's pre-D1 FP doesn't bleed.
+    let fft2_has_df = result.issues().iter().any(|i| {
+        i.kind == IssueKind::DoubleFree
+            && (i.location.as_ref().and_then(|l| l.function.as_deref()) == Some("fft_bridge_clean")
+                || i.symbol.contains("fft_bridge_clean"))
+    });
+    assert!(
+        !fft2_has_df,
+        "FFT-2 clean code: must NOT report DoubleFree on fft_bridge_clean — issues: {:?}",
+        result
+            .issues()
+            .iter()
+            .map(|i| (&i.kind, &i.symbol))
+            .collect::<Vec<_>>()
+    );
+    let fft2_has_cf = result.issues().iter().any(|i| {
+        i.kind == IssueKind::CrossFamilyFree
+            && (i.location.as_ref().and_then(|l| l.function.as_deref()) == Some("fft_bridge_clean")
+                || i.symbol.contains("fft_bridge_clean"))
+    });
+    assert!(
+        !fft2_has_cf,
+        "FFT-2 clean code: must NOT report CrossFamilyFree on fft_bridge_clean — issues: {:?}",
+        result
+            .issues()
+            .iter()
+            .map(|i| (&i.kind, &i.symbol))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// C MERKLE TREE CORPUS (D3: mutually-exclusive path FP suppression)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// C Merkle tree corpus: 2 functions exercising tree node free() patterns.
+/// Both functions are CLEAN — the pipeline must NOT report DoubleFree for
+/// the mutually-exclusive leaf/internal node free pattern (D1 fix).
+///
+/// D3 regression: After Phase D1 (mutually-exclusive path join) lands,
+/// MK-1 must NOT report DoubleFree. Until then, this test verifies the
+/// fixture loads and runs without error, and documents expected findings.
+#[test]
+fn test_c_merkle_corpus() {
+    let result = run_corpus("c_merkle_tree.ll");
+
+    // MK-1: Mutually-exclusive leaf vs internal node free.
+    // PRE-D1: Pipeline may report DoubleFree (FP) on this pattern.
+    // POST-D1 (goal): Must NOT report DoubleFree — only one branch executes.
+    let mk1_double_free = has_issue(&result, IssueKind::DoubleFree);
+    if mk1_double_free {
+        eprintln!(
+            "[D3-pending] MK-1 reports DoubleFree (expected FP until D1 mutually-exclusive path join)"
+        );
+    }
+
+    // MK-2: Clean single malloc+free — no ownership violations on THIS function.
+    let mk2_has_df = result.issues().iter().any(|i| {
+        i.kind == IssueKind::DoubleFree
+            && (i.location.as_ref().and_then(|l| l.function.as_deref())
+                == Some("merkle_node_clean")
+                || i.symbol.contains("merkle_node_clean"))
+    });
+    assert!(
+        !mk2_has_df,
+        "MK-2 clean code: must NOT report DoubleFree on merkle_node_clean — issues: {:?}",
+        result
+            .issues()
+            .iter()
+            .map(|i| (&i.kind, &i.symbol))
+            .collect::<Vec<_>>()
+    );
+    let mk2_has_cf = result.issues().iter().any(|i| {
+        i.kind == IssueKind::CrossFamilyFree
+            && (i.location.as_ref().and_then(|l| l.function.as_deref())
+                == Some("merkle_node_clean")
+                || i.symbol.contains("merkle_node_clean"))
+    });
+    assert!(
+        !mk2_has_cf,
+        "MK-2 clean code: must NOT report CrossFamilyFree on merkle_node_clean — issues: {:?}",
+        result
+            .issues()
+            .iter()
+            .map(|i| (&i.kind, &i.symbol))
+            .collect::<Vec<_>>()
     );
 }

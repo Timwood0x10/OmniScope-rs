@@ -13,6 +13,8 @@
 ;   BUG-C7  OpenSSL partial cleanup: EVP_CIPHER_CTX_new + BIO_new, only BIO_free
 ;   NOISE-N1  realloc(NULL, size) is equivalent to malloc — properly freed
 ;   NOISE-N2  calloc + free — standard pairing
+;   NOISE-N3  Mutually-exclusive single-free: if/else branches each free(p), but only one executes
+;   BUG-C8    Same-path sequential double-free: two free(p) calls with no branch between them
 
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
@@ -152,6 +154,34 @@ define void @calloc_free_clean(i64 %n, i64 %elem) {
 entry:
   %ptr = call ptr @calloc(i64 %n, i64 %elem)
   call void @free(ptr %ptr)
+  ret void
+}
+
+; ── NOISE-N3: Mutually-exclusive single-free ────────────────────────
+; free(p) appears in both branches of an if/else, but only one
+; branch executes. This is NOT a double-free — it's a single release
+; with branching control flow. The pipeline should NOT report DoubleFree.
+define void @mutually_exclusive_free(ptr %p, i1 %cond) {
+entry:
+  br i1 %cond, label %branch_a, label %branch_b
+branch_a:
+  call void @free(ptr %p)
+  br label %merge
+branch_b:
+  call void @free(ptr %p)
+  br label %merge
+merge:
+  ret void
+}
+
+; ── BUG-C8: Same-path sequential double-free ───────────────────────
+; Two free(p) calls on the SAME path (no branching between them).
+; This IS a genuine double-free and MUST be detected.
+define void @same_path_double_free(ptr %p) {
+entry:
+  call void @free(ptr %p)
+  ; BUG: second free on same pointer, same execution path
+  call void @free(ptr %p)
   ret void
 }
 

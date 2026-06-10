@@ -208,8 +208,8 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
     ExpectedBug::simple(
         "c_ffi_traps.ll",
         "cross_family_alloc",
-        &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
-        "C FFI traps: conditional leak in cross_family_alloc (malloc, no free)",
+        &[IssueKind::CrossFamilyFree, IssueKind::ConditionalLeak],
+        "C FFI traps: cross-family free in cross_family_alloc (reconciled from ConditionalLeak)",
     ),
     ExpectedBug::simple(
         "c_ffi_traps.ll",

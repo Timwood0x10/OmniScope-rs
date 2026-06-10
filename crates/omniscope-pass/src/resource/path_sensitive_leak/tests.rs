@@ -869,3 +869,262 @@ fn test_collect_exit_states_escaped_result_is_caller() {
         "Escaped + result slot should be EscapedToCaller"
     );
 }
+
+// ── Mutually-exclusive path join tests (Plan D1) ──
+
+/// Objective: Verify that mutually exclusive single-release paths are
+/// deduplicated to a single Released state.
+///
+/// Models the pattern:
+///   if (condition) free(p); else free(p);
+/// Both branches release the same instance, but only one executes.
+/// The exit states should contain exactly one Released (not two).
+///
+/// Invariant: duplicate Released entries for the same instance → collapsed to 1.
+#[test]
+fn test_collect_exit_states_mutually_exclusive_releases_dedup() {
+    use std::collections::HashMap;
+
+    let mut pointer_states = HashMap::new();
+    // Two slots both Released for instance 1 — simulates if/else branches
+    // each calling free(p) on the same resource.
+    pointer_states.insert(
+        "caller_branch_a".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Released { instance: 1 },
+    );
+    pointer_states.insert(
+        "caller_branch_b".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Released { instance: 1 },
+    );
+
+    let alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "caller".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+
+    let srt: Option<std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>> =
+        None;
+    let summary_store = SummaryStore::new();
+    let func_termination: std::collections::HashMap<String, FunctionTermination> =
+        std::collections::HashMap::new();
+    let exit_states = collect_exit_states(
+        &pointer_states,
+        &alloc,
+        &srt,
+        &summary_store,
+        &func_termination,
+    );
+
+    // Should deduplicate to exactly 1 Released (not 2).
+    assert_eq!(
+        exit_states.len(),
+        1,
+        "mutually exclusive releases should be deduplicated to a single Released entry"
+    );
+    assert_eq!(
+        exit_states[0].resource_state,
+        ResourcePathState::Released,
+        "deduplicated entry should be Released"
+    );
+}
+
+/// Objective: Verify that releases of *different* instances are NOT deduplicated.
+///
+/// Each instance represents a distinct allocation; releasing both is legitimate
+/// (e.g., freeing two different pointers in different branches).
+///
+/// Invariant: Released entries for distinct instances → both preserved.
+#[test]
+fn test_collect_exit_states_different_instances_not_deduped() {
+    use std::collections::HashMap;
+
+    let mut pointer_states = HashMap::new();
+    // Two different instances released in different branches — not a double-free.
+    pointer_states.insert(
+        "caller_branch_a".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Released { instance: 1 },
+    );
+    pointer_states.insert(
+        "caller_branch_b".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Released { instance: 2 },
+    );
+
+    let alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "caller".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+
+    let srt: Option<std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>> =
+        None;
+    let summary_store = SummaryStore::new();
+    let func_termination: std::collections::HashMap<String, FunctionTermination> =
+        std::collections::HashMap::new();
+    let exit_states = collect_exit_states(
+        &pointer_states,
+        &alloc,
+        &srt,
+        &summary_store,
+        &func_termination,
+    );
+
+    // Both releases should be preserved — they are for different instances.
+    assert_eq!(
+        exit_states.len(),
+        2,
+        "releases of different instances should NOT be deduplicated"
+    );
+    assert!(
+        exit_states
+            .iter()
+            .all(|s| s.resource_state == ResourcePathState::Released),
+        "both entries should be Released"
+    );
+}
+
+/// Objective: Verify that non-Released states (e.g. Owned) are never affected
+/// by the mutual-exclusivity deduplication logic.
+///
+/// Invariant: Owned and other states pass through unchanged.
+#[test]
+fn test_collect_exit_states_owned_unaffected_by_dedup() {
+    use std::collections::HashMap;
+
+    let mut pointer_states = HashMap::new();
+    pointer_states.insert(
+        "caller_0".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Owned {
+            instance: 1,
+            family: FamilyId::C_HEAP,
+        },
+    );
+    // A second Owned state for a different slot — should also be preserved.
+    pointer_states.insert(
+        "caller_1".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Owned {
+            instance: 1,
+            family: FamilyId::C_HEAP,
+        },
+    );
+
+    let alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "caller".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+
+    let srt: Option<std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>> =
+        None;
+    let summary_store = SummaryStore::new();
+    let func_termination: std::collections::HashMap<String, FunctionTermination> =
+        std::collections::HashMap::new();
+    let exit_states = collect_exit_states(
+        &pointer_states,
+        &alloc,
+        &srt,
+        &summary_store,
+        &func_termination,
+    );
+
+    // Both Owned states preserved — dedup only applies to Released.
+    assert_eq!(
+        exit_states.len(),
+        2,
+        "Owned states should not be subject to mutual-exclusivity dedup"
+    );
+    assert!(
+        exit_states
+            .iter()
+            .all(|s| s.resource_state == ResourcePathState::Owned),
+        "both entries should be Owned"
+    );
+}
+
+/// Objective: Verify that a mix of Released and Owned states from mutually
+/// exclusive paths produces correct results: one Released + Owned(s).
+///
+/// Models:
+///   if (cond) { free(p); } else { /* p still owned */ }
+///
+/// Invariant: Released deduped per-instance; Owned always preserved.
+#[test]
+fn test_collect_exit_states_mixed_released_and_owned() {
+    use std::collections::HashMap;
+
+    let mut pointer_states = HashMap::new();
+    // One branch releases instance 1.
+    pointer_states.insert(
+        "caller_then".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Released { instance: 1 },
+    );
+    // Else branch keeps it owned.
+    pointer_states.insert(
+        "caller_else".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Owned {
+            instance: 1,
+            family: FamilyId::C_HEAP,
+        },
+    );
+    // Duplicate Released for same instance from another path (should dedup).
+    pointer_states.insert(
+        "caller_else_if".to_string(),
+        crate::resource::ownership_solver::PointerValueState::Released { instance: 1 },
+    );
+
+    let alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "caller".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+
+    let srt: Option<std::collections::HashMap<String, Vec<omniscope_semantics::SemanticKind>>> =
+        None;
+    let summary_store = SummaryStore::new();
+    let func_termination: std::collections::HashMap<String, FunctionTermination> =
+        std::collections::HashMap::new();
+    let exit_states = collect_exit_states(
+        &pointer_states,
+        &alloc,
+        &srt,
+        &summary_store,
+        &func_termination,
+    );
+
+    // Should have 2 entries: 1 Released (deduped) + 1 Owned.
+    assert_eq!(
+        exit_states.len(),
+        2,
+        "expected 1 Released (deduped) + 1 Owned"
+    );
+    let released_count = exit_states
+        .iter()
+        .filter(|s| s.resource_state == ResourcePathState::Released)
+        .count();
+    let owned_count = exit_states
+        .iter()
+        .filter(|s| s.resource_state == ResourcePathState::Owned)
+        .count();
+    assert_eq!(released_count, 1, "exactly 1 Released after dedup");
+    assert_eq!(owned_count, 1, "exactly 1 Owned");
+}

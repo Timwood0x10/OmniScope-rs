@@ -85,12 +85,34 @@ pub(super) fn collect_exit_states(
 ) -> Vec<PathExitState> {
     let mut exit_states = Vec::new();
 
+    // Track which resource instances have already been recorded as Released.
+    //
+    // Mutual-exclusivity deduplication: when the same instance appears as
+    // Released on multiple execution paths (e.g. if/else branches that each
+    // call free(p)), we record only one Released state because only one
+    // path can execute at runtime.  Without this, code like:
+    //
+    //   if (cond) free(p); else free(p);
+    //
+    // produces two Released entries → downstream counters may interpret
+    // that as a double-free even though the releases are mutually exclusive.
+    let mut released_instances: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
     // Look for pointer states related to this allocation's function.
     let function_prefix = format!("{}_", alloc.caller_name);
 
     for (slot, state) in pointer_states {
         if !slot.starts_with(&function_prefix) {
             continue;
+        }
+
+        // Skip duplicate Released states from mutually exclusive paths.
+        if let crate::resource::ownership_solver::PointerValueState::Released { instance } = state {
+            if !released_instances.insert(*instance) {
+                // Instance already recorded as Released on a prior path —
+                // this is a mutually-exclusive duplicate, not a real double-release.
+                continue;
+            }
         }
 
         let resource_state = match state {
