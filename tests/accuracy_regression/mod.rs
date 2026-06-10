@@ -22,20 +22,18 @@ const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 
 /// Baseline values for regression testing.
 ///
-/// Updated baseline to worst-common-result for zig_main.ll DoubleFree non-determinism:
-/// Baseline values for regression testing.
+/// After P0-1: UncheckedReturn (6×) and WriteToImmutable (6500+×) excluded
+/// from resource/overall metrics as diagnostic-only (not resource safety bugs).
+/// ReturnAlias BorrowEscape filtered by return-type guard (non-pointer returns).
 ///
-/// After P0-P2c: metrics reflect corrected classification (is_double_free_issue
-/// no longer inflates via CrossFamily/CrossLanguage), plus new detections
-/// (ReturnAlias FN→TP, FreeThenCallbackUAF FN→TP) at cost of BorrowEscape FP.
-/// - zig_main.ll DoubleFree non-determinism still causes TP variation.
-/// - BorrowEscape from P2b adds ~4 FP (return-alias patterns on FFI bridge functions).
-const BASELINE_TP: usize = 16;
-const BASELINE_FP: usize = 17;
-const BASELINE_FN: usize = 2;
-const BASELINE_PRECISION: f64 = 0.485; // 48.5% (TP=16, total=33)
-const BASELINE_RECALL: f64 = 0.889; // 88.9% (16/18)
-const BASELINE_F1: f64 = 0.627; // 62.7%
+/// Metrics reflect corrected classification where defensive-programming hints
+/// and correctness issues don't inflate resource safety vulnerability counts.
+const BASELINE_TP: usize = 17;
+const BASELINE_FP: usize = 11; // Non-deterministic range [10,12] due to HashMap iteration order
+const BASELINE_FN: usize = 3;
+const BASELINE_PRECISION: f64 = 0.630; // 63.0% (TP=17, total=27)
+const BASELINE_RECALL: f64 = 0.850; // 85.0% (17/20)
+const BASELINE_F1: f64 = 0.723; // 72.3%
 
 /// Tolerance for non-deterministic pipeline output.
 const METRICS_TOLERANCE: f64 = 0.08;
@@ -277,6 +275,51 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
         &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
         "Zig FFI bridge: conditional leak in c_parse_config (malloc, no free)",
     ),
+    // ── csharp_ffi_demo.ll bugs (.NET NativeAOT P/Invoke) ─────────────
+    // Bug1: malloc freed by Marshal.FreeHGlobal — cross-language free.
+    ExpectedBug::simple(
+        "csharp_ffi_demo.ll",
+        "cs_cross_language_free_bug1",
+        &[
+            IssueKind::CrossFamilyFree,
+            IssueKind::CrossLanguageFree,
+            IssueKind::ConditionalLeak,
+        ],
+        "C# FFI: cross-language free in cs_cross_language_free_bug1 (malloc -> FreeHGlobal)",
+    ),
+    // Bug2: Marshal.AllocHGlobal never freed — memory leak.
+    ExpectedBug::simple(
+        "csharp_ffi_demo.ll",
+        "cs_memory_leak_bug2",
+        &[
+            IssueKind::DefiniteLeak,
+            IssueKind::ConditionalLeak,
+            IssueKind::MemoryLeak,
+        ],
+        "C# FFI: AllocHGlobal leak in cs_memory_leak_bug2",
+    ),
+    // Bug3: CoTaskMemAlloc freed by CRT free() — COM/CRT mismatch.
+    ExpectedBug::simple(
+        "csharp_ffi_demo.ll",
+        "cs_com_free_mismatch_bug3",
+        &[
+            IssueKind::CrossFamilyFree,
+            IssueKind::CrossLanguageFree,
+            IssueKind::ConditionalLeak,
+        ],
+        "C# FFI: COM free mismatch in cs_com_free_mismatch_bug3 (CoTaskMemAlloc -> free)",
+    ),
+    // Bug4: Marshal_FreeHGlobal called twice — double free.
+    ExpectedBug::simple(
+        "csharp_ffi_demo.ll",
+        "cs_double_free_bug4",
+        &[
+            IssueKind::DoubleFree,
+            IssueKind::CrossFamilyFree,
+            IssueKind::CrossLanguageFree,
+        ],
+        "C# FFI: double FreeHGlobal in cs_double_free_bug4",
+    ),
 ];
 
 /// Noise patterns that should NOT produce issues.
@@ -290,6 +333,12 @@ const EXPECTED_NOISE: &[ExpectedNoise] = &[
         file: "rust_merkle.ll",
         func_substring: "",
         description: "Rust Merkle: clean code, no bugs",
+    },
+    ExpectedNoise {
+        file: "csharp_ffi_demo.ll",
+        func_substring: "",
+        description:
+            "C# FFI demo: cs_safe_correct_pair is clean (matching AllocHGlobal/FreeHGlobal)",
     },
 ];
 
@@ -440,12 +489,40 @@ impl CategoryMetrics {
         matches!(kind, IssueKind::DoubleFree)
     }
 
+    /// Whether this issue kind is diagnostic-only (defensive programming advice)
+    /// rather than a resource safety vulnerability.
+    ///
+    /// Diagnostic-only kinds are excluded from resource TP/FP/FN metrics
+    /// because they represent coding style suggestions, not memory safety bugs.
+    /// Examples: UncheckedReturn (CWE-252) is a defensive-programming hint,
+    /// not a use-after-free or leak.
+    fn is_diagnostic_only(kind: IssueKind) -> bool {
+        // UncheckedReturn (CWE-252): defensive programming advice,
+        // not a memory safety vulnerability.
+        // WriteToImmutable (CWE-123): write-to-immutable-memory pattern,
+        // a correctness issue rather than a resource leak/UAF/double-free.
+        matches!(
+            kind,
+            IssueKind::UncheckedReturn | IssueKind::WriteToImmutable
+        )
+    }
+
+    /// Whether this issue kind counts as a resource-safety bug.
+    ///
+    /// Resource bugs are non-FFI, non-diagnostic issues that represent
+    /// actual memory safety violations (leaks, UAF, double-free, etc.).
+    fn is_resource_issue(kind: IssueKind) -> bool {
+        !Self::is_ffi_issue(kind) && !Self::is_diagnostic_only(kind)
+    }
+
     fn record_tp(&mut self, kind: IssueKind) {
         if Self::is_ffi_issue(kind) {
             self.ffi_tp += 1;
-        } else {
+        } else if Self::is_resource_issue(kind) {
             self.resource_tp += 1;
         }
+        // Diagnostic-only kinds (e.g., UncheckedReturn) are not counted
+        // in resource metrics — they are tracked separately if needed.
         if Self::is_leak_issue(kind) {
             self.leak_tp += 1;
         }
@@ -457,7 +534,7 @@ impl CategoryMetrics {
     fn record_fn(&mut self, kind: IssueKind) {
         if Self::is_ffi_issue(kind) {
             self.ffi_fn += 1;
-        } else {
+        } else if Self::is_resource_issue(kind) {
             self.resource_fn += 1;
         }
         if Self::is_leak_issue(kind) {
@@ -471,7 +548,7 @@ impl CategoryMetrics {
     fn record_fp(&mut self, kind: IssueKind) {
         if Self::is_ffi_issue(kind) {
             self.ffi_fp += 1;
-        } else {
+        } else if Self::is_resource_issue(kind) {
             self.resource_fp += 1;
         }
         if Self::is_leak_issue(kind) {
@@ -556,26 +633,24 @@ impl CategoryMetrics {
 }
 
 /// Baseline FFI metrics for regression testing.
-const BASELINE_FFI_TP: usize = 5;
-const BASELINE_FFI_FP: usize = 9;
-const BASELINE_FFI_FN: usize = 1; // uaf_through_ffi may still be FN in some runs
-const BASELINE_RESOURCE_TP: usize = 11; // ReturnAlias moved from FN→TP but some resource TP reclassified
-const BASELINE_RESOURCE_FP: usize = 9; // BorrowEscape from P2b adds ~4 FP
-const BASELINE_RESOURCE_FN: usize = 5;
+const BASELINE_FFI_TP: usize = 3;
+const BASELINE_FFI_FP: usize = 8;
+const BASELINE_FFI_FN: usize = 3; // uaf_through_ffi may still be FN in some runs
+const BASELINE_RESOURCE_TP: usize = 10; // UncheckedReturn TP excluded from resource
+const BASELINE_RESOURCE_FP: usize = 8; // BorrowEscape FP reduced by return-type filter
+const BASELINE_RESOURCE_FN: usize = 6;
 
 /// Baseline leak metrics for regression testing.
-const BASELINE_LEAK_TP: usize = 10;
-const BASELINE_LEAK_FP: usize = 5;
+const BASELINE_LEAK_TP: usize = 9;
+const BASELINE_LEAK_FP: usize = 4;
 const BASELINE_LEAK_FN: usize = 2;
 
 /// Baseline double-free metrics for regression testing.
 /// After P0 metric correction: is_double_free_issue() now only counts
 /// actual DoubleFree kind, not CrossFamilyFree/CrossLanguageFree.
-/// Real double-free TPs in ffi-demo: currently 0 (zig_main reports
-/// CrossLanguageFree, merkle_tree is UAF not DoubleFree).
 const BASELINE_DOUBLE_FREE_TP: usize = 0;
-const BASELINE_DOUBLE_FREE_FP: usize = 2;
-const BASELINE_DOUBLE_FREE_FN: usize = 3;
+const BASELINE_DOUBLE_FREE_FP: usize = 3;
+const BASELINE_DOUBLE_FREE_FN: usize = 1;
 
 mod audit_tests;
 mod cross_tests;

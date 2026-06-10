@@ -1332,6 +1332,107 @@ fn test_fixture_c_merkle_tree_no_leak() {
     );
 }
 
+// ─── C# / .NET NativeAOT P/Invoke fixture tests ─────────────────────────
+
+/// Objective: Verify C# FFI demo bug detection — cross-language free.
+/// @cs_cross_language_free_bug1 allocates with malloc (C_HEAP) and frees
+/// with Marshal_FreeHGlobal (C# P/Invoke) — a classic cross-language
+/// free mismatch at the .NET NativeAOT interop boundary.
+/// Invariants: Pipeline reports CrossFamilyFree or CrossLanguageFree.
+#[test]
+fn test_fixture_csharp_ffi_demo_cross_language_free() {
+    let result = run_pipeline_on_fixture("tests/integration/csharp_ffi_demo.ll");
+    assert!(
+        result.pass_count() > 0,
+        "Pipeline must execute passes on csharp_ffi_demo.ll"
+    );
+    let has_cross = result.issues().iter().any(|i| {
+        matches!(
+            i.kind,
+            IssueKind::CrossFamilyFree | IssueKind::CrossLanguageFree
+        )
+    });
+    assert!(
+        has_cross,
+        "csharp_ffi_demo.ll @cs_cross_language_free_bug1: expected CrossFamilyFree/CrossLanguageFree, got: {:?}",
+        result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+}
+
+/// Objective: Verify C# FFI demo bug detection — memory leak.
+/// @cs_memory_leak_bug2 allocates with Marshal_AllocHGlobal and never
+/// calls Marshal_FreeHGlobal — a pure P/Invoke memory leak.
+/// Invariants: Pipeline reports ConditionalLeak or MemoryLeak or DefiniteLeak.
+#[test]
+fn test_fixture_csharp_ffi_demo_memory_leak() {
+    let result = run_pipeline_on_fixture("tests/integration/csharp_ffi_demo.ll");
+    assert!(
+        result.pass_count() > 0,
+        "Pipeline must execute passes on csharp_ffi_demo.ll"
+    );
+    let has_leak = result.issues().iter().any(|i| {
+        matches!(
+            i.kind,
+            IssueKind::ConditionalLeak | IssueKind::MemoryLeak | IssueKind::DefiniteLeak
+        )
+    });
+    assert!(
+        has_leak,
+        "csharp_ffi_demo.ll @cs_memory_leak_bug2: expected leak issue, got: {:?}",
+        result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+}
+
+/// Objective: Verify C# FFI demo bug detection — COM free mismatch.
+/// @cs_com_free_mismatch_bug3 allocates with CoTaskMemAlloc (COM) and
+/// frees with CRT free() — wrong deallocator for COM-allocated memory.
+/// Invariants: Pipeline reports CrossLanguageFree or CrossFamilyFree.
+#[test]
+fn test_fixture_csharp_ffi_demo_com_free_mismatch() {
+    let result = run_pipeline_on_fixture("tests/integration/csharp_ffi_demo.ll");
+    assert!(
+        result.pass_count() > 0,
+        "Pipeline must execute passes on csharp_ffi_demo.ll"
+    );
+    let has_cross = result.issues().iter().any(|i| {
+        matches!(
+            i.kind,
+            IssueKind::CrossLanguageFree | IssueKind::CrossFamilyFree
+        )
+    });
+    assert!(
+        has_cross,
+        "csharp_ffi_demo.ll @cs_com_free_mismatch_bug3: expected cross-family/free issue, got: {:?}",
+        result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+}
+
+/// Objective: Verify C# FFI demo bug detection — double free.
+/// @cs_double_free_bug4 calls Marshal_FreeHGlobal twice on the same
+/// pointer allocated by Marshal_AllocHGlobal — classic double-free.
+/// Invariants: Pipeline reports DoubleFree or CrossFamilyFree (the
+/// classifier may categorize same-family double-free as cross-family
+/// when the allocation family is non-standard like CSHARP).
+#[test]
+fn test_fixture_csharp_ffi_demo_double_free() {
+    let result = run_pipeline_on_fixture("tests/integration/csharp_ffi_demo.ll");
+    assert!(
+        result.pass_count() > 0,
+        "Pipeline must execute passes on csharp_ffi_demo.ll"
+    );
+    let has_double = result.issues().iter().any(|i| {
+        matches!(
+            i.kind,
+            IssueKind::DoubleFree | IssueKind::CrossFamilyFree | IssueKind::CrossLanguageFree
+        )
+    });
+    assert!(
+        has_double,
+        "csharp_ffi_demo.ll @cs_double_free_bug4: expected DoubleFree/CrossFamilyFree, got: {:?}",
+        result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // ENHANCED TEST MATRIX: PLATFORM-SPECIFIC FFI BOUNDARY CONDITIONS
 // ═══════════════════════════════════════════════════════════════════════

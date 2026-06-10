@@ -692,5 +692,7 @@ fn verify_candidate_inner(
                 verify_cross_family_free(candidate, registry, config, boundary_ctx)
             }
         }
+        IssueCandidateKind::AbiLayoutMismatch => VerifierVerdict::Diagnostic,
+        IssueCandidateKind::BoundaryMisuse => VerifierVerdict::ProbableIssue,
     }
 }

@@ -240,6 +240,46 @@ pub enum BehaviorPattern {
         /// Name of the call instruction that uses the freed register (if direct call).
         use_callee: Option<String>,
     },
+
+    // ── Heap-to-global escape pattern (P1-6) ──
+    /// Heap/parameter pointer escapes to global/static storage.
+    /// Pattern: `store ptr %param, ptr @global_name` where `%param` is a
+    /// function argument (not derived from alloca). Unlike StackToGlobalEscape,
+    /// the source is a parameter/heap pointer, not a stack allocation.
+    ///
+    /// This is a potential UAF bug: if the original allocation is later freed
+    /// while the global still holds it, any access through the global is UAF.
+    /// Evidence: FN-14 in zig_ffi_bridge.c (c_register_and_store).
+    HeapToGlobalEscape {
+        /// The global variable that receives the heap/parameter pointer.
+        global_target: String,
+        /// The parameter register that originates the escaped pointer.
+        param_reg: String,
+    },
+
+    // ── Lightweight bounds check pattern (P1-5) ──
+    /// Constant buffer overflow detected in memset/memcpy/memmove calls.
+    ///
+    /// Pattern: when a memory operation's size argument is `add/mul/shl` of a
+    /// function parameter with a **positive constant**, AND that parameter
+    /// represents the buffer size. Specifically:
+    ///
+    /// ```llvm
+    /// %add = add i64 %len, i64 16          ; overflow by 16 bytes
+    /// call void @memset(ptr %buf, i8 170, i64 %add)
+    /// ```
+    ///
+    /// This catches FN-11 (`c_process_buffer` with `memset(buf, len+16)`
+    /// overflowing by 16 bytes) — a trivially detectable constant overflow
+    /// that needs NO complex interval arithmetic.
+    BufferOverflow {
+        /// The memory operation function called (memset, memcpy, memmove).
+        callee: String,
+        /// The constant overflow amount (e.g., 16 for `len + 16`).
+        overflow_amount: u64,
+        /// The binary operation that produced the overflowing size (add, mul, shl).
+        opcode: String,
+    },
 }
 
 /// Category for POSIX non-memory operations (R-4).
@@ -421,6 +461,17 @@ pub fn extract_behavior(body: &FunctionBody) -> FunctionBehavior {
     // 14. Detect FreeThenCallbackUse: freed pointer used as call argument (UAF)
     if let Some(ftcu) = detect_free_then_callback_use(body) {
         patterns.push(ftcu);
+    }
+
+    // 15. Detect HeapToGlobalEscape: parameter/heap pointer stored to global
+    if let Some(hge) = detect_heap_to_global_escape(body) {
+        patterns.push(hge);
+    }
+
+    // 16. Detect constant buffer overflow (P1-5): memset/memcpy/memmove with
+    //     size = param + N (positive constant overflow)
+    if let Some(bo) = super::bounds_check_pattern::detect_constant_overflow(body) {
+        patterns.push(bo);
     }
 
     let return_source = extract_return_source(body);
@@ -1376,6 +1427,90 @@ fn detect_stack_to_global_escape(body: &FunctionBody) -> Option<BehaviorPattern>
     None
 }
 
+/// Detect HeapToGlobalEscape: function parameter (non-alloca) pointer stored to
+/// a global variable.
+///
+/// Pattern:
+/// ```llvm
+/// define void @c_register_and_store(ptr %ptr) {
+/// entry:
+///     store ptr %ptr, ptr @g_stored_ptr   ; heap/param ptr → global!
+///     ret void
+/// }
+/// ```
+///
+/// Unlike StackToGlobalEscape, the source is a function parameter (heap pointer
+/// passed from caller), not an alloca-derived stack pointer. The risk is that
+/// the caller may free the original allocation while `@g_stored_ptr` still
+/// holds it — any subsequent access through the global is UAF.
+fn detect_heap_to_global_escape(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Need at least one store instruction
+    if body.count_kind(IRInstructionKind::Store) == 0 {
+        return None;
+    }
+
+    // Collect all alloca destination registers (to EXCLUDE them)
+    let alloca_regs: HashSet<String> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Alloca)
+        .filter_map(|i| i.dest.clone())
+        .collect();
+
+    // Build the set of alloca-derived registers (same as StackToGlobalEscape)
+    let mut alloca_derived = alloca_regs.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for inst in &body.instructions {
+            if let Some(ref dest) = inst.dest {
+                if !alloca_derived.contains(dest)
+                    && inst.operands.iter().any(|op| alloca_derived.contains(op))
+                {
+                    alloca_derived.insert(dest.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Collect parameter registers (registers that appear as operands but are
+    // never defined by any instruction in this function body)
+    let param_regs: HashSet<&str> = collect_parameter_registers(body);
+
+    if param_regs.is_empty() {
+        return None;
+    }
+
+    // Check each store instruction for global target + non-alloca source
+    for store in body.instructions_of_kind(IRInstructionKind::Store) {
+        if store.operands.len() >= 2 {
+            let stored_value = &store.operands[0];
+            let store_target = &store.operands[1];
+
+            // Target must be a global variable (@ prefix)
+            if !store_target.starts_with('@') {
+                continue;
+            }
+
+            // Stored value must NOT be derived from an alloca (that's StackToGlobalEscape's job)
+            if alloca_derived.contains(stored_value) {
+                continue;
+            }
+
+            // Stored value must be a parameter register (or derived from one)
+            if param_regs.contains(stored_value.as_str()) {
+                return Some(BehaviorPattern::HeapToGlobalEscape {
+                    global_target: store_target.clone(),
+                    param_reg: stored_value.clone(),
+                });
+            }
+        }
+    }
+
+    None
+}
+
 /// Check whether `reg` is transitively derived from `root` through instruction chains.
 fn is_derived_from(body: &FunctionBody, reg: &str, root: &str) -> bool {
     if reg == root {
@@ -1410,6 +1545,15 @@ fn is_derived_from(body: &FunctionBody, reg: &str, root: &str) -> bool {
 ///
 /// This is NOT a bug per se — many legitimate APIs do this. But without
 /// ownership annotation, FFI bindings may incorrectly free the result.
+///
+/// # Return-type filtering
+///
+/// This detector identifies the *IR-level pattern* of return-value aliasing
+/// regardless of the function's return type. The semantic question of whether
+/// the return type is actually a pointer (and thus whether this pattern
+/// represents a borrow-escape risk) is enforced at the candidate-builder
+/// level in `issue_candidate_builder`, which has access to the IR module's
+/// function declaration metadata including `return_type`.
 fn detect_return_alias(body: &FunctionBody) -> Option<BehaviorPattern> {
     let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
     let first_ret = ret_insts.first()?;

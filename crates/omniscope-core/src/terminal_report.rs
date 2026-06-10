@@ -186,6 +186,8 @@ impl TerminalReporter {
             IssueCandidateKind::CrossLanguageFree => {
                 self.format_cross_family(candidate, verdict, &badge)
             }
+            IssueCandidateKind::AbiLayoutMismatch => self.format_unverified(candidate),
+            IssueCandidateKind::BoundaryMisuse => self.format_unverified(candidate),
         }
     }
 

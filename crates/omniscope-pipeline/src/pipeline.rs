@@ -6,11 +6,11 @@ use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_pass::{
-    BorrowEscapePass, CallGraphPass, ContractGraphBuilderPass, DangerSurfacePass, FFIBoundaryPass,
-    FfiReturnCheckPass, HeapProvenancePass, IRBehaviorSummaryPass, InteriorMutabilityPass,
-    IssueCandidateBuilderPass, IssueVerifierPass, LanguageAdapterFactPass, LeakDetectionPass,
-    OwnershipSolverPass, PassManager, RaiiDropPass, RawFactCollectorPass, StructuralInferencePass,
-    SummaryBuilderPass, SurfaceClassifierPass, WriteToImmutablePass,
+    AbiLayoutPass, BorrowEscapePass, CallGraphPass, ContractGraphBuilderPass, DangerSurfacePass,
+    FFIBoundaryPass, FfiReturnCheckPass, HeapProvenancePass, IRBehaviorSummaryPass,
+    InteriorMutabilityPass, IssueCandidateBuilderPass, IssueVerifierPass, LanguageAdapterFactPass,
+    LeakDetectionPass, OwnershipSolverPass, PassManager, RaiiDropPass, RawFactCollectorPass,
+    StructuralInferencePass, SummaryBuilderPass, SurfaceClassifierPass, WriteToImmutablePass,
 };
 use omniscope_types::{AnalysisConfig, OmniScopeConfig};
 use std::time::Instant;
@@ -95,6 +95,7 @@ impl Pipeline {
         self.pass_manager.register(RawFactCollectorPass::new());
         self.pass_manager.register(IRBehaviorSummaryPass::new());
         self.pass_manager.register(LanguageAdapterFactPass::new());
+        self.pass_manager.register(AbiLayoutPass::new());
         self.pass_manager.register(SummaryBuilderPass::new());
         self.pass_manager.register(StructuralInferencePass::new());
         // Use configuration-aware pass if available

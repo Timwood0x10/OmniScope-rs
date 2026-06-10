@@ -548,6 +548,21 @@ pub fn behavior_to_summary(
                 summary.confidence = summary.confidence.max(0.90);
             }
 
+            BehaviorPattern::HeapToGlobalEscape {
+                global_target,
+                param_reg,
+            } => {
+                summary.add_effect(Effect::StoresArgToGlobal { arg: 0 });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: parameter '{}' stored to global '{}' → heap-to-global escape (potential UAF)",
+                        param_reg, global_target
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.90);
+            }
+
             BehaviorPattern::ReturnAlias { aliased_param } => {
                 summary.add_effect(Effect::ReturnsBorrowed);
                 summary.add_evidence(Evidence::new(
@@ -578,6 +593,21 @@ pub fn behavior_to_summary(
                     ),
                 ));
                 summary.confidence = summary.confidence.max(0.90);
+            }
+
+            BehaviorPattern::BufferOverflow {
+                callee,
+                overflow_amount,
+                opcode,
+            } => {
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: {} size = param {} {} — constant buffer overflow by {} bytes (CWE-120)",
+                        callee, opcode, overflow_amount, overflow_amount
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.92);
             }
         }
     }
@@ -800,6 +830,41 @@ mod tests {
         assert!(
             summary.confidence < 0.2,
             "No patterns should result in low confidence, got {}",
+            summary.confidence
+        );
+    }
+
+    #[test]
+    fn test_behavior_to_summary_heap_to_global_escape() {
+        let behavior = super::super::ir_pattern::FunctionBehavior {
+            name: "c_register_and_store".to_string(),
+            alloca_count: 0,
+            call_count: 0,
+            atomic_rmw_count: 0,
+            load_count: 0,
+            store_count: 1,
+            gep_count: 0,
+            icmp_count: 0,
+            branch_count: 0,
+            patterns: vec![BehaviorPattern::HeapToGlobalEscape {
+                global_target: "@g_stored_ptr".to_string(),
+                param_reg: "%ptr".to_string(),
+            }],
+            return_source: super::super::ir_pattern::ReturnSource::Void,
+        };
+
+        let summary = behavior_to_summary(&behavior, 10, 10);
+        assert!(
+            summary
+                .evidence
+                .iter()
+                .any(|e| e.description.contains("heap-to-global")),
+            "HeapToGlobalEscape should produce evidence with 'heap-to-global', got: {:?}",
+            summary.evidence
+        );
+        assert!(
+            summary.confidence >= 0.90,
+            "HeapToGlobalEscape should have high confidence, got {}",
             summary.confidence
         );
     }

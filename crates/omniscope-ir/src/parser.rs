@@ -140,6 +140,8 @@ pub struct IRModule {
     pub debug_metadata: HashMap<String, SourceLocation>,
     /// Debug file metadata: maps metadata ID to file path (from !DIFile entries).
     debug_files: HashMap<String, PathBuf>,
+    /// Raw LLVM IR source text (available when loaded from file).
+    pub source_text: Option<String>,
 }
 
 impl IRModule {
@@ -160,12 +162,14 @@ impl IRModule {
             calling_conventions: Vec::new(),
             debug_metadata: HashMap::new(),
             debug_files: HashMap::new(),
+            source_text: None,
         }
     }
 
     /// Parse LLVM IR from text
     pub fn parse_from_text(content: &str) -> Self {
         let mut module = Self::new();
+        module.source_text = Some(content.to_string());
         let mut current_function = String::new();
         let mut current_instructions: Vec<IRInstruction> = Vec::new();
 
@@ -443,6 +447,11 @@ impl IRModule {
     /// Returns FFI boundaries (calls to external functions)
     pub fn ffi_boundaries(&self) -> Vec<&CallInstruction> {
         self.calls.iter().filter(|call| call.is_external).collect()
+    }
+
+    /// Returns the raw IR source text, or empty string if not available.
+    pub fn to_text(&self) -> &str {
+        self.source_text.as_deref().unwrap_or("")
     }
 }
 

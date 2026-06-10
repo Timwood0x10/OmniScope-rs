@@ -376,6 +376,8 @@ pub(crate) fn build_verdict_description(
         IssueCandidateKind::InvalidBorrowedFree => "invalid borrowed free",
         IssueCandidateKind::UncheckedFfiReturn => "unchecked FFI return",
         IssueCandidateKind::NullDereference => "null dereference",
+        IssueCandidateKind::AbiLayoutMismatch => "ABI layout mismatch",
+        IssueCandidateKind::BoundaryMisuse => "boundary type confusion",
     };
 
     let verdict_label = match verdict {

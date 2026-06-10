@@ -19,6 +19,7 @@
 
 pub mod abi_layout_detector;
 pub mod allocator_shim;
+pub mod bounds_check_pattern;
 pub mod buffer_overflow_detector;
 pub mod confidence_scorer;
 pub mod container_type;
@@ -43,9 +44,13 @@ pub mod structural_inference;
 pub mod summary;
 pub mod summary_inference;
 pub mod type_confusion_detector;
+pub(crate) mod type_confusion_detector_helpers;
 
 #[cfg(test)]
 mod length_truncation_detector_tests;
+
+#[cfg(test)]
+mod type_confusion_detector_tests;
 
 #[cfg(test)]
 mod test_matrix;

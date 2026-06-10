@@ -178,6 +178,8 @@ pub struct PassContext {
     pool: MemoryPool,
     /// Optional configuration for FFI boundaries and resource families.
     config: Option<OmniScopeConfig>,
+    /// Raw IR source text (for passes that need raw text parsing).
+    source_text: Option<String>,
 }
 
 impl Clone for PassContext {
@@ -199,6 +201,7 @@ impl Clone for PassContext {
             next_issue_id: self.next_issue_id,
             pool: MemoryPool::new(),
             config: self.config.clone(),
+            source_text: self.source_text.clone(),
         }
     }
 }
@@ -216,6 +219,7 @@ impl PassContext {
             next_issue_id: 1,
             pool: MemoryPool::new(),
             config: None,
+            source_text: None,
         }
     }
 
@@ -231,6 +235,7 @@ impl PassContext {
             next_issue_id: 1,
             pool: MemoryPool::new(),
             config: Some(config),
+            source_text: None,
         }
     }
 
@@ -297,6 +302,16 @@ impl PassContext {
     /// Returns `true` if an IR module has been set in this context.
     pub fn has_ir_module(&self) -> bool {
         self.ir_module.is_some()
+    }
+
+    /// Stores the raw IR source text for passes that need raw text parsing.
+    pub fn set_source_text(&mut self, text: String) {
+        self.source_text = Some(text);
+    }
+
+    /// Returns a reference to the raw IR source text, if available.
+    pub fn get_source_text(&self) -> Option<&str> {
+        self.source_text.as_deref()
     }
 
     /// Stores shared data
@@ -687,15 +702,16 @@ impl PassContext {
     /// needs its own arena.
     pub fn clone_for_parallel(&self) -> Self {
         Self {
-            ir_module: self.ir_module.clone(), // Arc clone (cheap)
-            shared: self.shared.clone(),       // HashMap clone, but values are Arc (cheap)
-            diagnostics: Vec::new(),           // Empty - pass will produce its own
-            facts: Vec::new(),                 // Empty - pass will produce its own
-            issues: Vec::new(),                // Empty - pass will produce its own
-            suppressed_issues: Vec::new(),     // Empty - pass will produce its own
-            next_issue_id: self.next_issue_id, // Copy starting ID
-            pool: MemoryPool::new(),           // Fresh pool for this thread
-            config: self.config.clone(),       // Share configuration
+            ir_module: self.ir_module.clone(),     // Arc clone (cheap)
+            shared: self.shared.clone(),           // HashMap clone, but values are Arc (cheap)
+            diagnostics: Vec::new(),               // Empty - pass will produce its own
+            facts: Vec::new(),                     // Empty - pass will produce its own
+            issues: Vec::new(),                    // Empty - pass will produce its own
+            suppressed_issues: Vec::new(),         // Empty - pass will produce its own
+            next_issue_id: self.next_issue_id,     // Copy starting ID
+            pool: MemoryPool::new(),               // Fresh pool for this thread
+            config: self.config.clone(),           // Share configuration
+            source_text: self.source_text.clone(), // Share source text
         }
     }
 

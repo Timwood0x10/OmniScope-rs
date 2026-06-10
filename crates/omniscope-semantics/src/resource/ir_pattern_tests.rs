@@ -921,3 +921,154 @@ entry:
         behavior.patterns
     );
 }
+
+// ── HeapToGlobalEscape detection tests ──
+
+/// Objective: Verify that HeapToGlobalEscape fires when a function parameter
+///            (non-alloca pointer) is stored to a global variable.
+/// Invariants:
+/// - `store ptr %param, ptr @global` must produce HeapToGlobalEscape pattern
+/// - The pattern must capture the global target and parameter register
+#[test]
+fn test_heap_to_global_escape_detection() {
+    // Mirrors FN-14 from zig_ffi_bridge.c: c_register_and_store
+    let ir = r#"
+        define void @c_register_and_store(ptr %ptr) {
+entry:
+            store ptr %ptr, ptr @g_stored_ptr, align 8
+            ret void
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let hge = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::HeapToGlobalEscape { .. }));
+    assert!(
+        hge.is_some(),
+        "Should detect HeapToGlobalEscape for param→global store, got: {:?}",
+        behavior.patterns
+    );
+
+    if let Some(BehaviorPattern::HeapToGlobalEscape {
+        global_target,
+        param_reg,
+    }) = hge
+    {
+        assert!(
+            global_target.contains("g_stored_ptr"),
+            "Global target should be g_stored_ptr, got: {global_target}"
+        );
+        assert_eq!(
+            param_reg, "%ptr",
+            "Param register should be %%ptr, got: {param_reg}"
+        );
+    }
+}
+
+/// Objective: Verify that HeapToGlobalEscape does NOT fire when an alloca-derived
+///            pointer is stored to a global — that should be StackToGlobalEscape instead.
+/// Invariants:
+/// - alloca + store to @global produces StackToGlobalEscape, NOT HeapToGlobalEscape
+#[test]
+fn test_heap_to_global_escape_no_false_positive_on_alloca() {
+    let ir = r#"
+        define void @alloca_to_global() {
+entry:
+            %buf = alloca [40 x i8], align 1
+            store ptr %buf, ptr @g_last_message, align 8
+            ret void
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let has_hge = behavior
+        .patterns
+        .iter()
+        .any(|p| matches!(p, BehaviorPattern::HeapToGlobalEscape { .. }));
+    assert!(
+        !has_hge,
+        "HeapToGlobalEscape should NOT fire for alloca→global (that's StackToGlobalEscape), got: {:?}",
+        behavior.patterns
+    );
+
+    // Should have StackToGlobalEscape instead
+    let has_sge = behavior
+        .patterns
+        .iter()
+        .any(|p| matches!(p, BehaviorPattern::StackToGlobalEscape { .. }));
+    assert!(
+        has_sge,
+        "alloca→global should produce StackToGlobalEscape, got: {:?}",
+        behavior.patterns
+    );
+}
+
+/// Objective: Verify that normal local stores are NOT flagged as HeapToGlobalEscape.
+/// Invariants:
+/// - `store ptr %param, ptr %local_alloca` should NOT produce HeapToGlobalEscape
+#[test]
+fn test_heap_to_global_escape_no_false_positive_local_store() {
+    let ir = r#"
+        define void @local_store_only(ptr %ptr) {
+entry:
+            %slot = alloca ptr, align 8
+            store ptr %ptr, ptr %slot, align 8
+            ret void
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let has_hge = behavior
+        .patterns
+        .iter()
+        .any(|p| matches!(p, BehaviorPattern::HeapToGlobalEscape { .. }));
+    assert!(
+        !has_hge,
+        "HeapToGlobalEscape should NOT fire for local (non-global) store, got: {:?}",
+        behavior.patterns
+    );
+}
+
+/// Objective: Verify that a function with both alloca→global AND param→global
+///            stores detects BOTH patterns simultaneously.
+/// Invariants:
+/// - Both StackToGlobalEscape and HeapToGlobalEscape are present
+#[test]
+fn test_heap_and_stack_to_global_escape_coexist() {
+    let ir = r#"
+        define void @mixed_escapes(ptr %heap_ptr) {
+entry:
+            %local = alloca [16 x i8], align 1
+            store ptr %local, ptr @g_stack_escape, align 8
+            store ptr %heap_ptr, ptr @g_heap_escape, align 8
+            ret void
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let sge = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::StackToGlobalEscape { .. }));
+    assert!(
+        sge.is_some(),
+        "Should detect StackToGlobalEscape for alloca→global, got: {:?}",
+        behavior.patterns
+    );
+
+    let hge = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::HeapToGlobalEscape { .. }));
+    assert!(
+        hge.is_some(),
+        "Should detect HeapToGlobalEscape for param→global, got: {:?}",
+        behavior.patterns
+    );
+}

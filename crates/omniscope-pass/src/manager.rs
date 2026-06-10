@@ -174,12 +174,13 @@ impl PassManager {
         };
         if let Some(module) = ir_module {
             // Build the shared instruction metadata cache before running passes.
-            // This performs a single traversal of module.calls, functions, and
-            // declarations, caching language detection, registry lookups, and
-            // classification results for all downstream passes.
             let index = crate::module_index::ModuleIndex::build(&module);
             ctx.store("module_index", index);
-            ctx.store("ir_module", module);
+            ctx.store("ir_module", module.clone());
+            ctx.set_ir_module(module.clone());
+            if let Some(text) = &module.source_text {
+                ctx.set_source_text(text.clone());
+            }
         }
         let (results, timings) = self.run_with_context(&mut ctx)?;
         let issues = ctx.issues().to_vec();

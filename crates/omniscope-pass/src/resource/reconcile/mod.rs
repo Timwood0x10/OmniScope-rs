@@ -117,6 +117,9 @@ impl FaultClass {
             | IssueCandidateKind::BorrowEscape => FaultClass::BoundaryMisuse,
             // Unmodeled
             IssueCandidateKind::NeedsModel => FaultClass::Unmodeled,
+            // ABI mismatch — informational diagnostic
+            IssueCandidateKind::AbiLayoutMismatch => FaultClass::BoundaryMisuse,
+            IssueCandidateKind::BoundaryMisuse => FaultClass::BoundaryMisuse,
         }
     }
 }

@@ -203,6 +203,12 @@ pub enum SemanticKind {
     /// Destructor/RAII release pattern (e.g., C++ ~ClassName(), Rust Drop).
     /// The release is compiler-inserted cleanup, not a user bug.
     DestructorRelease,
+
+    // ── Phase 6: ABI layout detection ──
+    /// Struct has padding between fields that causes incorrect offsets
+    /// when accessed across FFI boundaries (e.g., C struct {u32, u8, ptr}
+    /// has 3 bytes padding that packed-layout callers miss).
+    AbiLayoutPadding,
 }
 
 /// Semantic key for querying the semantic tree.
@@ -735,6 +741,8 @@ impl SemanticKind {
 
             // ── Default ──
             SemanticKind::Unknown => 0.5,
+            // ── Phase 6: ABI layout detection ──
+            SemanticKind::AbiLayoutPadding => 0.2, // High risk: real FFI bug pattern
         }
     }
 

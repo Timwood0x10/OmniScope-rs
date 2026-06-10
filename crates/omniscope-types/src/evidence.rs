@@ -107,6 +107,9 @@ pub enum EvidenceKind {
     /// enabling downstream verifiers to weight or suppress issues based
     /// on semantic understanding rather than just structural patterns.
     SemanticFactEvidence,
+    /// ABI layout mismatch: struct has padding/alignment that causes
+    /// incorrect field offsets at FFI boundaries.
+    AbiLayoutMismatch,
     /// Unknown or insufficient evidence.
     Insufficient,
 }
@@ -329,6 +332,16 @@ pub enum IssueCandidateKind {
     /// This is the FFI boundary variant of cross-family free.
     /// Example: Rust Box allocated, C free() called.
     CrossLanguageFree,
+    /// ABI layout mismatch: struct has padding/alignment issues that
+    /// cause incorrect field offsets when accessed across FFI boundaries.
+    /// Example: {u32, u8, size_t} has 3 bytes of padding that a packed
+    /// layout caller (Zig/Go) does not account for.
+    AbiLayoutMismatch,
+    /// Boundary misuse: data is passed across an FFI boundary with
+    /// incompatible types, causing silent truncation or corruption.
+    /// Example: Zig passes {u64,u64} (16B) via void*, C reads as
+    /// {u32,u32} (8B) — high 32 bits silently truncated (FN-8).
+    BoundaryMisuse,
 }
 
 /// Evidence that a resource crosses a declared FFI boundary.
@@ -416,6 +429,8 @@ mod tests {
             IssueCandidateKind::UncheckedFfiReturn,
             IssueCandidateKind::NullDereference,
             IssueCandidateKind::CrossLanguageFree,
+            IssueCandidateKind::AbiLayoutMismatch,
+            IssueCandidateKind::BoundaryMisuse,
         ];
         // Verify no duplicates (each variant appears exactly once)
         let unique_count = {

@@ -238,6 +238,8 @@ impl IssueCandidate {
             IssueCandidateKind::UncheckedFfiReturn => IssueKind::UncheckedReturn,
             IssueCandidateKind::NullDereference => IssueKind::NullDereference,
             IssueCandidateKind::CrossLanguageFree => IssueKind::CrossLanguageFree,
+            IssueCandidateKind::AbiLayoutMismatch => IssueKind::FfiTypeMismatch,
+            IssueCandidateKind::BoundaryMisuse => IssueKind::BorrowEscape,
         }
     }
 

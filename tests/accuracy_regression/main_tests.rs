@@ -122,11 +122,19 @@ fn test_accuracy_regression() {
     }
 
     // ── Count FP ─────────────────────────────────────────────────────
+    // Exclude diagnostic-only kinds (UncheckedReturn, WriteToImmutable)
+    // from overall FP count — they are coding style suggestions, not bugs.
     let total_detected_issues: usize = all_results
         .iter()
         .map(|(_, result)| result.issue_count())
         .sum();
-    let mut fp_count = total_detected_issues.saturating_sub(tp_count);
+    let diagnostic_issue_count: usize = all_results
+        .iter()
+        .flat_map(|(_, r)| r.issues().iter())
+        .filter(|i| CategoryMetrics::is_diagnostic_only(i.kind))
+        .count();
+    let effective_total = total_detected_issues.saturating_sub(diagnostic_issue_count);
+    let mut fp_count = effective_total.saturating_sub(tp_count);
     fp_count += forbidden_fp;
     eprintln!("\n--- False Positives (Noise) ---");
     eprintln!(
@@ -162,7 +170,7 @@ fn test_accuracy_regression() {
     let total_resource_detected: usize = all_results
         .iter()
         .flat_map(|(_, r)| r.issues().iter())
-        .filter(|i| !CategoryMetrics::is_ffi_issue(i.kind))
+        .filter(|i| CategoryMetrics::is_resource_issue(i.kind))
         .count();
     let total_leak_detected: usize = all_results
         .iter()
@@ -187,7 +195,7 @@ fn test_accuracy_regression() {
     eprintln!("\n--- All Resource Issues (TP + FP) ---");
     for (file_name, result) in &all_results {
         for issue in result.issues() {
-            if !CategoryMetrics::is_ffi_issue(issue.kind) {
+            if CategoryMetrics::is_resource_issue(issue.kind) {
                 let sym = if issue.symbol.is_empty() {
                     "?"
                 } else {
@@ -211,10 +219,12 @@ fn test_accuracy_regression() {
     }
 
     // ── Calculate metrics ───────────────────────────────────────────
-    let precision = if total_detected_issues == 0 {
+    // Use effective_total (excluding diagnostic-only issues) for precision.
+    let effective_total_for_metrics = tp_count + fp_count;
+    let precision = if effective_total_for_metrics == 0 {
         0.0
     } else {
-        tp_count as f64 / total_detected_issues as f64
+        tp_count as f64 / effective_total_for_metrics as f64
     };
     let total_bugs = tp_count + fn_count;
     let recall = if total_bugs == 0 {

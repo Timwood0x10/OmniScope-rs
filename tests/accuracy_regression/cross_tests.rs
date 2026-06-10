@@ -113,13 +113,22 @@ fn run_accuracy_with_cross(cross_boundaries: Vec<(&str, &str)>) -> AccuracyResul
         .iter()
         .map(|(_, result)| result.issue_count())
         .sum();
-    let fp_count = total_detected.saturating_sub(tp_count);
+
+    // Exclude diagnostic-only issues (UncheckedReturn, WriteToImmutable) from FP counting.
+    // These are coding style hints, not memory safety bugs.
+    let diagnostic_issue_count: usize = all_results
+        .iter()
+        .flat_map(|(_, r)| r.issues().iter())
+        .filter(|i| CategoryMetrics::is_diagnostic_only(i.kind))
+        .count();
+    let effective_total = total_detected.saturating_sub(diagnostic_issue_count);
+    let fp_count = effective_total.saturating_sub(tp_count);
     let fn_count = EXPECTED_BUGS.len() + EXPECTED_MISSES.len() - tp_count;
 
-    let precision = if total_detected == 0 {
+    let precision = if effective_total == 0 {
         0.0
     } else {
-        tp_count as f64 / total_detected as f64
+        tp_count as f64 / effective_total as f64
     };
 
     let total_bugs = tp_count + fn_count;

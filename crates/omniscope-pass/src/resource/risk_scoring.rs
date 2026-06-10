@@ -96,6 +96,9 @@ fn base_severity(kind: IssueCandidateKind) -> f32 {
         IssueCandidateKind::NullDereference => 0.95,
         // High severity: cross-language free is almost always a real issue
         IssueCandidateKind::CrossLanguageFree => 0.9,
+        // Low severity: ABI layout mismatch is informational
+        IssueCandidateKind::AbiLayoutMismatch => 0.3,
+        IssueCandidateKind::BoundaryMisuse => 0.8,
     }
 }
 

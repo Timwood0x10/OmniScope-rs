@@ -292,7 +292,7 @@ impl AbiLayoutDetector {
 
         let mut current_offset = 0;
         for field in fields {
-            if !packed {
+            if !packed && field.alignment > 0 {
                 // Add padding for alignment
                 let padding =
                     (field.alignment - (current_offset % field.alignment)) % field.alignment;
@@ -302,7 +302,7 @@ impl AbiLayoutDetector {
         }
 
         // Add final padding to align struct size
-        if !packed {
+        if !packed && alignment > 0 {
             let final_padding = (alignment - (current_offset % alignment)) % alignment;
             current_offset += final_padding;
         }
