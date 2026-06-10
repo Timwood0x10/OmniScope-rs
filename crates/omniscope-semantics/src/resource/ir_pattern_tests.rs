@@ -1072,3 +1072,44 @@ entry:
         behavior.patterns
     );
 }
+
+/// Diagnostic: load the REAL c_ffi_traps.ll file and check if patterns are detected.
+/// This test is IGNORED by default — run with `cargo test -- --ignored` to execute.
+#[test]
+#[ignore]
+fn diag_real_file_detection() {
+    use std::path::PathBuf;
+    let path = PathBuf::from("/Users/scc/code/ffi-demo/output/c_ffi_traps.ll");
+    assert!(path.exists(), "c_ffi_traps.ll not found at {:?}", path);
+    let module = IRModule::load_from_file(&path).expect("failed to load");
+
+    eprintln!(
+        "=== Functions in module ({}) ===",
+        module.function_bodies.len()
+    );
+    for name in module.function_bodies.keys() {
+        eprintln!("  - {name}");
+    }
+
+    for (name, body) in &module.function_bodies {
+        if name.contains("ffi_register_callback") || name.contains("ffi_alias_input") {
+            eprintln!("\n=== {} ===", name);
+            eprintln!("  Instructions ({})", body.instructions.len());
+            for (i, inst) in body.instructions.iter().enumerate() {
+                eprintln!(
+                    "    [{}] kind={:?} dest={:?} ops={:?}",
+                    i, inst.kind, inst.dest, inst.operands
+                );
+            }
+
+            let behavior = extract_behavior(body);
+            eprintln!("\n  Patterns detected ({}):", behavior.patterns.len());
+            for p in &behavior.patterns {
+                eprintln!("    - {:?}", p);
+            }
+            if behavior.patterns.is_empty() {
+                eprintln!("    (NONE!)");
+            }
+        }
+    }
+}

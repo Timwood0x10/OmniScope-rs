@@ -484,11 +484,20 @@ fn parse_declaration(line: &str) -> Option<Function> {
         let rest = &line[start + 1..];
         if let Some(end) = rest.find('(') {
             let name = rest.get(..end).unwrap_or("").to_string();
+            // Extract return type: text between "declare" and "@" (e.g.,
+            // "declare ptr @foo" → return_type = "ptr")
+            let declare_prefix = line.get(..start).unwrap_or("");
+            let return_type = declare_prefix
+                .strip_prefix("declare")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
             return Some(Function {
                 name,
                 is_declaration: true,
                 params: Vec::new(),
-                return_type: "unknown".to_string(),
+                return_type,
             });
         }
     }
@@ -508,11 +517,20 @@ fn parse_definition(line: &str) -> Option<Function> {
         let rest = &line[start + 1..];
         if let Some(end) = rest.find('(') {
             let name = rest.get(..end).unwrap_or("").to_string();
+            // Extract return type: text between "define" and "@" (e.g.,
+            // "define ptr @foo" → return_type = "ptr")
+            let define_prefix = line.get(..start).unwrap_or("");
+            let return_type = define_prefix
+                .strip_prefix("define")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
             return Some(Function {
                 name,
                 is_declaration: false,
                 params: Vec::new(),
-                return_type: "unknown".to_string(),
+                return_type,
             });
         }
     }

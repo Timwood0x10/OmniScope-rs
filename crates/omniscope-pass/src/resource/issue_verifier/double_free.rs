@@ -4,7 +4,7 @@ use omniscope_core::IssueCandidate;
 use omniscope_types::{EvidenceKind, VerifierVerdict};
 
 use super::super::evidence_bundle::EvidenceBundle;
-use super::helpers::has_evidence;
+use super::helpers::{has_evidence, is_runtime_deallocator_function};
 
 /// Verifies a double release candidate using the evidence bundle.
 ///
@@ -39,6 +39,61 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
             if alloc_caller != release_caller {
                 return VerifierVerdict::ExplainedSafe;
             }
+        }
+    }
+
+    // ── Mutual-exclusivity (same-function deallocator) gate ──
+    // When alloc_function is a pure runtime deallocator (free, munmap,
+    // __rust_dealloc, _ZdlPv, _ZdaPv) AND both releases originate from
+    // the same caller function, the double-release candidate almost always
+    // comes from if/else branches where each path frees the resource once.
+    //
+    // This is NOT a same-pointer double-free — it is a control-flow merge
+    // artefact where the contract graph cannot distinguish mutually
+    // exclusive basic blocks. Examples:
+    //   - merkle_free_node(node, is_leaf): leaf_free vs internal_free
+    //   - fft_bridge_cleanup(result, has_error): error_free vs normal_free
+    //
+    // This gate runs BEFORE the same-instance and alias checks because
+    // candidates lacking strong same-instance evidence (no resource_id,
+    // no MultipleRelease) would be downgraded to ProbableIssue before
+    // reaching a later mutual-exclusivity check. The pattern itself —
+    // pure deallocation function + same caller — is strong enough to
+    // suppress regardless of instance-tracking strength.
+    //
+    // Legitimate same-function double-frees (sequential free(ptr); free(ptr))
+    // are rare and typically carry additional evidence that bypasses this
+    // gate: post-release use (UAF check below via has_use_after), or
+    // strong alias proof from cross-call-site analysis.
+    let has_use_after = bundle.evidence_kinds.contains(&EvidenceKind::UseAfterFree);
+    let is_deallocator = is_runtime_deallocator_function(&bundle.alloc_function);
+    let same_caller = match (&bundle.alloc_caller, &bundle.release_caller) {
+        (Some(alloc), Some(release)) => alloc == release,
+        _ => false,
+    };
+    if is_deallocator && same_caller && !has_use_after {
+        // When the candidate lacks strong same-instance evidence (resource_id
+        // or MultipleRelease), the double-release almost always comes from
+        // if/else branches where each path frees once — a control-flow merge
+        // artefact. Suppress these as ExplainedSafe.
+        //
+        // When same-instance evidence IS present, the candidate may be a
+        // genuine sequential double-free (e.g., free(ptr); free(ptr) in one
+        // BB). Let downstream gates (alias, UAF) classify it correctly.
+        let has_strong_instance = bundle.has_same_resource_evidence
+            || bundle
+                .evidence_kinds
+                .contains(&EvidenceKind::MultipleRelease);
+        if !has_strong_instance {
+            tracing::debug!(
+                candidate_id = bundle.candidate_id,
+                alloc_fn = %bundle.alloc_function,
+                caller = ?bundle.alloc_caller,
+                "DoubleFree mutual-exclusivity gate: pure deallocator with \
+                 same-caller releases and no strong instance evidence — \
+                 likely if/else path merge artefact, downgrading to ExplainedSafe"
+            );
+            return VerifierVerdict::ExplainedSafe;
         }
     }
 
@@ -82,7 +137,7 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
     // double-free when the post-release dereference triggers a second
     // release on an aliased path. Downgrade to Diagnostic so the
     // reconciliation layer can reclassify via UseAfterRelease.
-    let has_use_after = bundle.evidence_kinds.contains(&EvidenceKind::UseAfterFree);
+    // Note: has_use_after is already computed by the mutual-exclusivity gate above.
     if has_same_instance && has_use_after {
         tracing::debug!(
             candidate_id = bundle.candidate_id,

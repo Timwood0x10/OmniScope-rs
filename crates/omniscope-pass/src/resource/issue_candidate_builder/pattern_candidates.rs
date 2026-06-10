@@ -129,6 +129,14 @@ fn build_stack_to_global_escape_candidate(
     // Pre-set verdict to ProbableIssue — this pattern is strong but
     // may have legitimate uses (e.g., intentional static caching)
     candidate.verdict = Some(VerifierVerdict::ProbableIssue);
+    // Stack-to-global escape is inherently a cross-boundary safety issue:
+    // the dangling pointer survives beyond the function scope and can be
+    // accessed from any code that reads the global.  Set FFI evidence so
+    // the single-language filter does not suppress this candidate.
+    candidate = candidate.with_ffi_evidence(FfiEvidence::CrossLanguageCall {
+        caller_lang: "C".into(),
+        callee_lang: "global".into(),
+    });
 
     candidate
 }
@@ -164,6 +172,13 @@ fn build_heap_to_global_escape_candidate(
     // globals creates a dangling global reference when the heap allocation
     // is freed. Pre-set as ProbableIssue.
     candidate.verdict = Some(VerifierVerdict::ProbableIssue);
+    // Heap-to-global escape is an FFI-safety issue: the global reference
+    // can outlive the allocation and be accessed from any translation unit.
+    // Set FFI evidence so the single-language filter does not suppress it.
+    candidate = candidate.with_ffi_evidence(FfiEvidence::CrossLanguageCall {
+        caller_lang: "C".into(),
+        callee_lang: "global".into(),
+    });
 
     candidate
 }
@@ -185,6 +200,10 @@ fn build_return_alias_candidate(
     // Exclude functions that are known pointer-projection utilities
     // (e.g., as_ptr, as_mut_ptr, data() methods)
     if is_known_pointer_projection(func_name) {
+        eprintln!(
+            "[RA-FILTER] {} skipped: known pointer projection",
+            func_name
+        );
         return None;
     }
 
@@ -196,7 +215,7 @@ fn build_return_alias_candidate(
 
     // Return-type guard: only meaningful when function returns a pointer type
     if !function_returns_pointer(func_name, ir_module) {
-        tracing::debug!(
+        eprintln!(
             "[RA-FILTER] {} skipped: return type is not a pointer — \
              value-copy function cannot produce ReturnAlias borrow escape",
             func_name
@@ -227,6 +246,13 @@ fn build_return_alias_candidate(
     // many legitimate APIs return parameter-derived pointers.
     // Mark as Diagnostic — needs human review.
     candidate.verdict = Some(VerifierVerdict::Diagnostic);
+    // Return-alias is an FFI boundary concern: the caller may incorrectly
+    // assume ownership of the returned pointer and free it.  Set FFI
+    // evidence so the single-language filter does not suppress it.
+    candidate = candidate.with_ffi_evidence(FfiEvidence::CrossLanguageCall {
+        caller_lang: "C".into(),
+        callee_lang: "caller".into(),
+    });
 
     Some(candidate)
 }

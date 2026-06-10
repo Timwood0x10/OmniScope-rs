@@ -202,8 +202,8 @@ mod tests {
 
         assert_eq!(
             pipeline.pass_count(),
-            20,
-            "Pipeline must have 20 default passes registered"
+            21,
+            "Pipeline must have 21 default passes registered"
         );
     }
 

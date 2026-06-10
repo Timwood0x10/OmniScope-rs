@@ -1151,6 +1151,9 @@ fn test_verify_double_release_with_bundle_alias_rejection_downgraded() {
 
 #[test]
 fn test_verify_double_release_with_bundle_user_wrapper() {
+    // With resource_id: has strong instance evidence → not suppressed by
+    // mutual-exclusivity gate (may be genuine sequential double-free).
+    // Falls through to ConfirmedIssue via default path.
     let candidate = IssueCandidate::new(
         14,
         IssueCandidateKind::DoubleRelease,
@@ -1167,7 +1170,96 @@ fn test_verify_double_release_with_bundle_user_wrapper() {
     assert_eq!(
         verdict,
         VerifierVerdict::ConfirmedIssue,
-        "User-defined wrapper calling extern free must report DoubleFree with same-instance evidence"
+        "User-defined wrapper with same-caller deallocator AND resource_id \
+         has strong instance evidence — not suppressed by mutual-exclusivity"
+    );
+}
+
+/// Objective: Verify mutual-exclusivity gate suppresses same-function
+/// deallocator DoubleRelease ONLY when lacking strong instance evidence.
+/// Invariants:
+/// - Without resource_id or MultipleRelease → ExplainedSafe (if/else artefact)
+/// - With resource_id or MultipleRelease → ConfirmedIssue (genuine double-free)
+#[test]
+fn test_verify_double_release_mutual_exclusivity_suppressed() {
+    // Case 1: NO resource_id, NO MultipleRelease — pure deallocator with
+    // same caller but no instance proof → suppressed as if/else artefact.
+    let candidate_no_instance = IssueCandidate::new(
+        142,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_release_function("free")
+    .with_alloc_caller("merkle_free_node")
+    .with_release_caller("merkle_free_node");
+    // NOTE: no .with_resource_id() and no MultipleRelease evidence
+
+    let bundle = EvidenceBundle::from_candidate(&candidate_no_instance, None, None, None);
+    assert!(
+        !bundle.has_same_resource_evidence,
+        "No resource_id must mean no same-resource evidence"
+    );
+    assert!(
+        !bundle
+            .evidence_kinds
+            .contains(&EvidenceKind::MultipleRelease),
+        "No MultipleRelease evidence must be in bundle"
+    );
+
+    let verdict = verify_double_release_with_bundle(&bundle);
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ExplainedSafe,
+        "Same-function deallocator WITHOUT strong instance evidence must be \
+         suppressed as mutually-exclusive-path artefact"
+    );
+
+    // Case 2: With resource_id — has strong instance evidence → NOT suppressed.
+    // This represents a genuine sequential double-free (e.g., free(ptr); free(ptr)).
+    let candidate_with_rid = IssueCandidate::new(
+        143,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_release_function("free")
+    .with_alloc_caller("fft_bridge_cleanup")
+    .with_release_caller("fft_bridge_cleanup")
+    .with_resource_id(201);
+
+    let bundle2 = EvidenceBundle::from_candidate(&candidate_with_rid, None, None, None);
+    let verdict2 = verify_double_release_with_bundle(&bundle2);
+    assert_eq!(
+        verdict2,
+        VerifierVerdict::ConfirmedIssue,
+        "Same-function deallocator WITH resource_id must NOT be suppressed \
+         — may be genuine sequential double-free"
+    );
+
+    // Case 3: With MultipleRelease evidence (no resource_id) — strong instance
+    // evidence → NOT suppressed.
+    let mut candidate_with_mr = IssueCandidate::new(
+        144,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_release_function("free")
+    .with_alloc_caller("some_func")
+    .with_release_caller("some_func");
+    candidate_with_mr.add_evidence(Evidence::new(
+        EvidenceKind::MultipleRelease,
+        "instance released 2 times",
+    ));
+
+    let bundle3 = EvidenceBundle::from_candidate(&candidate_with_mr, None, None, None);
+    let verdict3 = verify_double_release_with_bundle(&bundle3);
+    assert_eq!(
+        verdict3,
+        VerifierVerdict::ConfirmedIssue,
+        "Same-function deallocator WITH MultipleRelease evidence must NOT \
+         be suppressed — strong instance proof indicates genuine double-release"
     );
 }
 

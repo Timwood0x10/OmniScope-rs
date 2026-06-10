@@ -157,19 +157,48 @@ pub(crate) fn verify_borrow_escape(candidate: &IssueCandidate) -> VerifierVerdic
         return VerifierVerdict::ExplainedSafe;
     }
 
-    // Check if the escaped pointer has heap provenance (R-1).
-    if has_evidence(candidate, EvidenceKind::IrPattern) {
-        let has_heap = candidate.evidence.iter().any(|e| {
-            e.kind == EvidenceKind::IrPattern
-                && (e.description.contains("heap") || e.description.contains("global"))
-        });
-        if has_heap {
-            return VerifierVerdict::ExplainedSafe;
-        }
-    }
-
     // Check if ownership was transferred via into_raw (R-6).
     if has_evidence(candidate, EvidenceKind::OwnershipTransfer) {
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // GlobalStore evidence (StackToGlobalEscape / HeapToGlobalEscape) is
+    // a strong signal that the pointer escapes function scope through a
+    // global variable — this is a real borrow-safety issue (UAR / UAF).
+    if has_evidence(candidate, EvidenceKind::GlobalStore) {
+        eprintln!(
+            "[VBE] {} → ProbableIssue (GlobalStore)",
+            candidate.alloc_caller.as_deref().unwrap_or("?")
+        );
+        return VerifierVerdict::ProbableIssue;
+    }
+
+    // Check if the escaped pointer has heap provenance (R-1).
+    // NOTE: IrPattern evidence with "heap"/"global" in the description
+    // indicates an escape pattern was detected — this is a real issue,
+    // NOT a reason to suppress.  Only treat non-escape IrPattern as safe.
+    if has_evidence(candidate, EvidenceKind::IrPattern) {
+        let has_escape_pattern = candidate.evidence.iter().any(|e| {
+            e.kind == EvidenceKind::IrPattern
+                && (e.description.contains("escape")
+                    || e.description.contains("Escape")
+                    || e.description.contains("global")
+                    || e.description.contains("Global")
+                    || e.description.contains("ReturnAlias")
+                    || e.description.contains("alias"))
+        });
+        if has_escape_pattern {
+            eprintln!(
+                "[VBE] {} → ProbableIssue (IrPattern escape)",
+                candidate.alloc_caller.as_deref().unwrap_or("?")
+            );
+            return VerifierVerdict::ProbableIssue;
+        }
+        // Non-escape IrPattern (e.g., PureComputation) → safe
+        eprintln!(
+            "[VBE] {} → ExplainedSafe (non-escape IrPattern)",
+            candidate.alloc_caller.as_deref().unwrap_or("?")
+        );
         return VerifierVerdict::ExplainedSafe;
     }
 

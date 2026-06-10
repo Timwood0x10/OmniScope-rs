@@ -223,7 +223,20 @@ impl Pass for IssueVerifierPass {
             }
 
             // ── Single-language filter ──
-            if is_single_language && is_ffi_specific_issue(&candidate) {
+            // Suppress FFI-specific issues in single-language modules UNLESS
+            // the candidate carries concrete FFI evidence (boundary match,
+            // cross-language call record, or callback-escape proof).  A
+            // candidate with FFI evidence represents a real cross-boundary
+            // safety issue even when the module is predominantly one language.
+            if is_single_language
+                && is_ffi_specific_issue(&candidate)
+                && !candidate.has_ffi_evidence()
+            {
+                tracing::debug!(
+                    candidate_id = candidate.id,
+                    func = %candidate.alloc_caller.as_deref().unwrap_or("?"),
+                    "Single-language filter suppressing non-FFI issue"
+                );
                 single_lang_suppressed += 1;
                 candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
                 verified.push(candidate);
@@ -232,10 +245,13 @@ impl Pass for IssueVerifierPass {
 
             // ── FFI Gate: suppress runtime-internal leaks without FFI evidence ──
             let alloc_fn = candidate.alloc_function.clone();
+            // Use map_or rather than is_none_or: MSRV is 1.75,
+            // but Option::is_none_or() stabilized in 1.82.
+            #[allow(clippy::unnecessary_map_or)]
             let caller_is_runtime = candidate
                 .alloc_caller
                 .as_deref()
-                .is_none_or(is_runtime_internal);
+                .map_or(true, is_runtime_internal);
             if !candidate.has_ffi_evidence()
                 && is_leak_candidate(&candidate)
                 && is_runtime_internal(&alloc_fn)
@@ -281,7 +297,29 @@ impl Pass for IssueVerifierPass {
             let strong_resource_evidence =
                 evidence_bundle.has_same_resource_evidence && evidence_bundle.has_reachable_release;
 
-            let verdict = if high_conf_suppress && !strong_resource_evidence {
+            // BorrowEscape candidates with concrete escape evidence (GlobalStore,
+            // or IrPattern describing an escape pattern) represent real safety
+            // issues that should NOT be suppressed by generic semantic facts
+            // like PureComputation or NonMemoryResource.  The escape evidence
+            // is more specific and indicates a genuine cross-boundary risk.
+            let has_concrete_escape_evidence = candidate.kind == IssueCandidateKind::BorrowEscape
+                && (self::helpers::has_evidence(
+                    &candidate,
+                    omniscope_types::EvidenceKind::GlobalStore,
+                ) || candidate.evidence.iter().any(|e| {
+                    e.kind == omniscope_types::EvidenceKind::IrPattern
+                        && (e.description.contains("escape")
+                            || e.description.contains("Escape")
+                            || e.description.contains("global")
+                            || e.description.contains("Global")
+                            || e.description.contains("ReturnAlias")
+                            || e.description.contains("alias"))
+                }));
+
+            let verdict = if high_conf_suppress
+                && !strong_resource_evidence
+                && !has_concrete_escape_evidence
+            {
                 tracing::debug!(
                     "High-confidence semantic suppression for candidate {} ({:?})",
                     candidate.id,
@@ -557,6 +595,16 @@ impl Pass for IssueVerifierPass {
                         .as_deref()
                         .unwrap_or(&candidate.alloc_function)
                 }
+                // Pattern-based issues (BorrowEscape, BoundaryMisuse, etc.)
+                // use alloc_caller as location since the bug is in the caller
+                // function, not in a specific alloc/release API call.
+                IssueCandidateKind::BorrowEscape
+                | IssueCandidateKind::AbiLayoutMismatch
+                | IssueCandidateKind::BoundaryMisuse
+                | IssueCandidateKind::UseAfterFree => candidate
+                    .alloc_caller
+                    .as_deref()
+                    .unwrap_or(&candidate.alloc_function),
                 _ => &candidate.alloc_function,
             };
             if !location_func.is_empty() && location_func != "unknown" {
@@ -609,7 +657,9 @@ impl Default for IssueVerifierPass {
 /// - Destructor/drop/cleanup release path
 /// - Runtime/compiler origin
 /// - Unknown family policy
-#[allow(dead_code)] // used by integration and unit tests, not called from lib code
+// Note: used by integration tests in /tests/ which are outside this crate,
+// so rustc's dead-code analysis cannot see the callers. Not actually dead.
+#[allow(dead_code)]
 pub(crate) fn verify_candidate(
     candidate: &IssueCandidate,
     registry: &FamilyRegistry,

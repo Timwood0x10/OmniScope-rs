@@ -266,21 +266,23 @@ pub(crate) fn is_declaration_only_candidate(
         return false;
     }
 
-    let names = [
-        Some(candidate.alloc_function.as_str()),
-        candidate.release_function.as_deref(),
-    ];
-    names.into_iter().flatten().any(|name| {
-        let trimmed = name.trim_start_matches('@');
-        declared_functions.contains(trimmed) && !user_defined_functions.contains(trimmed)
-    }) && candidate
-        .alloc_caller
-        .as_deref()
-        .is_none_or(|c| !user_defined_functions.contains(c.trim_start_matches('@')))
-        && candidate
-            .release_caller
-            .as_deref()
-            .is_none_or(|c| !user_defined_functions.contains(c.trim_start_matches('@')))
+    // Use map_or rather than is_none_or: MSRV is 1.75,
+    // but Option::is_none_or() stabilized in 1.82.
+    #[allow(clippy::unnecessary_map_or)]
+    {
+        let names = [
+            Some(candidate.alloc_function.as_str()),
+            candidate.release_function.as_deref(),
+        ];
+        names.into_iter().flatten().any(|name| {
+            let trimmed = name.trim_start_matches('@');
+            declared_functions.contains(trimmed) && !user_defined_functions.contains(trimmed)
+        }) && candidate.alloc_caller.as_deref().map_or(true, |c| {
+            !user_defined_functions.contains(c.trim_start_matches('@'))
+        }) && candidate.release_caller.as_deref().map_or(true, |c| {
+            !user_defined_functions.contains(c.trim_start_matches('@'))
+        })
+    }
 }
 
 pub(crate) fn is_same_language_allocator_wrapper_noise(

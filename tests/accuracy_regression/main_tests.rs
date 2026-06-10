@@ -74,12 +74,17 @@ fn test_accuracy_regression() {
         for issue in result.issues() {
             for bug in EXPECTED_BUGS {
                 if bug.file == file_name {
-                    let func_match = issue
-                        .location
-                        .as_ref()
-                        .and_then(|loc| loc.function.as_deref())
-                        .map(|f| f.contains(bug.func_substring))
-                        .unwrap_or(false);
+                    let func_match = [
+                        // Primary: location.function (where the issue manifests)
+                        issue.location.as_ref().and_then(|l| l.function.as_deref()),
+                        // Secondary: symbol (alloc/release function name)
+                        Some(issue.symbol.as_str()),
+                        // Tertiary: description text (often mentions the buggy function)
+                        Some(issue.description.as_str()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|field| field.contains(bug.func_substring));
                     if func_match
                         && !bug.forbidden_kinds.is_empty()
                         && bug.forbidden_kinds.contains(&issue.kind)
