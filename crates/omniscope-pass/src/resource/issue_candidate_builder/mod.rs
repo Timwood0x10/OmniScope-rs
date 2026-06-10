@@ -34,7 +34,7 @@ use omniscope_semantics::{
 };
 use omniscope_types::{
     BoundaryContext, BoundaryDetectionMethod, CrossBoundaryEvidence, Effect, Evidence,
-    EvidenceKind, FamilyId, IssueCandidateKind, Language, PointerContract,
+    EvidenceKind, FamilyId, IssueCandidateKind, Language, PointerContract, VerifierVerdict,
 };
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -993,6 +993,139 @@ impl Pass for IssueCandidateBuilderPass {
             }
         }
 
+        // ── BorrowEscape from IR behavior patterns (Phase 3) ──
+        // Detect StackToGlobalEscape and ReturnAlias patterns from semantic facts.
+        // These are function-level behaviors that indicate borrow/escape bugs
+        // detectable purely from IR instruction patterns.
+        for fact in &semantic_facts {
+            let func_name = match fact.key.as_symbol() {
+                Some(name) => name,
+                None => continue,
+            };
+
+            // Check for StackToGlobalEscape pattern in evidence text
+            if fact.evidence.contains("StackToGlobalEscape") {
+                let id = next_id;
+                next_id += 1;
+
+                let mut candidate = IssueCandidate::new(
+                    id,
+                    IssueCandidateKind::BorrowEscape,
+                    FamilyId::UNKNOWN,
+                    func_name,
+                )
+                .with_description(format!(
+                    "stack-local pointer escapes to global in {} — use-after-return",
+                    func_name
+                ))
+                .with_alloc_caller(func_name);
+
+                candidate.add_evidence(
+                    Evidence::new(
+                        EvidenceKind::GlobalStore,
+                        format!("StackToGlobalEscape: {}", fact.evidence),
+                    )
+                    .with_confidence(0.75),
+                );
+                // Pre-set verdict to ProbableIssue — this pattern is strong but
+                // may have legitimate uses (e.g., intentional static caching)
+                candidate.verdict = Some(VerifierVerdict::ProbableIssue);
+
+                candidates.push(candidate);
+            }
+
+            // Check for ReturnAlias pattern in evidence text
+            if fact.evidence.contains("ReturnAlias") {
+                // Exclude functions that are known pointer-projection utilities
+                // (e.g., as_ptr, as_mut_ptr, data() methods)
+                if is_known_pointer_projection(func_name) {
+                    continue;
+                }
+
+                // Only flag ReturnAlias for functions that look like FFI exports
+                // or public API boundaries. Internal helper functions that return
+                // parameter-derived pointers are almost never bugs — the caller
+                // knows the semantics. The risk is at language boundaries where
+                // the caller (e.g., Rust FFI binding) may incorrectly assume
+                // ownership of the returned pointer.
+                if !looks_like_ffi_or_export(func_name) {
+                    continue;
+                }
+
+                let id = next_id;
+                next_id += 1;
+
+                let mut candidate = IssueCandidate::new(
+                    id,
+                    IssueCandidateKind::BorrowEscape,
+                    FamilyId::UNKNOWN,
+                    func_name,
+                )
+                .with_description(format!(
+                    "return value aliases input parameter in {} — no ownership transfer annotation",
+                    func_name
+                ))
+                .with_alloc_caller(func_name);
+
+                candidate.add_evidence(
+                    Evidence::new(
+                        EvidenceKind::IrPattern,
+                        format!("ReturnAlias: {}", fact.evidence),
+                    )
+                    .with_confidence(0.55),
+                );
+                // Return-alias is lower confidence than stack-to-global because
+                // many legitimate APIs return parameter-derived pointers.
+                // Mark as Diagnostic — needs human review.
+                candidate.verdict = Some(VerifierVerdict::Diagnostic);
+
+                candidates.push(candidate);
+            }
+
+            // Check for FreeThenCallbackUse pattern in evidence text
+            if fact.evidence.contains("FreeThenCallbackUse") {
+                let id = next_id;
+                next_id += 1;
+
+                // Use UNKNOWN family rather than hardcoding C_HEAP.
+                // The IR pattern detects "free(reg) then call(cb, reg)" but
+                // cannot determine which resource family the free operated on.
+                // Downstream (ownership solver / verifier) may refine this.
+                let mut candidate = IssueCandidate::new(
+                    id,
+                    IssueCandidateKind::UseAfterFree,
+                    FamilyId::UNKNOWN,
+                    func_name,
+                )
+                .with_description(format!(
+                    "freed pointer passed to callback/FFI in {} — use-after-free (CWE-416)",
+                    func_name
+                ))
+                .with_alloc_caller(func_name);
+
+                candidate.add_evidence(
+                    Evidence::new(
+                        EvidenceKind::UseAfterFree,
+                        format!("FreeThenCallbackUse: {}", fact.evidence),
+                    )
+                    .with_confidence(0.85),
+                );
+                // Mark as FFI-evidenced: this pattern involves passing a freed
+                // pointer to a function-pointer invocation (callback/FFI boundary).
+                // This prevents the verifier's runtime-caller FP suppressor from
+                // dropping the candidate as noise.
+                candidate.ffi_evidence = Some(omniscope_core::FfiEvidence::CrossLanguageCall {
+                    caller_lang: "C".into(),
+                    callee_lang: "callback".into(),
+                });
+                // Free-then-callback-use is a strong UAF signal — the same register
+                // is freed and then passed to another call. Pre-set as ProbableIssue.
+                candidate.verdict = Some(VerifierVerdict::ProbableIssue);
+
+                candidates.push(candidate);
+            }
+        }
+
         // Filter out custom allocator shims to reduce false positives
         // Note: We only filter custom allocator shims (mimalloc, jemalloc, etc.),
         // not system or Rust allocators, as those are legitimate for analysis.
@@ -1101,6 +1234,81 @@ impl Pass for IssueCandidateBuilderPass {
 
         Ok(result)
     }
+}
+
+/// Checks if a function name is a known pointer-projection utility.
+///
+/// These functions (e.g., `as_ptr`, `as_mut_ptr`, `data`, `cast`) return
+/// pointers that alias their input without ownership transfer. They are
+/// never bugs — the caller explicitly requested the raw pointer.
+fn is_known_pointer_projection(func_name: &str) -> bool {
+    let name = func_name.trim_start_matches('@').to_lowercase();
+    name.ends_with("as_ptr")
+        || name.ends_with("as_mut_ptr")
+        || name.ends_with(".data()")
+        || name.ends_with(".cast()")
+        || name.contains("::from_raw")
+        || name.contains("::into_raw")
+}
+
+/// Checks if a function looks like an FFI export or public API boundary.
+///
+/// FFI exports typically have naming patterns like:
+/// - Functions with well-known FFI/export markers in name or path
+/// - C-style snake_case functions at language boundaries
+///
+/// Internal helpers from standard libraries (Zig stdlib, Rust std, etc.)
+/// are excluded even if they match generic heuristics, because their
+/// return-alias patterns are well-known idioms within that ecosystem.
+///
+/// # Limitations
+/// This is a heuristic — it cannot detect FFI exports that:
+/// - Use purely lowercase C names without FFI keywords (e.g., `gtk_widget_destroy`)
+/// - Rely on `#[no_mangle]` attributes rather than naming conventions
+/// - Are registered via runtime symbol tables
+///
+/// False positives are possible for internal CamelCase factory methods
+/// containing Alloc/Create/etc. The exclusion list should be extended
+/// as new FP patterns emerge.
+fn looks_like_ffi_or_export(func_name: &str) -> bool {
+    let name = func_name.trim_start_matches('@');
+
+    // Exclude known library/namespace patterns that produce many FPs.
+    // These ecosystems use return-alias patterns as normal idiom.
+    if name.starts_with("Io.")
+        || name.starts_with("std.")
+        || name.starts_with("builtin.")
+        || name.contains("::__anon_")
+    {
+        return false;
+    }
+
+    // FFI/export-specific markers (strong signal)
+    if name.contains("export")
+        || name.contains("extern")
+        || name.contains("ffi_")
+        || name.contains("_wrapper")
+        || name.contains("_bindgen")
+        || name.contains("marshal")
+        || name.contains("interop")
+        || name.contains("callback")
+    {
+        return true;
+    }
+
+    // CamelCase with known FFI-related terms
+    let has_ffi_term = name.contains("Alloc")
+        || name.contains("Free")
+        || name.contains("Create")
+        || name.contains("Destroy")
+        || name.contains("Init")
+        || name.contains("Open")
+        || name.contains("Close");
+    if has_ffi_term && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+        return true;
+    }
+
+    false
 }
 
 /// Helper: Build a cross-family free candidate.

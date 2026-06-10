@@ -204,6 +204,42 @@ pub enum BehaviorPattern {
         /// The release function called.
         release_function: String,
     },
+
+    // ── Borrow/Escape detection patterns (Phase 3: truth_classification) ──
+    /// Stack-local pointer escapes to global/static storage.
+    /// Pattern: `%local = alloca ...; ...; store ptr %local_derived, ptr @global`
+    /// After the function returns, the stack frame is gone but the global
+    /// still holds the dangling pointer — use-after-return bug.
+    /// Evidence: TRAP-C6 in ffi_traps.c (ffi_register_callback).
+    StackToGlobalEscape {
+        /// The global variable that receives the stack pointer.
+        global_target: String,
+        /// The alloca register that originates the escaped pointer.
+        alloca_reg: String,
+    },
+
+    /// Return value aliases an input parameter pointer without ownership transfer.
+    /// Pattern: `ret ptr %param` or `ret ptr %gep_result` where the value
+    /// traces back to a function parameter (not a fresh allocation).
+    /// Caller may incorrectly assume ownership of the returned pointer.
+    /// Evidence: TRAP-C7 in ffi_traps.c (ffi_alias_input).
+    ReturnAlias {
+        /// The parameter register that the return value aliases.
+        aliased_param: String,
+    },
+
+    /// Free-then-use: a pointer is passed to a release function (free/dealloc)
+    /// and subsequently used as an argument to another call instruction.
+    /// Pattern: `call void @free(ptr %p)` ... `call void @fn(..., ptr %p, ...)`
+    /// This is a use-after-free (CWE-416) — the freed pointer is dereferenced
+    /// or passed to a callback that may read/write through it.
+    /// Evidence: TRAP-C9 in ffi_traps.c (uaf_through_ffi).
+    FreeThenCallbackUse {
+        /// The register that was freed and then used.
+        freed_reg: String,
+        /// Name of the call instruction that uses the freed register (if direct call).
+        use_callee: Option<String>,
+    },
 }
 
 /// Category for POSIX non-memory operations (R-4).
@@ -370,6 +406,21 @@ pub fn extract_behavior(body: &FunctionBody) -> FunctionBehavior {
     // 11. Detect InternalBridge: all calls are to defined functions
     if detect_internal_bridge(body) {
         patterns.push(BehaviorPattern::InternalBridge);
+    }
+
+    // 12. Detect StackToGlobalEscape: alloca-derived pointer stored to global
+    if let Some(sge) = detect_stack_to_global_escape(body) {
+        patterns.push(sge);
+    }
+
+    // 13. Detect ReturnAlias: return value aliases a parameter without ownership transfer
+    if let Some(ra) = detect_return_alias(body) {
+        patterns.push(ra);
+    }
+
+    // 14. Detect FreeThenCallbackUse: freed pointer used as call argument (UAF)
+    if let Some(ftcu) = detect_free_then_callback_use(body) {
+        patterns.push(ftcu);
     }
 
     let return_source = extract_return_source(body);
@@ -1239,6 +1290,392 @@ fn detect_release_on_all_exit_paths(body: &FunctionBody) -> Option<BehaviorPatte
         return Some(BehaviorPattern::ReleaseOnAllExitPaths {
             release_function: release_func,
         });
+    }
+
+    None
+}
+
+/// Detect StackToGlobalEscape: alloca-derived pointer stored to a global variable.
+///
+/// Pattern:
+/// ```llvm
+/// %local = alloca [40 x i8]
+/// ... (initialize local buffer) ...
+/// store ptr %local, ptr @g_global   ; stack pointer escapes to global!
+/// ```
+///
+/// This is a use-after-return bug: when the function returns, the stack
+/// frame is destroyed but `@g_global` still holds the dangling pointer.
+fn detect_stack_to_global_escape(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Need at least one alloca and one store
+    if body.count_kind(IRInstructionKind::Alloca) == 0
+        || body.count_kind(IRInstructionKind::Store) == 0
+    {
+        return None;
+    }
+
+    // Collect all alloca destination registers
+    let alloca_regs: HashSet<String> = body
+        .instructions
+        .iter()
+        .filter(|i| i.kind == IRInstructionKind::Alloca)
+        .filter_map(|i| i.dest.clone())
+        .collect();
+
+    if alloca_regs.is_empty() {
+        return None;
+    }
+
+    // Build a set of registers derived from allocas.
+    // A register is "alloca-derived" if it is produced by an instruction
+    // (GEP, bitcast, load) that uses an alloca register as input.
+    let mut alloca_derived = alloca_regs.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for inst in &body.instructions {
+            if let Some(ref dest) = inst.dest {
+                if !alloca_derived.contains(dest)
+                    && inst.operands.iter().any(|op| alloca_derived.contains(op))
+                {
+                    alloca_derived.insert(dest.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Check each store instruction for global target + alloca-derived source
+    for store in body.instructions_of_kind(IRInstructionKind::Store) {
+        if store.operands.len() >= 2 {
+            let stored_value = &store.operands[0];
+            let store_target = &store.operands[1];
+
+            // Target must be a global variable (@ prefix)
+            if !store_target.starts_with('@') {
+                continue;
+            }
+
+            // Stored value must be derived from an alloca
+            if alloca_derived.contains(stored_value) {
+                // Find which alloca this ultimately traces back to
+                let origin_alloca = alloca_regs
+                    .iter()
+                    .find(|a| **a == *stored_value || is_derived_from(body, stored_value, a))
+                    .cloned()
+                    .unwrap_or_else(|| stored_value.clone());
+
+                return Some(BehaviorPattern::StackToGlobalEscape {
+                    global_target: store_target.clone(),
+                    alloca_reg: origin_alloca,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+/// Check whether `reg` is transitively derived from `root` through instruction chains.
+fn is_derived_from(body: &FunctionBody, reg: &str, root: &str) -> bool {
+    if reg == root {
+        return true;
+    }
+    // Walk backwards: find the instruction that produces `reg`, check its operands
+    for inst in &body.instructions {
+        if inst.dest.as_deref() == Some(reg) {
+            return inst
+                .operands
+                .iter()
+                .any(|op| op == root || is_derived_from(body, op, root));
+        }
+    }
+    false
+}
+
+/// Detect ReturnAlias: function returns a pointer that aliases an input parameter.
+///
+/// Pattern:
+/// ```llvm
+/// define ptr @ffi_alias_input(ptr %data, i64 %len) {
+///     ...
+///     ret ptr %data          ; direct param return — alias!
+/// }
+/// ```
+/// or:
+/// ```llvm
+///     %gep = getelementptr ..., ptr %data, ...
+///     ret ptr %gep           ; GEP of param return — alias!
+/// ```
+///
+/// This is NOT a bug per se — many legitimate APIs do this. But without
+/// ownership annotation, FFI bindings may incorrectly free the result.
+fn detect_return_alias(body: &FunctionBody) -> Option<BehaviorPattern> {
+    let ret_insts = body.instructions_of_kind(IRInstructionKind::Ret);
+    let first_ret = ret_insts.first()?;
+
+    // Must return a non-void value
+    let ret_val = first_ret.operands.first()?;
+
+    // Skip constant/null returns
+    if ret_val == "null" || ret_val == "0" || !ret_val.starts_with('%') {
+        return None;
+    }
+
+    // Collect parameter registers (function arguments start with % and appear
+    // in the function signature; they are never defined by any instruction)
+    let param_regs: HashSet<&str> = collect_parameter_registers(body);
+
+    if param_regs.is_empty() {
+        return None;
+    }
+
+    // Build a "derived from" map: for each register, track what pointer it comes from.
+    // Only tracks derivation through pointer-propagating instructions to avoid
+    // following integer arithmetic chains (e.g., %half_len = lshr %len, 1) that
+    // would derail pointer-alias analysis.
+    //
+    // Uses a multi-map (Vec) because an instruction may have multiple register
+    // operands (e.g., GEP has base ptr + index, select has condition + values).
+    // We try all paths during traversal to find one that leads to a parameter.
+    let mut derives_from: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+
+    /// Instruction kinds that preserve pointer identity — their output is a
+    /// pointer derived from one of their inputs. Arithmetic/comparison/logical
+    /// instructions are excluded because they produce integers, not pointers.
+    fn is_pointer_propagating(kind: IRInstructionKind) -> bool {
+        matches!(
+            kind,
+            IRInstructionKind::GetElementPtr
+                | IRInstructionKind::Conversion      // bitcast, ptrtoint, inttoptr
+                | IRInstructionKind::Load            // loads a pointer value
+                | IRInstructionKind::Select          // selects between pointer vals
+                | IRInstructionKind::Phi             // phi node joining pointer vals
+                | IRInstructionKind::Call            // may return a pointer
+                | IRInstructionKind::IndirectCall
+        )
+    }
+
+    for inst in &body.instructions {
+        if let Some(ref dest) = inst.dest {
+            // Only track derivation for pointer-propagating instructions
+            if !is_pointer_propagating(inst.kind.clone()) {
+                continue;
+            }
+
+            // Method 1: Use structured operands
+            for op in &inst.operands {
+                if op.starts_with('%') && !dest.is_empty() {
+                    derives_from
+                        .entry(dest.as_str())
+                        .or_default()
+                        .push(op.as_str());
+                }
+            }
+
+            // Method 2: Parse raw_text for %register references as fallback.
+            // This handles select, phi, and other instructions where the text
+            // parser may not extract structured operands.
+            let mut inst_clone = inst.clone();
+            inst_clone.ensure_raw();
+            let raw = inst_clone.raw_text.to_string();
+            // Find all %register tokens after the destination assignment
+            if let Some(eq_pos) = raw.find("= ") {
+                let after_eq = &raw[eq_pos + 2..];
+                for token in
+                    after_eq.split(|c: char| c.is_whitespace() || c == ',' || c == '(' || c == ')')
+                {
+                    let token = token.trim().to_string();
+                    if token.starts_with('%') && token != *dest {
+                        let leaked = Box::leak(token.into_boxed_str());
+                        derives_from.entry(dest.as_str()).or_default().push(leaked);
+                    }
+                }
+            }
+        }
+    }
+
+    // Check if ret_val directly or transitively originates from a parameter.
+    // Uses BFS-style traversal trying all possible derivation paths.
+    let mut to_visit: Vec<&str> = vec![ret_val.as_str()];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(current) = to_visit.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        if param_regs.contains(current) {
+            return Some(BehaviorPattern::ReturnAlias {
+                aliased_param: current.to_string(),
+            });
+        }
+        if let Some(sources) = derives_from.get(current) {
+            to_visit.extend(sources.iter().copied());
+        }
+    }
+
+    None
+}
+
+/// Collect registers that are function parameters (never defined by any instruction).
+fn collect_parameter_registers(body: &FunctionBody) -> HashSet<&str> {
+    let all_defined: HashSet<&str> = body
+        .instructions
+        .iter()
+        .filter_map(|i| i.dest.as_deref())
+        .collect();
+
+    // Parameters are registers that appear as operands but are never defined
+    let mut params = HashSet::new();
+    for inst in &body.instructions {
+        for op in &inst.operands {
+            if op.starts_with('%') && !all_defined.contains(op.as_str()) {
+                params.insert(op.as_str());
+            }
+        }
+    }
+    params
+}
+
+/// Detect FreeThenCallbackUse: a pointer is freed and then used as an argument
+/// to a subsequent call instruction (use-after-free via callback/FFI).
+///
+/// Pattern (intra-function, cross-basic-block):
+/// ```llvm
+/// %p = call ptr @malloc(i64 32)
+/// ...
+/// call void @free(ptr %p)          ; release %p
+/// ...
+/// call void @callback(..., ptr %p)  ; use %p AFTER free — UAF!
+/// ```
+///
+/// Also catches indirect calls through function pointers:
+/// ```llvm
+/// %cb = load ptr, ptr @g_callback
+/// call void %cb(..., ptr %p)        ; indirect use of freed %p
+/// ```
+///
+/// This is the IR-level manifestation of TRAP-C9 (uaf_through_ffi in ffi_traps.c).
+/// The detection scans all instructions for free/dealloc calls, extracts the freed
+/// register, then checks if any later call instruction uses that same register.
+fn detect_free_then_callback_use(body: &FunctionBody) -> Option<BehaviorPattern> {
+    // Need at least one call (for free) and one subsequent call (for use)
+    let call_count =
+        body.count_kind(IRInstructionKind::Call) + body.count_kind(IRInstructionKind::IndirectCall);
+    if call_count < 2 {
+        return None;
+    }
+
+    // Collect all release (free/dealloc) calls and their freed registers.
+    // A "release call" is identified by callee name matching known deallocators.
+    struct FreeSite {
+        idx: usize,
+        freed_reg: String,
+    }
+
+    let free_sites: Vec<FreeSite> = body
+        .instructions
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, inst)| {
+            if inst.kind != IRInstructionKind::Call {
+                return None;
+            }
+            let callee = inst.callee.as_deref()?;
+            if !is_release_callee(callee) {
+                return None;
+            }
+            // Extract the first pointer argument from raw_text or operands.
+            // For `call void @free(ptr %p)`, we need `%p`.
+            let freed_reg = extract_first_ptr_arg(inst)?;
+            Some(FreeSite { idx, freed_reg })
+        })
+        .collect();
+
+    if free_sites.is_empty() {
+        return None;
+    }
+
+    // For each free site, check if any subsequent *indirect* call uses the
+    // freed register.  We target the specific P2c pattern where a freed pointer
+    // is passed to an FFI callback (function-pointer invocation), not generic
+    // post-free usage which is handled by the ownership solver.
+    for free_site in &free_sites {
+        for (_idx, inst) in body.instructions.iter().enumerate().skip(free_site.idx + 1) {
+            // Only indirect calls (function-pointer / callback invocations)
+            if inst.kind != IRInstructionKind::IndirectCall {
+                continue;
+            }
+
+            // Check if this call's raw_text or operands contain the freed register
+            let uses_freed_reg = inst.operands.contains(&free_site.freed_reg)
+                || inst.raw_text.contains(&free_site.freed_reg);
+
+            if uses_freed_reg {
+                return Some(BehaviorPattern::FreeThenCallbackUse {
+                    freed_reg: free_site.freed_reg.clone(),
+                    use_callee: inst.callee.clone(),
+                });
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract the first pointer argument from a call instruction.
+///
+/// For `call void @free(ptr %p)` → returns `Some("%p")`.
+/// Also handles LLVM parameter attributes between `ptr` and the register:
+///   `call void @free(ptr noundef nonnull %p)` → returns `Some("%p")`.
+/// Tries structured operands first, then falls back to raw text parsing.
+fn extract_first_ptr_arg(inst: &IRInstruction) -> Option<String> {
+    // Try structured operands: look for %-prefixed registers
+    for op in &inst.operands {
+        if op.starts_with('%') {
+            return Some(op.clone());
+        }
+    }
+
+    // Fallback: parse from raw_text for a `ptr` keyword followed (eventually)
+    // by a %-prefixed register.  LLVM IR may insert parameter attributes
+    // (noundef, nonnull, align, etc.) between the type and the value, e.g.:
+    //   `call void @free(ptr noundef nonnull %1)`
+    let raw = &inst.raw_text;
+
+    // Locate the argument list: everything after '(' that belongs to this call
+    if let Some(paren_start) = raw.find('(') {
+        let args_region = &raw[paren_start..];
+        // Find `ptr` then scan forward for the first %reg
+        if let Some(ptr_pos) = args_region.find("ptr") {
+            let after_ptr = &args_region[ptr_pos + 3..];
+            // Scan for %-register, skipping over attribute words
+            for (i, ch) in after_ptr.char_indices() {
+                if ch == '%' {
+                    // Extract the full register name (%digits or %identifier)
+                    let rest = &after_ptr[i..];
+                    // Skip the '%' itself; find end of register name
+                    let name_part = &rest[1..];
+                    let end = name_part
+                        .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
+                        .unwrap_or(name_part.len());
+                    return Some(rest[..=end].to_string());
+                }
+            }
+        }
+    }
+
+    // Last resort: find any %-register anywhere in the raw text
+    if let Some(pct_pos) = raw.find('%') {
+        let rest = &raw[pct_pos..];
+        let name_part = &rest[1..];
+        let end = name_part
+            .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
+            .unwrap_or(name_part.len());
+        let reg = rest[..=end].to_string();
+        if !reg.is_empty() {
+            return Some(reg);
+        }
     }
 
     None

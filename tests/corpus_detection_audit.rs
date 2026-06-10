@@ -79,8 +79,11 @@ fn audit_fixture(
                 .as_ref()
                 .and_then(|loc| loc.function.as_deref())
                 .unwrap_or("(unknown)");
-            let desc_short = if issue.description.len() > 70 {
-                format!("{}...", &issue.description[..67])
+            let desc_short = if issue.description.chars().count() > 70 {
+                format!(
+                    "{}...",
+                    issue.description.chars().take(67).collect::<String>()
+                )
             } else {
                 issue.description.clone()
             };

@@ -44,8 +44,8 @@ pub(crate) use cross_family::{
 pub(crate) use double_free::{verify_double_release, verify_double_release_with_bundle};
 pub(crate) use helpers::{
     build_verdict_description, deduplicate_leak_candidates, has_escape_evidence,
-    is_declaration_only_candidate, is_ffi_specific_issue, is_leak_candidate, is_memory_resource,
-    is_runtime_allocator_function, is_runtime_deallocator_function,
+    is_declaration_only_candidate, is_ffi_specific_issue, is_leak_candidate, is_leakable_resource,
+    is_memory_resource, is_runtime_allocator_function, is_runtime_deallocator_function,
     is_same_language_allocator_wrapper_noise,
 };
 pub(crate) use leak::{
@@ -627,8 +627,12 @@ fn verify_candidate_inner(
     boundary_ctx: Option<&omniscope_types::boundary::BoundaryContext>,
     bundle: Option<&EvidenceBundle>,
 ) -> VerifierVerdict {
-    // First, check if this is a non-memory resource (e.g., file descriptors).
-    if !is_memory_resource(candidate.alloc_family) {
+    // First, check if this is a non-memory, non-leakable resource.
+    // Memory resources (heap) and leakable non-memory resources (file descriptors)
+    // are tracked for leaks. Handle types that are not tracked (Socket, ProcessHandle,
+    // ThreadHandle, and Unknown families without release-evidence support) are suppressed.
+    if !is_memory_resource(candidate.alloc_family) && !is_leakable_resource(candidate.alloc_family)
+    {
         match candidate.kind {
             IssueCandidateKind::DefiniteLeak | IssueCandidateKind::ConditionalLeak => {
                 return VerifierVerdict::ExplainedSafe;

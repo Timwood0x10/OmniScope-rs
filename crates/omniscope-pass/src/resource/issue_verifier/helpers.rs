@@ -7,6 +7,42 @@ use omniscope_core::IssueCandidate;
 use omniscope_semantics::resource::memory_graph::{family_to_resource_class, ResourceClass};
 use omniscope_types::{EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict};
 
+/// Determines if a resource family represents a leakable resource.
+///
+/// Leakable resources are those that require explicit release and can
+/// leak if not properly released on all code paths. This includes:
+/// - Heap memory (malloc/free, new/delete)
+/// - Runtime-managed resources with explicit release (JNI refs)
+/// - File descriptors (open/close, socket/close) — FD leaks exhaust the
+///   per-process fd limit (256 on macOS, 1024 on Linux by default)
+///
+/// Non-leakable resources (Socket, ProcessHandle, ThreadHandle) and
+/// Unknown families are NOT tracked for leaks. Unknown families are
+/// conservatively excluded because the ownership solver may not have
+/// proper release-evidence support for them (e.g., WIN32_HEAP).
+///
+/// # Arguments
+/// * `family_id` - The resource family identifier to check.
+///
+/// # Returns
+/// `true` if the family represents a leakable resource, `false` otherwise.
+pub(crate) fn is_leakable_resource(family_id: FamilyId) -> bool {
+    match family_to_resource_class(family_id) {
+        ResourceClass::HeapMemory | ResourceClass::RuntimeManaged => true,
+        ResourceClass::FileDescriptor => true,
+        // Socket, ProcessHandle, ThreadHandle, Unknown — not tracked for leaks.
+        // Unknown families are conservatively NOT treated as leakable because
+        // the ownership solver may not have proper release tracking for them
+        // (e.g., WIN32_HEAP/HeapAlloc+HeapFree). Explicitly-mapped families
+        // (FileDescriptor, HeapMemory) are tracked; unknown families are suppressed.
+        ResourceClass::Socket
+        | ResourceClass::ProcessHandle
+        | ResourceClass::ThreadHandle
+        | ResourceClass::Unknown
+        | ResourceClass::MmapRegion => false,
+    }
+}
+
 /// Determines if a resource family represents memory resources.
 ///
 /// HeapMemory and RuntimeManaged families are considered memory-like
@@ -251,6 +287,14 @@ pub(crate) fn is_same_language_allocator_wrapper_noise(
     candidate: &IssueCandidate,
     index: &crate::module_index::ModuleIndex,
 ) -> bool {
+    // Candidates with FFI evidence represent concrete cross-boundary
+    // violations (e.g., free-then-callback UAF). They must not be
+    // suppressed as "same-language wrapper noise" regardless of caller
+    // language analysis.
+    if candidate.has_ffi_evidence() {
+        return false;
+    }
+
     if !matches!(
         candidate.kind,
         IssueCandidateKind::CrossFamilyFree

@@ -532,6 +532,53 @@ pub fn behavior_to_summary(
                 ));
                 summary.confidence = summary.confidence.max(0.92);
             }
+
+            BehaviorPattern::StackToGlobalEscape {
+                global_target,
+                alloca_reg,
+            } => {
+                summary.add_effect(Effect::StoresArgToGlobal { arg: 0 });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: alloca '{}' stored to global '{}' → stack-to-global escape (use-after-return)",
+                        alloca_reg, global_target
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.90);
+            }
+
+            BehaviorPattern::ReturnAlias { aliased_param } => {
+                summary.add_effect(Effect::ReturnsBorrowed);
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::IrPattern,
+                    format!(
+                        "IR pattern: return value aliases parameter '{}' → return-alias (no ownership transfer)",
+                        aliased_param
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.85);
+            }
+
+            BehaviorPattern::FreeThenCallbackUse {
+                freed_reg,
+                use_callee,
+            } => {
+                let callee_name = use_callee.as_deref().unwrap_or("<indirect_call>");
+                summary.add_effect(Effect::Release {
+                    family: FamilyId::C_HEAP,
+                    arg: 0,
+                });
+                summary.add_effect(Effect::EscapesToCallback { arg: 0 });
+                summary.add_evidence(Evidence::new(
+                    EvidenceKind::UseAfterFree,
+                    format!(
+                        "IR pattern: register '{}' freed then passed to '{}' — use-after-free (CWE-416)",
+                        freed_reg, callee_name
+                    ),
+                ));
+                summary.confidence = summary.confidence.max(0.90);
+            }
         }
     }
 

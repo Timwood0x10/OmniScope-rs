@@ -78,6 +78,8 @@ fn test_expected_bug_metadata() {
         expected_release_family: Some("CPP_NEW_SCALAR"),
         expected_boundary_kind: Some("CrossLanguage"),
         known_noise: false,
+        forbidden_kinds: &[],
+        category: BugCategory::WrongRelease,
     };
 
     // Verify all fields are accessible

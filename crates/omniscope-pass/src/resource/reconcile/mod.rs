@@ -74,14 +74,17 @@ pub(crate) enum FaultClass {
     /// Release operation itself is wrong.
     /// → CrossFamilyFree, CrossLanguageFree, InvalidBorrowedFree
     WrongRelease,
-    /// Released twice (or use after release).
-    /// → DoubleRelease, DoubleReclaim, UseAfterFree, UseAfterRelease
+    /// Released twice (or more).
+    /// → DoubleRelease, DoubleReclaim
     DoubleRelease,
+    /// Resource freed then used (load/store/call/callback).
+    /// → UseAfterFree, UseAfterRelease, CallbackEscape
+    UseAfterRelease,
     /// Not released.
     /// → ConditionalLeak, DefiniteLeak, OwnershipEscapeLeak
     Leak,
     /// Boundary / null misuse.
-    /// → UncheckedFfiReturn, NullDereference, BorrowEscape, CallbackEscape
+    /// → UncheckedFfiReturn, NullDereference, BorrowEscape
     BoundaryMisuse,
     /// Needs a model annotation — unknown family or cleanup.
     /// → NeedsModel
@@ -97,19 +100,21 @@ impl FaultClass {
             | IssueCandidateKind::CrossLanguageFree
             | IssueCandidateKind::InvalidBorrowedFree => FaultClass::WrongRelease,
             // DoubleRelease family
-            IssueCandidateKind::DoubleRelease
-            | IssueCandidateKind::DoubleReclaim
-            | IssueCandidateKind::UseAfterFree
-            | IssueCandidateKind::UseAfterRelease => FaultClass::DoubleRelease,
+            IssueCandidateKind::DoubleRelease | IssueCandidateKind::DoubleReclaim => {
+                FaultClass::DoubleRelease
+            }
+            // UseAfterRelease family — resource freed then used
+            IssueCandidateKind::UseAfterFree
+            | IssueCandidateKind::UseAfterRelease
+            | IssueCandidateKind::CallbackEscape => FaultClass::UseAfterRelease,
             // Leak family
             IssueCandidateKind::ConditionalLeak
             | IssueCandidateKind::DefiniteLeak
             | IssueCandidateKind::OwnershipEscapeLeak => FaultClass::Leak,
-            // BoundaryMisuse family
+            // BoundaryMisuse family (excluding CallbackEscape which is now UseAfterRelease)
             IssueCandidateKind::UncheckedFfiReturn
             | IssueCandidateKind::NullDereference
-            | IssueCandidateKind::BorrowEscape
-            | IssueCandidateKind::CallbackEscape => FaultClass::BoundaryMisuse,
+            | IssueCandidateKind::BorrowEscape => FaultClass::BoundaryMisuse,
             // Unmodeled
             IssueCandidateKind::NeedsModel => FaultClass::Unmodeled,
         }
@@ -159,6 +164,12 @@ pub(crate) fn subsumes(cause: FaultClass, symptom: FaultClass) -> bool {
         // A boundary null-deref makes later paths unreachable; the leak
         // is noise.
         | (BoundaryMisuse, Leak)
+        // Use-after-release is more specific than double-release:
+        // when a freed resource is subsequently used, that UAF evidence
+        // subsumes an imprecise "released twice" classification on the
+        // same resource. The UAF is the root cause; DoubleRelease is
+        // often a side effect of the same bug pattern.
+        | (UseAfterRelease, DoubleRelease)
     )
     // Note: WrongRelease and DoubleRelease do NOT subsume each other
     //       (they may be two real bugs).
@@ -253,11 +264,14 @@ fn verdict_confidence(candidate: &IssueCandidate) -> u8 {
 
 /// Arbitrates within a single group of candidates sharing the same resource.
 ///
-/// Two rules:
+/// Three rules:
 /// 1. **Subsumption**: if a `cause` FaultClass subsumes a `symptom`
 ///    FaultClass on the same resource, the symptom is tagged `SubsumedBy`.
 /// 2. **Dedup**: multiple candidates of the same FaultClass → keep the
 ///    one with highest confidence, tag the rest `DuplicateOf`.
+/// 3. **Leak alloc-dedup**: for Leak candidates on the same resource with
+///    the same alloc function, keep only one (avoids duplicate ConditionalLeak
+///    reports for the same allocation site).
 fn reconcile_group(
     candidates: &[IssueCandidate],
     members: &[usize],
@@ -285,6 +299,9 @@ fn reconcile_group(
             // ExplainedSafe CrossFamilyFree) must not suppress a reportable
             // symptom (e.g. ConfirmedIssue ConditionalLeak), because that would
             // cause a TP→FN regression — neither candidate gets emitted.
+            // Use map_or rather than is_none_or: MSRV is 1.75,
+            // but Option::is_none_or() stabilized in 1.82.
+            #[allow(clippy::unnecessary_map_or)]
             if subsumes(cause_class, symptom_class)
                 && reportable_set.map_or(true, |s| s.contains(&cause_idx))
             {
@@ -309,7 +326,7 @@ fn reconcile_group(
         class_members.entry(class).or_default().push(member_idx);
     }
 
-    for (_class, indices) in class_members {
+    for indices in class_members.values() {
         if indices.len() < 2 {
             continue;
         }
@@ -324,9 +341,38 @@ fn reconcile_group(
             })
             .expect("non-empty");
 
-        for &idx in &indices {
+        for &idx in indices {
             if idx != best_idx {
                 actions[idx] = ReconcileAction::DuplicateOf(best_idx);
+            }
+        }
+    }
+
+    // ── Rule 2b: same-alloc-function leak dedup ──
+    // For Leak candidates sharing the same ResourceKey AND same alloc_function,
+    // keep only one. This handles cases like cpp_fft where two ConditionalLeak
+    // candidates are generated for the same _Znam allocation.
+    let leak_indices: Vec<usize> = class_members
+        .get(&FaultClass::Leak)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .copied()
+        .filter(|&idx| matches!(actions[idx], ReconcileAction::Keep))
+        .collect();
+
+    if leak_indices.len() >= 2 {
+        let mut seen_alloc: HashSet<String> = HashSet::new();
+        let mut alloc_keeper: HashMap<String, usize> = HashMap::new();
+        for &idx in &leak_indices {
+            let alloc_fn = candidates[idx].alloc_function.clone();
+            if !seen_alloc.insert(alloc_fn.clone()) {
+                // Duplicate alloc function → mark as duplicate of the first-seen keeper
+                if let Some(&kept_idx) = alloc_keeper.get(&alloc_fn) {
+                    actions[idx] = ReconcileAction::DuplicateOf(kept_idx);
+                }
+            } else {
+                alloc_keeper.insert(alloc_fn, idx);
             }
         }
     }

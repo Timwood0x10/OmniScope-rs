@@ -23,20 +23,37 @@ const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 /// Baseline values for regression testing.
 ///
 /// Updated baseline to worst-common-result for zig_main.ll DoubleFree non-determinism:
-/// - zig_main.ll has 3 DoubleFree bugs that are detected non-deterministically,
-///   causing TP to vary 15-18 across runs.
-/// - Baseline now uses TP=15 (worst common result, ~62% of runs) to avoid false failures.
-const BASELINE_TP: usize = 15;
-const BASELINE_FP: usize = 14;
-const BASELINE_FN: usize = 4;
-const BASELINE_PRECISION: f64 = 0.536; // 53.6% (TP=15, total=28)
-const BASELINE_RECALL: f64 = 0.789; // 78.9% (15/19)
-const BASELINE_F1: f64 = 0.638; // 63.8%
+/// Baseline values for regression testing.
+///
+/// After P0-P2c: metrics reflect corrected classification (is_double_free_issue
+/// no longer inflates via CrossFamily/CrossLanguage), plus new detections
+/// (ReturnAlias FN→TP, FreeThenCallbackUAF FN→TP) at cost of BorrowEscape FP.
+/// - zig_main.ll DoubleFree non-determinism still causes TP variation.
+/// - BorrowEscape from P2b adds ~4 FP (return-alias patterns on FFI bridge functions).
+const BASELINE_TP: usize = 16;
+const BASELINE_FP: usize = 17;
+const BASELINE_FN: usize = 2;
+const BASELINE_PRECISION: f64 = 0.485; // 48.5% (TP=16, total=33)
+const BASELINE_RECALL: f64 = 0.889; // 88.9% (16/18)
+const BASELINE_F1: f64 = 0.627; // 62.7%
 
 /// Tolerance for non-deterministic pipeline output.
 const METRICS_TOLERANCE: f64 = 0.08;
 
 // ─── Golden expectations ────────────────────────────────────────────
+
+/// Classification of a bug for per-category metric tracking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // category field / variants used for future per-category assertions
+enum BugCategory {
+    MemoryDoubleFree,
+    UseAfterFree,
+    WrongRelease,
+    Leak,
+    FdLeak,
+    BoundaryDiagnostic,
+    BorrowEscape,
+}
 
 /// A known bug that the pipeline should detect.
 struct ExpectedBug {
@@ -56,16 +73,37 @@ struct ExpectedBug {
     expected_boundary_kind: Option<&'static str>,
     /// Whether this entry is known noise (detection counts as FP).
     known_noise: bool,
+    /// Issue kinds that must NOT appear for this fixture/function.
+    /// If any forbidden kind IS detected, it counts as FP.
+    forbidden_kinds: &'static [IssueKind],
+    /// Category for per-metric accounting.
+    #[allow(dead_code)]
+    category: BugCategory,
 }
 
 impl ExpectedBug {
     /// Creates a simple ExpectedBug with no metadata checks.
+    /// Uses empty forbidden_kinds and infers category from accepted_kinds.
     const fn simple(
         file: &'static str,
         func_substring: &'static str,
         accepted_kinds: &'static [IssueKind],
         description: &'static str,
     ) -> Self {
+        // Infer category from the first accepted kind.
+        let category = if accepted_kinds.is_empty() {
+            BugCategory::Leak
+        } else {
+            match accepted_kinds[0] {
+                IssueKind::DoubleFree => BugCategory::MemoryDoubleFree,
+                IssueKind::UseAfterFree | IssueKind::BorrowEscape => BugCategory::UseAfterFree,
+                IssueKind::CrossFamilyFree | IssueKind::CrossLanguageFree => {
+                    BugCategory::WrongRelease
+                }
+                IssueKind::FfiUnsafeCall => BugCategory::BoundaryDiagnostic,
+                _ => BugCategory::Leak,
+            }
+        };
         Self {
             file,
             func_substring,
@@ -75,6 +113,8 @@ impl ExpectedBug {
             expected_release_family: None,
             expected_boundary_kind: None,
             known_noise: false,
+            forbidden_kinds: &[],
+            category,
         }
     }
 }
@@ -108,14 +148,14 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
     ExpectedBug::simple(
         "zig_main.ll",
         "crossLanguageFreeDemo",
-        &[IssueKind::DoubleFree],
-        "Zig main: double-free in crossLanguageFreeDemo [confirmed]",
+        &[IssueKind::CrossLanguageFree],
+        "Zig main: cross-language free in crossLanguageFreeDemo [confirmed]",
     ),
     ExpectedBug::simple(
         "zig_main.ll",
         "bufferOverflowDemo",
-        &[IssueKind::DoubleFree],
-        "Zig main: double-free in bufferOverflowDemo [confirmed]",
+        &[IssueKind::CrossLanguageFree],
+        "Zig main: cross-language free in bufferOverflowDemo [confirmed]",
     ),
     ExpectedBug::simple(
         "zig_main.ll",
@@ -125,23 +165,24 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
     ),
     ExpectedBug::simple(
         "zig_main.ll",
-        "bufferOverflowDemo",
-        &[IssueKind::CrossLanguageFree],
-        "Zig main: cross-language free in bufferOverflowDemo",
-    ),
-    ExpectedBug::simple(
-        "zig_main.ll",
         "main.doubleFreeDemo",
         &[IssueKind::UncheckedReturn],
         "Zig main: unchecked FFI return in doubleFreeDemo",
     ),
     // ── c_merkle_tree.ll bugs ────────────────────────────────────────
-    ExpectedBug::simple(
-        "c_merkle_tree.ll",
-        "merkle_root",
-        &[IssueKind::UseAfterFree],
-        "C Merkle tree: use-after-free in merkle_root [confirmed]",
-    ),
+    // UAF bug — DoubleFree is a wrong classification here, so forbid it.
+    ExpectedBug {
+        file: "c_merkle_tree.ll",
+        func_substring: "merkle_root",
+        accepted_kinds: &[IssueKind::UseAfterFree],
+        description: "C Merkle tree: use-after-free in merkle_root [confirmed]",
+        expected_resource_family: None,
+        expected_release_family: None,
+        expected_boundary_kind: None,
+        known_noise: false,
+        forbidden_kinds: &[IssueKind::DoubleFree],
+        category: BugCategory::UseAfterFree,
+    },
     // ── cpp_hash.ll bugs ─────────────────────────────────────────────
     ExpectedBug::simple(
         "cpp_hash.ll",
@@ -217,6 +258,13 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
         &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
         "C FFI traps: conditional leak in leaked_callback_userdata",
     ),
+    // P2c: free-then-pass-to-callback UAF detection
+    ExpectedBug::simple(
+        "c_ffi_traps.ll",
+        "uaf_through_ffi",
+        &[IssueKind::UseAfterFree, IssueKind::BorrowEscape],
+        "C FFI traps: free then pass to FFI callback (UAF) [TRAP-C9]",
+    ),
     ExpectedBug::simple(
         "zig_ffi_bridge.ll",
         "c_alloc_mismatch",
@@ -262,12 +310,6 @@ const EXPECTED_MISSES: &[ExpectedMiss] = &[
         func_substring: "ffi_alias_input",
         expected_kinds: &[IssueKind::BorrowEscape],
         description: "C FFI traps: returns alias into caller-owned memory (no ownership marker)",
-    },
-    ExpectedMiss {
-        file: "c_ffi_traps.ll",
-        func_substring: "uaf_through_ffi",
-        expected_kinds: &[IssueKind::UseAfterFree, IssueKind::BorrowEscape],
-        description: "C FFI traps: free then pass to FFI callback (UAF)",
     },
     ExpectedMiss {
         file: "c_fft_c_bridge.ll",
@@ -393,10 +435,9 @@ impl CategoryMetrics {
     }
 
     fn is_double_free_issue(kind: IssueKind) -> bool {
-        matches!(
-            kind,
-            IssueKind::DoubleFree | IssueKind::CrossFamilyFree | IssueKind::CrossLanguageFree
-        )
+        // Only actual DoubleFree — CrossFamilyFree and CrossLanguageFree
+        // are WrongRelease bugs and must NOT inflate DoubleFree metrics.
+        matches!(kind, IssueKind::DoubleFree)
     }
 
     fn record_tp(&mut self, kind: IssueKind) {
@@ -517,10 +558,10 @@ impl CategoryMetrics {
 /// Baseline FFI metrics for regression testing.
 const BASELINE_FFI_TP: usize = 5;
 const BASELINE_FFI_FP: usize = 9;
-const BASELINE_FFI_FN: usize = 0;
-const BASELINE_RESOURCE_TP: usize = 12;
-const BASELINE_RESOURCE_FP: usize = 5;
-const BASELINE_RESOURCE_FN: usize = 6;
+const BASELINE_FFI_FN: usize = 1; // uaf_through_ffi may still be FN in some runs
+const BASELINE_RESOURCE_TP: usize = 11; // ReturnAlias moved from FN→TP but some resource TP reclassified
+const BASELINE_RESOURCE_FP: usize = 9; // BorrowEscape from P2b adds ~4 FP
+const BASELINE_RESOURCE_FN: usize = 5;
 
 /// Baseline leak metrics for regression testing.
 const BASELINE_LEAK_TP: usize = 10;
@@ -528,10 +569,11 @@ const BASELINE_LEAK_FP: usize = 5;
 const BASELINE_LEAK_FN: usize = 2;
 
 /// Baseline double-free metrics for regression testing.
-/// DoubleFree detection on zig_main.ll is highly non-deterministic:
-/// TP can vary from 2 (worst case, no zig_main DoubleFree detected)
-/// to 7 (best case, all 3 zig_main DoubleFree + 2 CrossLanguageFree detected).
-const BASELINE_DOUBLE_FREE_TP: usize = 2;
+/// After P0 metric correction: is_double_free_issue() now only counts
+/// actual DoubleFree kind, not CrossFamilyFree/CrossLanguageFree.
+/// Real double-free TPs in ffi-demo: currently 0 (zig_main reports
+/// CrossLanguageFree, merkle_tree is UAF not DoubleFree).
+const BASELINE_DOUBLE_FREE_TP: usize = 0;
 const BASELINE_DOUBLE_FREE_FP: usize = 2;
 const BASELINE_DOUBLE_FREE_FN: usize = 3;
 

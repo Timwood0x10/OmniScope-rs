@@ -27,6 +27,7 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
 omniscope-ir = { path = "../omniscope-ir" }
+omniscope-pipeline = { path = "../omniscope-pipeline" }
 tracing-subscriber = { workspace = true }
 
 [[bench]]

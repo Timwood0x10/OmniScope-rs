@@ -1701,3 +1701,151 @@ fn test_phase5_static_lifetime_does_not_suppress_function_local_leak() {
         "Function-local DefiniteLeak without StaticLifetimeSink must remain ConfirmedIssue"
     );
 }
+
+// ============================================================================
+// File Descriptor (FILE_DESCRIPTOR family) leak detection tests
+// ============================================================================
+
+/// Objective: Verify that FILE_DESCRIPTOR family is treated as a leakable
+/// resource, not suppressed like non-leakable handle types.
+/// Invariants: is_leakable_resource(FILE_DESCRIPTOR) == true.
+#[test]
+fn test_fd_family_is_leakable() {
+    assert!(
+        is_leakable_resource(FamilyId::FILE_DESCRIPTOR),
+        "FILE_DESCRIPTOR family must be leakable — fd leaks exhaust process fd limit"
+    );
+}
+
+/// Objective: Verify that a file descriptor leak (fopen without fclose)
+/// is verified as a probable issue, not suppressed to ExplainedSafe.
+/// Invariants: ConditionalLeak with FILE_DESCRIPTOR family → ProbableIssue.
+#[test]
+fn test_fd_leak_fopen_without_fclose() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        200,
+        IssueCandidateKind::ConditionalLeak,
+        FamilyId::FILE_DESCRIPTOR,
+        "fopen",
+    )
+    .with_alloc_caller("c_fft_test_signal");
+
+    let verdict = verify_candidate(&candidate, &registry, None, None);
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ProbableIssue,
+        "fopen without fclose (FD leak) must be ProbableIssue, not ExplainedSafe"
+    );
+}
+
+/// Objective: Verify that a definite file descriptor leak (open without close)
+/// is verified as a confirmed issue.
+/// Invariants: DefiniteLeak with FILE_DESCRIPTOR family → ConfirmedIssue.
+#[test]
+fn test_fd_definite_leak_open_without_close() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        201,
+        IssueCandidateKind::DefiniteLeak,
+        FamilyId::FILE_DESCRIPTOR,
+        "open",
+    )
+    .with_alloc_caller("process_data");
+
+    let verdict = verify_candidate(&candidate, &registry, None, None);
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ConfirmedIssue,
+        "open without close (definite FD leak) must be ConfirmedIssue"
+    );
+}
+
+/// Objective: Verify that a socket leak (socket without close) is detected.
+/// Invariants: ConditionalLeak with FILE_DESCRIPTOR family from socket → ProbableIssue.
+#[test]
+fn test_fd_leak_socket_without_close() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        202,
+        IssueCandidateKind::ConditionalLeak,
+        FamilyId::FILE_DESCRIPTOR,
+        "socket",
+    )
+    .with_alloc_caller("create_server");
+
+    let verdict = verify_candidate(&candidate, &registry, None, None);
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ProbableIssue,
+        "socket without close (FD leak) must be ProbableIssue"
+    );
+}
+
+/// Objective: Verify that fdopen+fclose is tracked in the same family and
+/// a missing fclose on an fdopen result is detected as an FD leak.
+/// Invariants: ConditionalLeak with FILE_DESCRIPTOR from fdopen → ProbableIssue.
+#[test]
+fn test_fd_leak_fdopen_without_fclose() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        203,
+        IssueCandidateKind::ConditionalLeak,
+        FamilyId::FILE_DESCRIPTOR,
+        "fdopen",
+    )
+    .with_alloc_caller("wrap_fd_to_stream");
+
+    let verdict = verify_candidate(&candidate, &registry, None, None);
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ProbableIssue,
+        "fdopen without fclose (FD leak via stream) must be ProbableIssue"
+    );
+}
+
+/// Objective: Verify that the verdict description for FD leaks mentions
+/// the resource type correctly.
+/// Invariants: Description contains "conditional leak" and function name.
+#[test]
+fn test_verdict_description_fd_conditional_leak() {
+    let candidate = IssueCandidate::new(
+        204,
+        IssueCandidateKind::ConditionalLeak,
+        FamilyId::FILE_DESCRIPTOR,
+        "fopen",
+    );
+
+    let desc = build_verdict_description(&candidate, VerifierVerdict::ProbableIssue);
+    assert!(
+        desc.contains("conditional leak"),
+        "FD leak description must mention 'conditional leak', got: {}",
+        desc
+    );
+    assert!(
+        desc.contains("fopen"),
+        "FD leak description must mention the alloc function 'fopen'"
+    );
+}
+
+/// Objective: Verify that memory leaks still work correctly alongside
+/// FD leak detection — no regression in existing C_HEAP behavior.
+/// Invariants: ConditionalLeak with C_HEAP → ProbableIssue (unchanged).
+#[test]
+fn test_memory_leak_still_works_after_fd_support() {
+    let registry = FamilyRegistry::new();
+    let candidate = IssueCandidate::new(
+        205,
+        IssueCandidateKind::ConditionalLeak,
+        FamilyId::C_HEAP,
+        "malloc",
+    )
+    .with_alloc_caller("legacy_function");
+
+    let verdict = verify_candidate(&candidate, &registry, None, None);
+    assert_eq!(
+        verdict,
+        VerifierVerdict::ProbableIssue,
+        "Memory leak detection must still work after adding FD support"
+    );
+}

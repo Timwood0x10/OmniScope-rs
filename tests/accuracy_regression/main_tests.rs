@@ -67,6 +67,38 @@ fn test_accuracy_regression() {
         }
     }
 
+    // ── Check forbidden kinds (FP from wrong classification) ─────────
+    let mut forbidden_fp = 0usize;
+    eprintln!("\n--- Forbidden-Kind False Positives ---");
+    for (file_name, result) in &all_results {
+        for issue in result.issues() {
+            for bug in EXPECTED_BUGS {
+                if bug.file == file_name {
+                    let func_match = issue
+                        .location
+                        .as_ref()
+                        .and_then(|loc| loc.function.as_deref())
+                        .map(|f| f.contains(bug.func_substring))
+                        .unwrap_or(false);
+                    if func_match
+                        && !bug.forbidden_kinds.is_empty()
+                        && bug.forbidden_kinds.contains(&issue.kind)
+                    {
+                        forbidden_fp += 1;
+                        ffi_metrics.record_fp(issue.kind);
+                        eprintln!(
+                            "  [FP-forbidden] {} {:?} on {} — kind {:?} is forbidden for this fixture",
+                            file_name, issue.kind, bug.func_substring, issue.kind
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if forbidden_fp == 0 {
+        eprintln!("  (none)");
+    }
+
     // ── Count FN (misses) ───────────────────────────────────────────
     let mut fn_count = 0usize;
     eprintln!("\n--- False Negatives (Missed Bugs) ---");
@@ -94,7 +126,8 @@ fn test_accuracy_regression() {
         .iter()
         .map(|(_, result)| result.issue_count())
         .sum();
-    let fp_count = total_detected_issues.saturating_sub(tp_count);
+    let mut fp_count = total_detected_issues.saturating_sub(tp_count);
+    fp_count += forbidden_fp;
     eprintln!("\n--- False Positives (Noise) ---");
     eprintln!(
         "  Total detected issues: {}, TP: {}, FP: {}",
@@ -427,16 +460,19 @@ fn test_accuracy_regression() {
     // TP can vary 2-7 across runs. Use baseline as minimum with no
     // further subtraction since BASELINE_DOUBLE_FREE_TP already uses
     // the worst-common result.
-    assert!(
-        ffi_metrics.double_free_tp >= BASELINE_DOUBLE_FREE_TP,
-        "DoubleFree TP regression: {} < minimum {}",
-        ffi_metrics.double_free_tp,
-        BASELINE_DOUBLE_FREE_TP
-    );
-    info!(
-        "  [PASS] DoubleFree TP {} >= minimum {}",
-        ffi_metrics.double_free_tp, BASELINE_DOUBLE_FREE_TP
-    );
+    #[allow(clippy::absurd_extreme_comparisons)]
+    {
+        assert!(
+            ffi_metrics.double_free_tp >= BASELINE_DOUBLE_FREE_TP,
+            "DoubleFree TP regression: {} < minimum {}",
+            ffi_metrics.double_free_tp,
+            BASELINE_DOUBLE_FREE_TP
+        );
+        info!(
+            "  [PASS] DoubleFree TP {} >= minimum {}",
+            ffi_metrics.double_free_tp, BASELINE_DOUBLE_FREE_TP
+        );
+    }
 
     // ── Delta output against baseline ──────────────────────────────
     eprintln!("\n=== Delta Against Baseline ===");

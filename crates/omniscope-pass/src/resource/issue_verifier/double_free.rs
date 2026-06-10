@@ -75,6 +75,24 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
     // proving the pointer is null at the second release, this is
     // still a confirmed issue.
 
+    // ── Use-after-release gate ──
+    // If the candidate carries both MultipleRelease AND UseAfterFree
+    // evidence, the actual bug is likely use-after-free (UAF) rather than
+    // pure double-release. The free+use pattern gets misclassified as
+    // double-free when the post-release dereference triggers a second
+    // release on an aliased path. Downgrade to Diagnostic so the
+    // reconciliation layer can reclassify via UseAfterRelease.
+    let has_use_after = bundle.evidence_kinds.contains(&EvidenceKind::UseAfterFree);
+    if has_same_instance && has_use_after {
+        tracing::debug!(
+            candidate_id = bundle.candidate_id,
+            "DoubleFree UAF gate: candidate has both MultipleRelease and \
+             UseAfterFree evidence — appears to be use-after-free rather \
+             than pure double-release"
+        );
+        return VerifierVerdict::Diagnostic;
+    }
+
     // Default: double-free is a confirmed issue when we have
     // same-instance evidence and no alias rejection.
     VerifierVerdict::ConfirmedIssue

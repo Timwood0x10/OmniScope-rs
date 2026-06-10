@@ -124,13 +124,23 @@ fn test_fault_class_mapping_exhaustive() {
     for kind in [
         IssueCandidateKind::DoubleRelease,
         IssueCandidateKind::DoubleReclaim,
-        IssueCandidateKind::UseAfterFree,
-        IssueCandidateKind::UseAfterRelease,
     ] {
         assert_eq!(
             FaultClass::of(kind),
             DoubleRelease,
             "{kind:?} must map to DoubleRelease"
+        );
+    }
+    // UseAfterRelease (split from DoubleRelease/BoundaryMisuse)
+    for kind in [
+        IssueCandidateKind::UseAfterFree,
+        IssueCandidateKind::UseAfterRelease,
+        IssueCandidateKind::CallbackEscape,
+    ] {
+        assert_eq!(
+            FaultClass::of(kind),
+            UseAfterRelease,
+            "{kind:?} must map to UseAfterRelease"
         );
     }
     // Leak
@@ -141,12 +151,11 @@ fn test_fault_class_mapping_exhaustive() {
     ] {
         assert_eq!(FaultClass::of(kind), Leak, "{kind:?} must map to Leak");
     }
-    // BoundaryMisuse
+    // BoundaryMisuse (excluding CallbackEscape which is now UseAfterRelease)
     for kind in [
         IssueCandidateKind::UncheckedFfiReturn,
         IssueCandidateKind::NullDereference,
         IssueCandidateKind::BorrowEscape,
-        IssueCandidateKind::CallbackEscape,
     ] {
         assert_eq!(
             FaultClass::of(kind),
@@ -482,4 +491,71 @@ fn test_reconcile_both_reportable_normal_subsumption() {
         }
         other => panic!("expected SubsumedBy when both are reportable, got {other:?}"),
     }
+}
+
+// ── UseAfterRelease subsumption ───────────────────────────────────────
+
+/// Objective: UseAfterRelease (UAF) subsumes DoubleRelease on the same
+/// resource — UAF is more specific and informative than "released twice".
+/// Invariants:
+///   - Candidate 0: UseAfterFree → UseAfterRelease class, Keep
+///   - Candidate 1: DoubleRelease → DoubleRelease class, SubsumedBy UseAfterRelease
+#[test]
+fn test_reconcile_use_after_release_subsumes_double_release() {
+    let mut c0 = make_candidate(0, IssueCandidateKind::UseAfterFree, Some(50));
+    c0.verdict = Some(VerifierVerdict::ConfirmedIssue);
+    let mut c1 = make_candidate(1, IssueCandidateKind::DoubleRelease, Some(50));
+    c1.verdict = Some(VerifierVerdict::ConfirmedIssue);
+
+    let reportable: std::collections::HashSet<usize> = std::collections::HashSet::from([0, 1]);
+    let actions = reconcile_candidates(&[c0, c1], Some(&reportable));
+
+    assert_eq!(
+        actions[0],
+        ReconcileAction::Keep,
+        "UAF (cause) must be Keep"
+    );
+    match &actions[1] {
+        ReconcileAction::SubsumedBy { class, .. } => {
+            assert_eq!(
+                *class,
+                FaultClass::UseAfterRelease,
+                "DoubleRelease must be subsumed by UseAfterRelease"
+            );
+        }
+        other => panic!("expected SubsumedBy, got {other:?}"),
+    }
+}
+
+// ── Same-alloc-function leak dedup (Rule 2b) ─────────────────────────
+
+/// Objective: Two Leak candidates for the same resource AND same alloc
+/// function are deduplicated — only one is kept.
+/// Invariants:
+///   - Two Leak candidates with same resource_id and default alloc_function ("malloc")
+///   - Exactly one Keep, one DuplicateOf
+#[test]
+fn test_reconcile_same_alloc_leak_dedup() {
+    let c1 = make_candidate(1, IssueCandidateKind::ConditionalLeak, Some(100));
+    let c2 = make_candidate(2, IssueCandidateKind::DefiniteLeak, Some(100));
+    // Both use "malloc" as alloc_function from make_candidate
+
+    let actions = reconcile_candidates(&[c1, c2], None);
+
+    let keep_count = actions
+        .iter()
+        .filter(|a| **a == ReconcileAction::Keep)
+        .count();
+    let dup_count = actions
+        .iter()
+        .filter(|a| matches!(a, ReconcileAction::DuplicateOf(_)))
+        .count();
+    assert_eq!(
+        keep_count, 1,
+        "only one leak kept for same resource + same alloc function"
+    );
+    assert_eq!(
+        dup_count, 1,
+        "one leak marked as DuplicateOf for same alloc function dedup"
+    );
 }

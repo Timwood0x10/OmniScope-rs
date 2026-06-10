@@ -642,3 +642,282 @@ fn test_new_patterns_coexist_with_existing() {
         behavior.patterns
     );
 }
+
+/// Objective: Verify StackToGlobalEscape detection fires when alloca-derived
+/// pointer is stored to a global variable.
+/// Invariants:
+/// - alloca + store to @global must produce StackToGlobalEscape pattern
+/// - The pattern must capture the global target and alloca register
+#[test]
+fn test_stack_to_global_escape_detection() {
+    let ir = r#"
+        define void @ffi_register_callback(ptr %cb, ptr %user_data) {
+entry:
+            %buf = alloca [40 x i8], align 1
+            store ptr %cb, ptr @g_callback, align 8
+            store ptr %user_data, ptr @g_user_data, align 8
+            store ptr %buf, ptr @g_last_message, align 8
+            ret void
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let sge = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::StackToGlobalEscape { .. }));
+    assert!(
+        sge.is_some(),
+        "Should detect StackToGlobalEscape, got: {:?}",
+        behavior.patterns
+    );
+
+    if let Some(BehaviorPattern::StackToGlobalEscape {
+        global_target,
+        alloca_reg,
+    }) = sge
+    {
+        assert!(
+            global_target.contains("g_last_message"),
+            "Global target should be g_last_message, got: {global_target}"
+        );
+        assert_eq!(
+            alloca_reg, "%buf",
+            "Alloca register should be %%buf, got: {alloca_reg}"
+        );
+    }
+}
+
+/// Objective: Verify ReturnAlias detection fires when function returns
+/// a GEP-derived alias of an input parameter.
+/// Invariants:
+/// - ret of GEP(param) must produce ReturnAlias pattern
+/// - Direct param return must also produce ReturnAlias pattern
+#[test]
+fn test_return_alias_detection_gep() {
+    let ir = r#"
+        define ptr @ffi_alias_input(ptr %data, i64 %len) {
+entry:
+            %is_null = icmp eq ptr %data, null
+            %is_zero = icmp eq i64 %len, 0
+            %or_cond = or i1 %is_null, %is_zero
+            %half_len = lshr i64 %len, 1
+            %offset_ptr = getelementptr inbounds nuw i8, ptr %data, i64 %half_len
+            %result = select i1 %or_cond, ptr null, ptr %offset_ptr
+            ret ptr %result
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let ra = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::ReturnAlias { .. }));
+    assert!(
+        ra.is_some(),
+        "Should detect ReturnAlias for GEP-of-param, got: {:?}",
+        behavior.patterns
+    );
+
+    if let Some(BehaviorPattern::ReturnAlias { aliased_param }) = ra {
+        assert_eq!(
+            aliased_param, "%data",
+            "Aliased param should be %%data, got: {aliased_param}"
+        );
+    }
+}
+
+/// Objective: Verify ReturnAlias does NOT fire for functions that return
+/// call results (allocations) rather than parameter aliases.
+/// Invariants:
+/// - ret of malloc() must NOT produce ReturnAlias
+#[test]
+fn test_return_alias_no_false_positive_on_alloc() {
+    let ir = r#"
+        define ptr @make_buffer(i64 %size) {
+entry:
+            %buf = call ptr @malloc(i64 %size)
+            ret ptr %buf
+        }
+    "#;
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let has_return_alias = behavior
+        .patterns
+        .iter()
+        .any(|p| matches!(p, BehaviorPattern::ReturnAlias { .. }));
+    assert!(
+        !has_return_alias,
+        "ReturnAlias should NOT fire for allocation returns, got: {:?}",
+        behavior.patterns
+    );
+}
+
+// ── FreeThenCallbackUse detection tests ──
+
+/// Objective: Verify that FreeThenCallbackUse is detected when a register is
+///            freed and then passed to a subsequent call (direct or indirect).
+/// Invariants: pattern contains FreeThenCallbackUse with correct freed_reg.
+#[test]
+fn test_free_then_callback_use_detection() {
+    // This mirrors the exact IR pattern from uaf_through_ffi in c_ffi_traps.ll
+    let ir = r#"
+        define void @uaf_through_ffi() {
+entry:
+            %1 = call ptr @malloc(i64 noundef 32)
+            %2 = icmp eq ptr %1, null
+            br i1 %2, label %8, label %3
+
+3:
+            call void @free(ptr noundef nonnull %1)
+            %4 = load ptr, ptr @g_callback, align 8
+            %5 = icmp eq ptr %4, null
+            br i1 %5, label %8, label %6
+
+6:
+            %7 = load ptr, ptr @g_user_data, align 8
+            call void %4(ptr noundef %7, ptr noundef nonnull %1, i64 noundef 32)
+            br label %8
+
+8:
+            ret void
+        }
+    "#;
+
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let ftcu = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::FreeThenCallbackUse { .. }));
+    assert!(
+        ftcu.is_some(),
+        "Should detect FreeThenCallbackUse pattern, got: {:?}",
+        behavior.patterns
+    );
+    match ftcu.unwrap() {
+        BehaviorPattern::FreeThenCallbackUse {
+            freed_reg,
+            use_callee,
+        } => {
+            assert_eq!(
+                freed_reg, "%1",
+                "Freed register should be %%1, got: {freed_reg}"
+            );
+            // Indirect call — callee holds the function-pointer register (%4)
+            assert_eq!(
+                use_callee,
+                &Some("%4".to_string()),
+                "Indirect call should have callee set to FP register"
+            );
+        }
+        _ => unreachable!("already matched above"),
+    }
+}
+
+/// Objective: Verify that FreeThenCallbackUse detects indirect calls using freed reg.
+/// Invariants: pattern fires with use_callee set to the function-pointer register.
+#[test]
+fn test_free_then_callback_use_direct_call() {
+    let ir = r#"
+        define void @buggy_func() {
+entry:
+            %buf = call ptr @malloc(i64 64)
+            %cb = load ptr, ptr @g_callback
+            call void @free(ptr %buf)
+            call void %cb(ptr %buf, i64 64)
+            ret void
+        }
+    "#;
+
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let ftcu = behavior
+        .patterns
+        .iter()
+        .find(|p| matches!(p, BehaviorPattern::FreeThenCallbackUse { .. }));
+    assert!(
+        ftcu.is_some(),
+        "Should detect FreeThenCallbackUse for indirect call, got: {:?}",
+        behavior.patterns
+    );
+    match ftcu.unwrap() {
+        BehaviorPattern::FreeThenCallbackUse {
+            freed_reg,
+            use_callee,
+        } => {
+            assert_eq!(freed_reg, "%buf");
+            assert_eq!(
+                use_callee,
+                &Some("%cb".to_string()),
+                "use_callee should be the FP register %cb"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Objective: Verify that FreeThenCallbackUse does NOT fire when there is no
+///            post-free use of the freed register.
+/// Invariants: no FreeThenCallbackUse pattern in a clean free-only sequence.
+#[test]
+fn test_free_then_callback_use_no_false_positive_clean_free() {
+    let ir = r#"
+        define void @clean_func() {
+entry:
+            %buf = call ptr @malloc(i64 64)
+            call void @use_buffer(ptr %buf)
+            call void @free(ptr %buf)
+            ret void
+        }
+    "#;
+
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    let has_ftcu = behavior
+        .patterns
+        .iter()
+        .any(|p| matches!(p, BehaviorPattern::FreeThenCallbackUse { .. }));
+    assert!(
+        !has_ftcu,
+        "FreeThenCallbackUse should NOT fire for clean free-after-use sequence, got: {:?}",
+        behavior.patterns
+    );
+}
+
+/// Objective: Verify that FreeThenCallbackUse does NOT fire for double-free only.
+/// Invariants: two consecutive frees without other use should not trigger this pattern.
+#[test]
+fn test_free_then_callback_use_no_false_positive_double_free_only() {
+    let ir = r#"
+        define void @double_free_only() {
+entry:
+            %buf = call ptr @malloc(i64 64)
+            call void @free(ptr %buf)
+            call void @free(ptr %buf)
+            ret void
+        }
+    "#;
+
+    let body = parse_body(ir);
+    let behavior = extract_behavior(&body);
+
+    // Double-free should not produce FreeThenCallbackUse — the second free is
+    // a release call itself, which we explicitly skip in the detector.
+    let has_ftcu = behavior
+        .patterns
+        .iter()
+        .any(|p| matches!(p, BehaviorPattern::FreeThenCallbackUse { .. }));
+    assert!(
+        !has_ftcu,
+        "FreeThenCallbackUse should NOT fire for double-free-only (no non-release use), \
+         got: {:?}",
+        behavior.patterns
+    );
+}
