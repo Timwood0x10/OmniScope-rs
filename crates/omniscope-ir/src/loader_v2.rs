@@ -915,8 +915,8 @@ fn which(name: &str) -> Option<PathBuf> {
         return None;
     };
 
-    for dir in path_var.split(':') {
-        let candidate = Path::new(dir).join(name);
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate);
         }

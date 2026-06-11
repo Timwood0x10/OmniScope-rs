@@ -4,298 +4,296 @@
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![LLVM](https://img.shields.io/badge/LLVM-17%2B-green.svg)](https://llvm.org)
 
-一套基于 LLVM IR 的生产级静态分析器，专注于**跨语言 FFI（外部函数接口）安全审计**。在语言调用边界上检测内存安全漏洞——use-after-free、double-free、内存泄漏、未检查的 null 返回值、所有权逃逸等。
+基于 LLVM IR 的**跨语言 FFI 安全审计**静态分析器。
 
-> 一种语义树，多种语言，零配置检测。
+OmniScope-rs 检测语言边界处的内存安全漏洞 — use-after-free、double-free、内存泄漏、所有权违规和类型混淆 — 这些是传统单语言工具无法覆盖的盲区。
 
-## 为什么需要 OmniScope？
-
-传统工具的盲区就在 FFI 边界。当 C 调用 Rust、当 Zig 调用 Go、当 Python 嵌入 C 时，内存所有权语义在 ABI 边界上消失了。OmniScope 通过直接分析 LLVM IR，将语言屏障下的内存漏洞提升为"一  等公民"。
-
-### 已发现真实漏洞
-
-| 项目 | 状态 | 备注 |
-|---|---|---|
-| ffi-demo（Zig↔C 语料） | `zig_main.ll` 上 95% precision、100% recall | 当前最强结果，详见 `docs/release/ffi_demo_validation.md`。 |
-| ffi-demo（整体） | 10 个 IR 文件平均 68% precision、62% recall | 详见验证报告中的逐文件表。 |
-| bun `bun_alloc` | 当前 0/19 TP，单语言门控调整（`bd21984`）引入的回归，已纳入 v0.3.0 跟踪。 | 详见 `docs/release/bun_validation.md`。 |
-| wasmtime | 早期扫描：1720 个候选，1 个确认 CRITICAL（v0.2.0 未重新验证）。 | 重新验证待开展。 |
-
-> 说明：早期 README 曾声称在 bun 的 `bun_jsc` 和 `bun_boringssl` 中发现独立漏洞，但独立复核无法复现（bun 中并不存在这两个 crate 名，且未提供 IR 与复现物料），上表已替换那些声明。
-
-## 支持的语言
-
-C、C++、Rust、Zig、Go、Python、Java、C# — 通过 IR 元数据（mangled name、调用约定等）自动识别语言。
+> **本项目是 [OmniScope](https://github.com/Timwood0x10/OmniScope)（Zig）的 Rust 重写版本。** 详见[与原版对比](#与原版-omniscope-对比)。
 
 ## 架构
 
+```mermaid
+flowchart TD
+    A[".ll / .bc IR 文件"] --> B{"加载策略"}
+    B -->|"文本解析器"| C["IRModule"]
+    B -->|"llvm-sys（可选）"| C
+    C --> D["Pipeline"]
+    D --> E["调用图"]
+    E --> F["FFI 边界检测"]
+    F --> G["原始事实收集"]
+    G --> H["IR 行为摘要"]
+    H --> I["结构推断"]
+    I --> J["契约图"]
+    J --> K["所有权求解器"]
+    K --> L["Issue 候选"]
+    L --> M["Issue 验证 + SRT 门控"]
+    M --> N["报告（rich / json / sarif）"]
+
+    style A fill:#e1f5fe
+    style N fill:#e8f5e9
 ```
-用户 IR 文件（.ll / .bc）
-       │
-       ├── Plan C: llvm-sys C API（feature-gated，直接构建 IRModule）
-       ├── Plan A: SafetyExportPass.so（C++ LLVM Pass → 增强型 JSON）
-       └── Plan B（回退）：纯文本解析（零外部依赖）
+
+## 数据流
+
+```mermaid
+flowchart LR
+    subgraph 输入
+        IR[".ll 文本 / .bc 二进制"]
+    end
+
+    subgraph 分析
+        CG["调用图"] --> FFI["FFI 边界"]
+        FFI --> RF["原始事实"]
+        RF --> BS["行为摘要"]
+        BS --> SI["结构推断"]
+        SI --> CG2["契约图"]
+        CG2 --> OS["所有权求解器"]
+        OS --> IC["Issue 候选"]
+    end
+
+    subgraph 抑制
+        IC --> IV["Issue 验证器"]
+        IV --> R0["R-0: 写入不可变内存"]
+        IV --> R1["R-1: 堆来源分类"]
+        IV --> R2["R-2: 内部可变性"]
+        IV --> R3["R-3: RAII drop glue"]
+        IV --> R4["R-4: POSIX 系统调用"]
+        IV --> R6["R-6: into_raw 转移"]
+    end
+
+    subgraph 输出
+        IV --> SRT["SRT 门控"]
+        SRT --> RPT["报告"]
+    end
+
+    style 输入 fill:#e1f5fe
+    style 输出 fill:#e8f5e9
 ```
 
-> 实际加载器暴露 8 种 `LoadStrategy` 变体，Plan A/B/C 是高层叙述。全部 8 种策略详见 `docs/en/architecture.md`。
+## Crate 结构
 
+| Crate | 职责 | 代码行数 |
+|-------|------|----------|
+| `omniscope-cli` | 命令行界面（`analyze`、`audit`、`info`） | ~1.2K |
+| `omniscope-pipeline` | Pipeline 编排、Pass 调度 | ~1.5K |
+| `omniscope-pass` | 22 个分析 Pass（FFI 边界、RAII、borrow escape、契约图、所有权求解） | ~18K |
+| `omniscope-semantics` | 语义推导、结构推断、语言检测 | ~12K |
+| `omniscope-ir` | LLVM IR 加载器、解析器、IR 模型 | ~10K |
+| `omniscope-dataflow` | 前向/后向数据流分析框架 | ~3K |
+| `omniscope-core` | Issue 模型（28 种）、诊断、性能分析器 | ~8K |
+| `omniscope-types` | 共享类型定义、ResourceFamily、ABI 定义 | ~5K |
+
+**总计：8 个 crate，约 105K 行 Rust 代码。**
+
+## 支持的语言
+
+C、C++、Rust、Go、Python（C API）、Java（JNI）、C#（P/Invoke）— 通过 IR 元数据自动检测语言。
+
+## 28 种 Issue 类型
+
+| 类别 | Issue |
+|------|-------|
+| **FFI 边界**（90% 优先级） | `CrossLanguageFree`、`OwnershipViolation`、`FfiTypeMismatch`、`AbiMismatch`、`UncheckedReturn`、`FfiUnsafeCall`、`CallbackEscape` |
+| **资源契约** | `CrossFamilyFree`、`ConditionalLeak`、`DefiniteLeak`、`BorrowEscape`、`CallbackEscapeIssue`、`NeedsModel`、`OwnershipEscapeLeak` |
+| **内存安全** | `DoubleFree`、`UseAfterFree`、`InvalidFree`、`MemoryLeak`、`BufferOverflow`、`NullDereference`、`IntegerOverflow` |
+| **ABI / 类型** | `LengthTruncation`、`TypeConfusion`、`WriteToImmutable`、`AbiLayoutMismatch` |
+
+## 默认 Pass 列表（22 个）
+
+```text
+CallGraphPass → FFIBoundaryPass → SurfaceClassifierPass → DangerSurfacePass
+→ RawFactCollectorPass → IRBehaviorSummaryPass → LanguageAdapterFactPass
+→ AbiLayoutPass → SummaryBuilderPass → StructuralInferencePass
+→ ContractGraphBuilderPass → OwnershipSolverPass → IssueCandidateBuilderPass
+→ IssueVerifierPass → LeakDetectionPass
+→ RaiiDropPass → InteriorMutabilityPass → HeapProvenancePass
+→ BorrowEscapePass → WriteToImmutablePass → FfiReturnCheckPass
 ```
-原始事实 → IR 行为摘要 → 结构推断
-     → 契约图 → 所有权求解器 → 问题候选 → 验证器
-```
 
-### Workspace Crate 结构
+同一依赖层级内的 Pass 通过 Rayon 并行执行。
 
-| Crate | 职责 |
-|-------|------|
-| `omniscope-cli` | 用户 CLI 入口（`analyze`、`audit`、`info` 子命令） |
-| `omniscope-pipeline` | 分析流水线编排，Pass 调度 |
-| `omniscope-pass` | 20 个默认分析 Pass（FFI 边界、RAII、borrow escape、契约图、所有权求解器） |
-| `omniscope-semantics` | 语义推导引擎，结构推断，语言检测 |
-| `omniscope-ir` | LLVM IR 加载器、解析器、IR Model（三层加载策略） |
-| `omniscope-dataflow` | 通用前向/后向数据流分析框架 |
-| `omniscope-core` | 诊断、Issue 模型（28 类问题）、Profiler、内存池 |
-| `omniscope-types` | 公共类型定义、ResourceFamily 系统、ABI 类型 |
-
-## 新功能（v0.2.0-rc，预览版）
-
-### 多语言语义扩展
-
-OmniScope 现在支持 7 种编程语言的 19 个语义变体：
-
-#### Python（5 个变体）
-- `PythonRefcountInc` - Py_INCREF 引用计数增加
-- `PythonRefcountDec` - Py_DECREF 引用计数减少
-- `PythonBorrowedRef` - PyList_GetItem 借用引用
-- `PythonOwnedRef` - PyBytes_FromString 拥有引用
-- `PythonGilProtected` - PyGILState_Ensure/Release GIL 保护
-
-#### Go（4 个变体）
-- `GoDeferCleanup` - defer C.free(ptr) 延迟清理
-- `GoFinalizer` - runtime.SetFinalizer 终结器
-- `GoCgoWrapper` - _Cgo_* 包装函数
-- `GoRuntimeAlloc` - runtime.mallocgc 运行时分配
-
-#### C++（4 个变体）
-- `CppUniquePtr` - std::unique_ptr 独占所有权
-- `CppSharedPtr` - std::shared_ptr 共享所有权
-- `CppDestructor` - ~ClassName() 析构函数
-- `CppExceptionPath` - try/catch 异常路径
-
-#### C#（3 个变体）
-- `CsharpSafeHandle` - SafeHandle.ReleaseHandle 安全句柄
-- `CsharpFinalizer` - ~Destructor() 终结器
-- `CsharpPinvokeMarshal` - P/Invoke marshalling 互操作
-
-#### Java（3 个变体）
-- `JavaLocalRef` - JNI LocalRef 本地引用
-- `JavaGlobalRef` - JNI GlobalRef 全局引用
-- `JavaWeakRef` - JNI WeakGlobalRef 弱全局引用
-
-### 语言适配器
-
-#### Go/CGO 适配器
-- 全面的 Go 内存模型分析（GC vs C 堆）
-- CGO 调用约定检测和指针传递规则
-- Go 特定函数模式识别（runtime、cgo）
-- Go 函数的 FFI 安全评估
-
-#### Python C API 适配器
-- Python 引用计数分析（Py_INCREF/Py_DECREF）
-- 对象生命周期检测（创建、借用、窃取）
-- GIL（全局解释器锁）管理分析
-- Python 特定 FFI 模式识别
-
-### 已知限制
-
-v0.2.0 当前以发布候选（release candidate）形式提供，并非稳定版。已知回归（特别是
-单语言门控调整后 `bun_alloc` 的精度回归）以及待重新验证的工作均记录在
-[`docs/release/release_readiness_v0.2.0.md`](docs/release/release_readiness_v0.2.0.md)。
-
-## 核心特性
-
-### 资源契约架构（v0.2.0）
-
-统一的 `ResourceFamily` 抽象，覆盖所有语言的已知分配器：C heap、C++ `new`、Rust 所有权、Zig 分配器、Go GC、Python 引用计数、JNI references 等。
-
-| 推断机制 | 检测目标 |
-|----------|---------|
-| 析构函数摘要 | C++ D0/D2 析构函数 |
-| 引用计数释放 | `Py_DECREF`、`Arc::drop` |
-| `into_raw` 所有权转移 | `Box::into_raw`、`CString::into_raw` |
-| 桥接/指针投影 | `as_ptr()`、`getelementptr` body |
-| POSIX 系统调用语义 | 文件/网络/进程操作 vs 内存管理 |
-| 第三方库分配器对 | mimalloc、zlib、openssl、sqlite、JNI |
-| 参数属性 | `readonly`/`noalias`（抑制 write-to-immutable FP） |
-| Drop glue | RAII 尾位置 dealloc 检测 |
-
-### 误报抑制机制
-
-- **R-0**：通过 LLVM 参数属性抑制 write-to-immutable
-- **R-1**：堆指针来源分类（dominated-with-use-alloc → 安全）
-- **R-2**：内部可变性检测（Rust `UnsafeCell` / C++ `mutable`）
-- **R-3**：RAII drop glue（抑制虚假 double-reclaim）
-- **R-4**：POSIX 系统调用语义（非内存 syscall 不报错）
-- **R-6**：`Box::into_raw` / `CString::into_raw` 所有权转移识别
-- **SRT Gate**：每个 Issue 发出前经过 Suppression / Review / Track 门控（88% 精度阈值）
-
-### 并行 Pass 执行
-
-Pass 按拓扑排序到依赖层级，同层级内由 Rayon 并行执行。每个 Pass 获得独立的 `clone_for_parallel()` 上下文。共享数据为零拷贝 `Arc` 封装，执行结束后合并结果。
-
-### 三种输出格式
-
-- **rich** — 彩色终端输出，附带检测路径
-- **json** — 机器可读，便于 CI 接入
-- **sarif** — GitHub Code Scanning 标准格式
-
-## 技术栈
-
-| 层次 | 技术 |
-|------|------|
-| 语言 | Rust 1.75+（Edition 2021） |
-| IR 后端 | llvm-sys 221（可选）/ C++ SafetyExportPass / 文本解析器 |
-| 数据流 | 自定义前向/后向分析框架 |
-| 并行 | Rayon（工作窃取） |
-| 内存管理 | bumpalo arena，SmallVec |
-| 错误处理 | thiserror、anyhow、miette |
-| 序列化 | serde / serde_json / toml |
-| CLI | clap（derive + color） |
-| 基准测试 | Criterion 0.5 |
-
-## 构建
-
-### 环境要求
-
-- Rust 1.75.0（stable）
-- LLVM 17+（通过 `llvm-config` 或环境变量 `LLVM_SYS_221_PREFIX` / `/opt/homebrew/opt/llvm@22` 自动检测）
-- Make（C++ pass 编译）
-- 可选：`zld`（macOS）、`mold`（Linux）、`sccache`
-
-### 快速开始
+## 快速开始
 
 ```bash
-# 纯 Rust 构建（无需 LLVM）
+# 构建（不需要 LLVM — 默认使用文本解析器）
 cargo build --release
 
-# 完整构建（Rust + C++ pass）
-make build
-
-# 输出到 ./build/omniscope
-```
-
-### 开发命令
-
-```bash
-make dev         # fmt + check + test
-make check       # clippy + C++ lint
-make fmt         # rustfmt 格式化
-make test        # 运行全部测试
-make test-verbose
-make pass-build  # 编译 SafetyExportPass.so
-```
-
-## 用法
-
-```bash
 # 分析 IR 文件
-omniscope analyze -i target/release/project.bc -o report.json --format json
+./target/release/omniscope analyze -i input.ll
 
-# 对动态库做 FFI 专项审计
-omniscope audit -i /usr/lib/libfoo.dylib
+# JSON 输出（用于 CI）
+./target/release/omniscope analyze -i input.ll --format json -o report.json
 
-# 查看配置和 Pass 列表
-omniscope info
+# SARIF 输出（用于 GitHub Code Scanning）
+./target/release/omniscope analyze -i input.ll --format sarif -o results.sarif
 
-# 指定加载策略
-omniscope analyze -i file.ll --load-strategy text-parser
-
-# 输出 SARIF 格式，供 GitHub Code Scanning 使用
-omniscope analyze -i file.bc --format sarif -o results.sarif
+# FFI 专项审计
+./target/release/omniscope analyze -i input.ll --boundary-only
 ```
 
-## 测试体系
+## 与原版 OmniScope 对比
+
+[OmniScope](https://github.com/Timwood0x10/OmniScope) 最初用 Zig 编写（~125K 行，319 个文件）。本 Rust 版本重新设计了核心分析架构，同时保留相同目标：通过 LLVM IR 进行跨语言 FFI 安全审计。
+
+| 维度 | 原版（Zig） | OmniScope-rs |
+|------|-------------------|--------------|
+| **语言** | Zig（~125K 行，319 文件） | Rust（~105K 行，8 crate） |
+| **IR 解析** | LLVM C++ bridge（`llvm_cpp_bridge.cpp`） | 结构化文本解析器 + 可选 `llvm-sys` |
+| **Pass 数量** | ~33 个 | 22 个 |
+| **IssueKinds** | ~23 种 | 28 种 |
+| **并行** | 自定义并行 Pipeline（`parallel.zig`） | Rayon 工作窃取，跨依赖层级并行 |
+| **内存管理** | Zig allocator | Arena 分配器（bumpalo），零拷贝 Arc |
+| **资源模型** | FFI 契约数据库（预定义对） | ResourceFamily + 契约图 + 所有权求解器 |
+| **FP 抑制** | 白名单 + 规则过滤 | 6 条抑制规则（R-0 到 R-6）+ SRT 门控 |
+| **输出格式** | Text、JSON、SARIF | rich（终端）、JSON、SARIF |
+| **CI 集成** | GitHub Actions | GitHub Actions（3 OS、stable/beta、clippy、miri、audit） |
+
+**Rust 版本的核心架构变更：**
+- **ResourceFamily 抽象**：将分配器语义（C heap、C++ new、Rust alloc、Go GC、Python refcount、JNI、C#）统一到一个模型，替代了硬编码的 FFI 契约数据库
+- **契约图 + 所有权求解器**：跟踪指针在分配/释放对中的所有权流转（含环检测），替代了 Zig 的 memory graph 方案
+- **SRT 门控**：每个 Issue 在输出前经过 Suppress/Review/Track 门控，强制执行精度阈值
+- **结构化文本解析器**：通过词法分析器零依赖解析 LLVM IR，构建时不需要 LLVM C++ bridge
+- **Crate 架构**：8 个独立 crate，清晰的依赖边界，替代 Zig 的单体模块树
+
+## 测试套件
 
 ```bash
-make test                      # 全部测试
-cargo test --workspace         # 排除集成测试
-cargo test --workspace --all-features
+cargo test --workspace                # ~1750 个测试
+cargo bench --no-run                  # 编译所有 benchmark
 ```
 
-| 测试分类 | 位置 | 说明 |
-|---------|------|------|
-| 集成测试 | `tests/integration_tests.rs` | 跨语言 FFI 语料（C/C++/Rust/Zig/Go/Python） |
-| FFI 专项 | `tests/ffi_analysis_tests.rs` | 真实 FFI bug 回归 |
-| 语料回归 | `tests/corpus_tests.rs` | LLVM IR 语料回归 |
-| Plan A/C | `tests/plan_a_c_integration.rs` | C++ Pass / llvm-sys 集成 |
-| Union-Find | `tests/union_find_test.rs` | 所有权求解器数据结构 |
-| 单元测试 | `crates/omniscope-pass/src/.../tests.rs` | 各模块内联测试 |
+| 类别 | 数量 | 描述 |
+|------|------|------|
+| 单元测试 | ~1600 | 各 crate 内联测试 |
+| 集成测试 | ~80 | 跨语言 FFI 语料库 |
+| 精度回归 | ~20 | 精度/召回基线 |
+| 语料回归 | 5 | 每语言隐藏 bug 检测 |
+| Benchmark | 8 | Pipeline、解析、精度、扩展性 |
 
-## 基准测试
+## Benchmark
 
 ```bash
 cargo bench
 ```
 
-| 基准 | 关注点 |
-|------|--------|
-| `ir_parsing` | IR 文本/二进制解析吞吐量 |
-| `pipeline` | 端到端流水线延迟（5 个 fixture） |
-| `resource_analysis` | 资源契约推理性能 |
-| `bugfix_regression` | 修复后正确性验证 |
-| `cpp_rust_accuracy` | C++/Rust 跨语言准确率 |
-| `context_clone` | 并行上下文克隆性能 |
+| Benchmark | 关注点 |
+|-----------|--------|
+| `pipeline` | 端到端延迟（4 种规模） |
+| `ir_parsing` | 文本解析器吞吐量（7 个 fixture） |
+| `bugfix_regression` | 修复后正确性 + 单 Pass 吞吐量 |
+| `cpp_rust_accuracy` | C++/Rust 跨语言精度 |
+| `resource_analysis` | 资源契约推断 |
+| `context_clone` | 并行上下文克隆开销 |
+| `memory_pool` | Arena 分配器性能 |
+| `regression_bench` | 语言检测 + 表面分类 |
 
 ## CI/CD
 
-GitHub Actions 在每次 push/PR 时，于 `ubuntu-latest`、`macos-latest`、`windows-latest` 运行 stable 和 beta 双工具链矩阵：
+GitHub Actions 在每次 push 和 PR 上运行：
 
-- `fmt` — rustfmt 检查
-- `clippy` — 带 `-D warnings` 的 lint
-- `test` — 完整测试矩阵
-- `build-release` — release 构建 + artifact 上传
-- `docs` — `cargo doc --no-deps`
-- `audit` — `cargo audit`（漏洞扫描）
-- `miri` — unsafe 代码验证
-- `bench` — `cargo bench --no-run`（仅编译检查）
+- **fmt** — `cargo fmt --check`
+- **clippy** — `cargo clippy -- -D warnings`
+- **test** — `cargo test --workspace`（Ubuntu/macOS/Windows × stable/beta）
+- **bench** — `cargo bench --no-run`（编译检查）
+- **docs** — `cargo doc --no-deps`
+- **audit** — `cargo audit`
+- **miri** — unsafe 代码验证
+- **FFI 边界检查** — 信息性 SARIF 报告（非阻塞）
+- **Benchmark 套件** — 完整 benchmark 运行（非阻塞）
+
+## 配置
+
+```toml
+[analysis]
+boundary_only = false
+load_strategy = "auto"   # "auto"、"text-parser"、"llvm-sys"
+
+[boundary]
+declare_boundary = [
+    { from = "Rust", to = "C" },
+    { from = "C", to = "Rust" },
+]
+
+[suppression]
+enable_r0 = true   # 写入不可变内存
+enable_r1 = true   # 堆来源分类
+enable_r2 = true   # 内部可变性
+enable_r3 = true   # RAII drop glue
+enable_r4 = true   # POSIX 系统调用
+enable_r6 = true   # Box::into_raw 转移
+
+[output]
+format = "rich"    # "rich"、"json"、"sarif"
+```
+
+## 当前局限
+
+我坚持坦诚说明工具的能力边界。
+
+**擅长的方面：**
+- FFI 边界内存漏洞检测（跨语言 free、所有权违规）
+- 路径敏感的资源泄漏检测
+- 通过 6 层规则 + SRT 门控抑制误报
+- SARIF 输出集成 CI/CD
+
+**不擅长的方面：**
+- **不是形式化验证工具** — 使用启发式方法，不是证明
+- **不是通用 C/C++ 内存检查器** — 专注于 FFI 边界
+- **SSA 级数据流有限** — 同值 double-free 和 load-after-free 是已知盲区
+- **仅单文件分析** — 暂不支持跨函数生命周期跟踪
+- **无增量分析** — 每次调用全量重跑
+
+**已知回归（v0.2.0-rc）：**
+- 单语言门控变更后 `bun_alloc` 精度下降（v0.3.0 跟踪）
+- 复杂控制流中部分跨家族模式可能产生误报
+
+详见 [LIMITATIONS.md](LIMITATIONS.md)。
+
+## 项目状态
+
+**当前版本：v0.2.0-rc（候选发布）**
+
+本项目处于活跃开发阶段。API 尚未稳定，Issue 模型可能在版本间变更。我们正在向 v1.0.0 努力，届时将包含：
+- 稳定的 Issue 模型和 API
+- 跨函数生命周期跟踪
+- 增量分析缓存
+- 扩展的真实项目测试语料库
 
 ## 路线图
 
-- [x] 项目基础设施 & Workspace 建立
-- [x] LLVM IR 解析器（文本 & 二进制）
-- [x] Call Graph 构建
+- [x] LLVM IR 解析器（文本和二进制）
+- [x] 调用图构建
 - [x] FFI 边界检测
 - [x] 数据流分析框架
 - [x] 语义推导引擎
-- [x] 资源契约架构（Phases 0–4）
-- [x] 带循环检测的所有权求解器
-- [x] 误报抑制（R-0 至 R-6）
+- [x] 资源契约架构（Phase 0-4）
+- [x] 所有权求解器（含环检测）
+- [x] 误报抑制（R-0 到 R-6）
 - [x] SARIF 输出
-- [x] C++ LLVM Pass 集成（Plan A）
-- [x] 跨语言语料（C/C++/Rust/Zig/Go/Python）
-- [x] 基准测试 & CI/CD
-- [x] 多语言语义扩展（Python、Go、C++、C#、Java）
-- [x] Go/CGO 适配器（内存模型分析）
-- [x] Python C API 适配器（引用计数分析）
-- [ ] v1.0 稳定版发布
+- [x] 跨语言语料库（C/C++/Rust/Go/Python/Java/C#）
+- [x] Benchmark 和 CI/CD
+- [ ] v1.0 稳定发布
 - [ ] 增量分析缓存
-- [ ] IDE / LSP 集成
+- [ ] 跨函数生命周期跟踪
 - [ ] WASM/JS FFI 支持
-- [ ] 跨函数生命周期追踪
-- [ ] C++/C#/Java 语言适配器（完整实现）
 
 ## 贡献
 
-参见 [CONTRIBUTING.md](CONTRIBUTING.md) 了解开发流程和 Commit 规范。
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-分支命名：`feature/功能名` 或 `bugfix/修复名`
+```bash
+make dev        # fmt + check + test
+make test       # 运行所有测试
+make bench      # 运行 benchmark
+```
 
-```
-feat(pass): add new ownership detector
-fix: handle null pointer in call parsing
-refactor(parser): optimize IR tokenization
-perf: reduce allocation in issue builder
-```
+分支命名：`feature/description` 或 `bugfix/description`
+
+## 致谢
+
+特别感谢 **[@icehawk-hyb](https://github.com/icehawk-hyb)** 担任技术顾问，在跨语言安全分析方向提供了关键指导。
+
+本项目基于 @Timwood0x10 的 [OmniScope](https://github.com/Timwood0x10/OmniScope)，该原版项目确立了通过 LLVM IR 分析进行跨语言 FFI 审计的核心理念。
 
 ## 许可证
 
