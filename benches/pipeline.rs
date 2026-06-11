@@ -8,36 +8,38 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
+use std::path::PathBuf;
 
-// Fixture files embedded at compile time.
-const C_FFI_BUGS: &str = include_str!("../tests/integration/c_ffi_bugs.ll");
-const RUST_FFI_BUGS: &str = include_str!("../tests/integration/rust_ffi_bugs.ll");
-const CPP_HASH: &str = include_str!("../tests/integration/cpp_hash.ll");
-const C_HASH_BRIDGE: &str = include_str!("../tests/integration/c_hash_c_bridge.ll");
+/// Load a fixture `.ll` file from `tests/integration/` at runtime.
+/// Returns None if the file is not found (CI / fresh clone).
+fn load_fixture(relative_path: &str) -> Option<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    std::fs::read_to_string(&path).ok()
+}
 
 /// Describes a fixture for parameterized benchmarking.
 struct Fixture {
     name: &'static str,
-    ir: &'static str,
+    path: &'static str,
 }
 
 fn fixtures() -> Vec<Fixture> {
     vec![
         Fixture {
             name: "c_hash_bridge_7KB",
-            ir: C_HASH_BRIDGE,
+            path: "tests/integration/c_hash_c_bridge.ll",
         },
         Fixture {
             name: "c_ffi_bugs_17KB",
-            ir: C_FFI_BUGS,
+            path: "tests/integration/c_ffi_bugs.ll",
         },
         Fixture {
             name: "cpp_hash_23KB",
-            ir: CPP_HASH,
+            path: "tests/integration/cpp_hash.ll",
         },
         Fixture {
             name: "rust_ffi_bugs_30KB",
-            ir: RUST_FFI_BUGS,
+            path: "tests/integration/rust_ffi_bugs.ll",
         },
     ]
 }
@@ -51,7 +53,11 @@ fn bench_pipeline_e2e(c: &mut Criterion) {
     group.sample_size(20);
 
     for fixture in fixtures() {
-        let module = IRModule::parse_from_text(fixture.ir);
+        let ir = match load_fixture(fixture.path) {
+            Some(ir) => ir,
+            None => continue,
+        };
+        let module = IRModule::parse_from_text(&ir);
         let func_count = module.functions.len() + module.declarations.len();
 
         group.bench_with_input(

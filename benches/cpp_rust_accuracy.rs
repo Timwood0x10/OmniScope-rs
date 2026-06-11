@@ -28,14 +28,17 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use omniscope_core::IssueKind;
 use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
+use std::path::PathBuf;
 
 const CPP_CORPUS: &str = include_str!("../tests/corpus/cpp_hidden_bugs.ll");
 const RUST_CORPUS: &str = include_str!("../tests/corpus/rust_hidden_bugs.ll");
 
-// Also test the larger integration fixtures for performance scaling
-const CPP_HASH: &str = include_str!("../tests/integration/cpp_hash.ll");
-const RUST_FFI_BUGS: &str = include_str!("../tests/integration/rust_ffi_bugs.ll");
-const RUST_MERKLE: &str = include_str!("../tests/integration/rust_merkle.ll");
+/// Load a fixture `.ll` file from `tests/integration/` at runtime.
+/// Returns None if the file is not found (CI / fresh clone).
+fn load_integration_fixture(relative_path: &str) -> Option<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    std::fs::read_to_string(&path).ok()
+}
 
 // ========================================================================
 // Accuracy measurement
@@ -264,9 +267,12 @@ fn bench_cpp_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("cpp_scaling");
     group.sample_size(15);
 
-    let fixtures = vec![("cpp_corpus_4KB", CPP_CORPUS), ("cpp_hash_23KB", CPP_HASH)];
+    let mut fixtures: Vec<(&str, String)> = vec![("cpp_corpus_4KB", CPP_CORPUS.to_string())];
+    if let Some(ir) = load_integration_fixture("tests/integration/cpp_hash.ll") {
+        fixtures.push(("cpp_hash_23KB", ir));
+    }
 
-    for (name, ir) in fixtures {
+    for (name, ir) in &fixtures {
         let module = IRModule::parse_from_text(ir);
         let func_count = module.functions.len() + module.declarations.len();
         let call_count = module.calls.len();
@@ -297,13 +303,15 @@ fn bench_rust_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_scaling");
     group.sample_size(15);
 
-    let fixtures = vec![
-        ("rust_corpus_5KB", RUST_CORPUS),
-        ("rust_ffi_bugs_30KB", RUST_FFI_BUGS),
-        ("rust_merkle_44KB", RUST_MERKLE),
-    ];
+    let mut fixtures: Vec<(&str, String)> = vec![("rust_corpus_5KB", RUST_CORPUS.to_string())];
+    if let Some(ir) = load_integration_fixture("tests/integration/rust_ffi_bugs.ll") {
+        fixtures.push(("rust_ffi_bugs_30KB", ir));
+    }
+    if let Some(ir) = load_integration_fixture("tests/integration/rust_merkle.ll") {
+        fixtures.push(("rust_merkle_44KB", ir));
+    }
 
-    for (name, ir) in fixtures {
+    for (name, ir) in &fixtures {
         let module = IRModule::parse_from_text(ir);
         let func_count = module.functions.len() + module.declarations.len();
         let call_count = module.calls.len();
@@ -350,29 +358,33 @@ fn accuracy_report(c: &mut Criterion) {
     );
 
     // Also report for the larger integration fixtures
-    let rust_ffi_result = run_pipeline(RUST_FFI_BUGS);
-    eprintln!("\n--- rust_ffi_bugs_30KB ---");
-    eprintln!("  Total issues: {}", rust_ffi_result.issues().len());
-    eprintln!(
-        "  Issue kinds: {:?}",
-        rust_ffi_result
-            .issues()
-            .iter()
-            .map(|i| format!("{:?}", i.kind))
-            .collect::<Vec<_>>()
-    );
+    if let Some(ir) = load_integration_fixture("tests/integration/rust_ffi_bugs.ll") {
+        let rust_ffi_result = run_pipeline(&ir);
+        eprintln!("\n--- rust_ffi_bugs_30KB ---");
+        eprintln!("  Total issues: {}", rust_ffi_result.issues().len());
+        eprintln!(
+            "  Issue kinds: {:?}",
+            rust_ffi_result
+                .issues()
+                .iter()
+                .map(|i| format!("{:?}", i.kind))
+                .collect::<Vec<_>>()
+        );
+    }
 
-    let cpp_hash_result = run_pipeline(CPP_HASH);
-    eprintln!("\n--- cpp_hash_23KB ---");
-    eprintln!("  Total issues: {}", cpp_hash_result.issues().len());
-    eprintln!(
-        "  Issue kinds: {:?}",
-        cpp_hash_result
-            .issues()
-            .iter()
-            .map(|i| format!("{:?}", i.kind))
-            .collect::<Vec<_>>()
-    );
+    if let Some(ir) = load_integration_fixture("tests/integration/cpp_hash.ll") {
+        let cpp_hash_result = run_pipeline(&ir);
+        eprintln!("\n--- cpp_hash_23KB ---");
+        eprintln!("  Total issues: {}", cpp_hash_result.issues().len());
+        eprintln!(
+            "  Issue kinds: {:?}",
+            cpp_hash_result
+                .issues()
+                .iter()
+                .map(|i| format!("{:?}", i.kind))
+                .collect::<Vec<_>>()
+        );
+    }
 
     // Dummy benchmark so criterion doesn't complain
     let mut group = c.benchmark_group("accuracy_report");

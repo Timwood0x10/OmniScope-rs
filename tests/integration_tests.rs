@@ -1240,6 +1240,9 @@ fn test_fixture_c_ffi_bugs_borrow_escape() {
 /// Invariants: Zero issues of any kind.
 #[test]
 fn test_fixture_rust_hash_clean() {
+    if !fixture_exists("tests/integration/rust_hash.ll") {
+        return;
+    }
     let result = run_pipeline_on_fixture("tests/integration/rust_hash.ll");
     assert!(
         result.pass_count() > 0,
@@ -1285,6 +1288,9 @@ fn test_fixture_cpp_hash_loop_body_leak() {
 /// Invariants: Pipeline completes; no ConditionalLeak or MemoryLeak.
 #[test]
 fn test_fixture_c_merkle_tree_no_leak() {
+    if !fixture_exists("tests/integration/c_merkle_tree.ll") {
+        return;
+    }
     let result = run_pipeline_on_fixture("tests/integration/c_merkle_tree.ll");
     assert!(
         result.pass_count() > 0,

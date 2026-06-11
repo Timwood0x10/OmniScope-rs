@@ -8,52 +8,51 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use omniscope_ir::IRModule;
+use std::path::PathBuf;
 
-// Fixture files embedded at compile time.
-const C_FFI_BUGS: &str = include_str!("../tests/integration/c_ffi_bugs.ll");
-const RUST_FFI_BUGS: &str = include_str!("../tests/integration/rust_ffi_bugs.ll");
-const C_HASH_BRIDGE: &str = include_str!("../tests/integration/c_hash_c_bridge.ll");
-const RUST_HASH: &str = include_str!("../tests/integration/rust_hash.ll");
-const CPP_HASH: &str = include_str!("../tests/integration/cpp_hash.ll");
-const GO_FFI_BUGS: &str = include_str!("../tests/integration/go_ffi_bugs.ll");
-const PYTHON_FFI_BUGS: &str = include_str!("../tests/integration/python_ffi_bugs.ll");
+/// Load a fixture `.ll` file from `tests/integration/` at runtime.
+/// Returns None if the file is not found (CI / fresh clone).
+fn load_fixture(relative_path: &str) -> Option<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    std::fs::read_to_string(&path).ok()
+}
 
 /// Describes a fixture for parameterized benchmarking.
 struct Fixture {
     name: &'static str,
-    ir: &'static str,
+    path: &'static str,
 }
 
 /// All fixtures sorted roughly by size (small to large).
-fn fixtures() -> Vec<Fixture> {
+fn fixture_specs() -> Vec<Fixture> {
     vec![
         Fixture {
             name: "rust_hash_2KB",
-            ir: RUST_HASH,
+            path: "tests/integration/rust_hash.ll",
         },
         Fixture {
             name: "c_hash_bridge_7KB",
-            ir: C_HASH_BRIDGE,
+            path: "tests/integration/c_hash_c_bridge.ll",
         },
         Fixture {
             name: "python_ffi_7KB",
-            ir: PYTHON_FFI_BUGS,
+            path: "tests/integration/python_ffi_bugs.ll",
         },
         Fixture {
             name: "go_ffi_8KB",
-            ir: GO_FFI_BUGS,
+            path: "tests/integration/go_ffi_bugs.ll",
         },
         Fixture {
             name: "c_ffi_bugs_17KB",
-            ir: C_FFI_BUGS,
+            path: "tests/integration/c_ffi_bugs.ll",
         },
         Fixture {
             name: "cpp_hash_23KB",
-            ir: CPP_HASH,
+            path: "tests/integration/cpp_hash.ll",
         },
         Fixture {
             name: "rust_ffi_bugs_30KB",
-            ir: RUST_FFI_BUGS,
+            path: "tests/integration/rust_ffi_bugs.ll",
         },
     ]
 }
@@ -66,9 +65,12 @@ fn bench_parse_fixture_files(c: &mut Criterion) {
     let mut group = c.benchmark_group("ir_parse_fixture");
     group.sample_size(50);
 
-    for fixture in fixtures() {
-        let ir = fixture.ir;
-        group.bench_with_input(BenchmarkId::new("parse", fixture.name), ir, |b, ir_text| {
+    for spec in fixture_specs() {
+        let ir = match load_fixture(spec.path) {
+            Some(ir) => ir,
+            None => continue,
+        };
+        group.bench_with_input(BenchmarkId::new("parse", spec.name), &ir, |b, ir_text| {
             b.iter(|| {
                 let module = IRModule::parse_from_text(black_box(ir_text));
                 black_box(module.functions.len());
@@ -88,13 +90,16 @@ fn bench_parse_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("ir_parse_throughput");
     group.sample_size(50);
 
-    for fixture in fixtures() {
-        let ir = fixture.ir;
+    for spec in fixture_specs() {
+        let ir = match load_fixture(spec.path) {
+            Some(ir) => ir,
+            None => continue,
+        };
         let size_bytes = ir.len();
         group.throughput(criterion::Throughput::Bytes(size_bytes as u64));
         group.bench_with_input(
-            BenchmarkId::new("throughput", fixture.name),
-            ir,
+            BenchmarkId::new("throughput", spec.name),
+            &ir,
             |b, ir_text| {
                 b.iter(|| {
                     let module = IRModule::parse_from_text(black_box(ir_text));
@@ -115,15 +120,18 @@ fn bench_parse_functions_per_second(c: &mut Criterion) {
     let mut group = c.benchmark_group("ir_parse_funcs_per_sec");
     group.sample_size(50);
 
-    for fixture in fixtures() {
-        let ir = fixture.ir;
+    for spec in fixture_specs() {
+        let ir = match load_fixture(spec.path) {
+            Some(ir) => ir,
+            None => continue,
+        };
         // Pre-count functions for throughput metric.
-        let module = IRModule::parse_from_text(ir);
+        let module = IRModule::parse_from_text(&ir);
         let func_count = (module.functions.len() + module.declarations.len()) as u64;
         group.throughput(criterion::Throughput::Elements(func_count));
         group.bench_with_input(
-            BenchmarkId::new("functions", fixture.name),
-            ir,
+            BenchmarkId::new("functions", spec.name),
+            &ir,
             |b, ir_text| {
                 b.iter(|| {
                     let module = IRModule::parse_from_text(black_box(ir_text));

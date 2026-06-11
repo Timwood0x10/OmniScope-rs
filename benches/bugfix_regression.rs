@@ -22,13 +22,14 @@ use omniscope_pass::{
     LeakDetectionPass, OwnershipSolverPass, Pass, PassContext, RawFactCollectorPass,
 };
 use omniscope_types::{Effect, FamilyId};
+use std::path::PathBuf;
 
-// Fixture files embedded at compile time.
-const C_FFI_BUGS: &str = include_str!("../tests/integration/c_ffi_bugs.ll");
-const RUST_FFI_BUGS: &str = include_str!("../tests/integration/rust_ffi_bugs.ll");
-const CPP_HASH: &str = include_str!("../tests/integration/cpp_hash.ll");
-const C_HASH_BRIDGE: &str = include_str!("../tests/integration/c_hash_c_bridge.ll");
-const RUST_MERKLE: &str = include_str!("../tests/integration/rust_merkle.ll");
+/// Load a fixture `.ll` file from `tests/integration/` at runtime.
+/// Returns None if the file is not found (CI / fresh clone).
+fn load_fixture(relative_path: &str) -> Option<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    std::fs::read_to_string(&path).ok()
+}
 
 // ========================================================================
 // BUG-1: FCmp instruction classification
@@ -258,14 +259,18 @@ fn bench_ffi_return_check(c: &mut Criterion) {
     group.sample_size(20);
 
     // Use real fixture files for realistic benchmarking
-    let fixtures = vec![
-        ("c_ffi_bugs_17KB", C_FFI_BUGS),
-        ("cpp_hash_23KB", CPP_HASH),
-        ("rust_ffi_bugs_30KB", RUST_FFI_BUGS),
+    let fixture_specs = vec![
+        ("c_ffi_bugs_17KB", "tests/integration/c_ffi_bugs.ll"),
+        ("cpp_hash_23KB", "tests/integration/cpp_hash.ll"),
+        ("rust_ffi_bugs_30KB", "tests/integration/rust_ffi_bugs.ll"),
     ];
 
-    for (name, ir) in fixtures {
-        let module = IRModule::parse_from_text(ir);
+    for (name, path) in fixture_specs {
+        let ir = match load_fixture(path) {
+            Some(ir) => ir,
+            None => continue,
+        };
+        let module = IRModule::parse_from_text(&ir);
         group.bench_with_input(
             BenchmarkId::new("ffi_return_check", name),
             &module,
@@ -325,16 +330,20 @@ fn bench_pipeline_e2e(c: &mut Criterion) {
     let mut group = c.benchmark_group("pipeline_e2e");
     group.sample_size(15);
 
-    let fixtures = vec![
-        ("c_hash_bridge_7KB", C_HASH_BRIDGE),
-        ("c_ffi_bugs_17KB", C_FFI_BUGS),
-        ("cpp_hash_23KB", CPP_HASH),
-        ("rust_ffi_bugs_30KB", RUST_FFI_BUGS),
-        ("rust_merkle_44KB", RUST_MERKLE),
+    let fixture_specs = vec![
+        ("c_hash_bridge_7KB", "tests/integration/c_hash_c_bridge.ll"),
+        ("c_ffi_bugs_17KB", "tests/integration/c_ffi_bugs.ll"),
+        ("cpp_hash_23KB", "tests/integration/cpp_hash.ll"),
+        ("rust_ffi_bugs_30KB", "tests/integration/rust_ffi_bugs.ll"),
+        ("rust_merkle_44KB", "tests/integration/rust_merkle.ll"),
     ];
 
-    for (name, ir) in fixtures {
-        let module = IRModule::parse_from_text(ir);
+    for (name, path) in fixture_specs {
+        let ir = match load_fixture(path) {
+            Some(ir) => ir,
+            None => continue,
+        };
+        let module = IRModule::parse_from_text(&ir);
         let func_count = module.functions.len() + module.declarations.len();
         let call_count = module.calls.len();
 

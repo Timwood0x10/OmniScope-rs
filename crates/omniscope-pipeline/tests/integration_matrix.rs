@@ -546,11 +546,8 @@ entry:
 /// pipeline should recognize that the `free` function itself is a runtime
 /// internal and not report a DoubleFree.
 ///
-/// However, the current pipeline does NOT yet recognize `free` as a runtime
-/// internal in this context. The test documents the CURRENT behavior: the
-/// pipeline reports DoubleFree because it sees two release edges. Once
-/// runtime-internal detection is enhanced to cover C stdlib wrappers, this
-/// test should be updated to assert no DoubleFree.
+/// The pipeline's single-language filtering now correctly suppresses this
+/// double-free as an internal runtime pattern, returning zero issues.
 #[test]
 fn single_lang_c_free_double_free_no_fp() {
     let ir = r#"
@@ -564,23 +561,11 @@ entry:
 }
 "#;
     let issues = analyze(ir);
-    // Current behavior: the pipeline reports DoubleFree because it doesn't
-    // recognize the user-defined @free wrapper as a runtime internal.
-    // This is a known limitation — the fix requires enhancing the runtime
-    // internal detection to recognize C stdlib wrapper functions.
-    // For now, we document the current behavior rather than asserting.
-    let has_double_free = has_kind(&issues, IssueKind::DoubleFree);
-    if has_double_free {
-        // Expected current behavior — not a regression, just a limitation
-        eprintln!(
-            "NOTE: free-wrapper double-free reported as DoubleFree (known limitation): {:?}",
-            issues
-        );
-    }
-    // The key invariant: pipeline must not CRASH on this input
+    // Pipeline correctly suppresses double-free in single-language context.
+    // The @free wrapper calling free twice is an internal runtime pattern.
     assert!(
-        !issues.is_empty(),
-        "Pipeline must detect the double-free pattern (even if classification is imperfect), got {:?}",
+        !has_kind(&issues, IssueKind::DoubleFree),
+        "single-lang free wrapper must NOT report DoubleFree FP, got {:?}",
         issues
     );
 }

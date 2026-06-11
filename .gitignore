@@ -52,6 +52,7 @@ perf.data.old
 *.tmp
 *.temp
 *.log
+! ./benches/bench.log
 *.bak
 *.backup
 *.orig
@@ -72,7 +73,7 @@ tools/*/build/
 tools/*/CMakeCache.txt
 tools/*/cmake_install.cmake
 tools/*/compile_commands.json
-tests/integration/
+tests/integration/zig_main.ll
 
 # Compressed archives
 *.zip

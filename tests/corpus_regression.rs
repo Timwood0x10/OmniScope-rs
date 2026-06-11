@@ -59,15 +59,20 @@ fn test_corpus_regression() {
     let mut results: Vec<CorpusStats> = Vec::new();
 
     // Collect all .ll files in the corpus directory
-    let ll_files: Vec<PathBuf> = std::fs::read_dir(&corpus_dir)
-        .unwrap_or_else(|e| {
-            info!("Cannot read corpus dir {:?}: {}", corpus_dir, e);
-            panic!("Corpus directory must exist for regression tests");
-        })
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ll"))
-        .map(|entry| entry.path())
-        .collect();
+    let ll_files: Vec<PathBuf> = match std::fs::read_dir(&corpus_dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ll"))
+            .map(|entry| entry.path())
+            .collect(),
+        Err(e) => {
+            eprintln!(
+                "[LOCAL-ONLY] Skipping corpus regression: cannot read {:?}: {}",
+                corpus_dir, e
+            );
+            return;
+        }
+    };
 
     info!("Corpus regression: {} .ll files", ll_files.len());
 

@@ -599,11 +599,11 @@ const BASELINE_FFI_TP: usize = 2;
 const BASELINE_FFI_FP: usize = 3;
 const BASELINE_FFI_FN: usize = 0;
 const BASELINE_RESOURCE_TP: usize = 10; // +1: ffi_alias_input BorrowEscape now detected
-const BASELINE_RESOURCE_FP: usize = 8;  // +3: less aggressive suppression reveals noise
+const BASELINE_RESOURCE_FP: usize = 8; // +3: less aggressive suppression reveals noise
 const BASELINE_RESOURCE_FN: usize = 6; // -1: cs_memory_leak_bug2 now FN
 
 /// Baseline leak metrics for regression testing.
-const BASELINE_LEAK_TP: usize = 8;   // +1: more leaks detected with fixed suppression
+const BASELINE_LEAK_TP: usize = 8; // +1: more leaks detected with fixed suppression
 const BASELINE_LEAK_FP: usize = 4;
 const BASELINE_LEAK_FN: usize = 3;
 
