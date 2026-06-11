@@ -209,6 +209,7 @@ impl NoiseReduction {
             "raw_vec",
             "SliceCursor",
         ];
+
         PATTERNS.iter().any(|p| caller_name.contains(p))
     }
 

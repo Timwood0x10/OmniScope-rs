@@ -191,6 +191,15 @@ bench:
 	@echo "$(BLUE)Running benchmarks...$(NC)"
 	$(CARGO) bench
 
+## bench-full: Run all benchmarks with verbose output and baseline comparison
+.PHONY: bench-full
+bench-full:
+	@echo "$(BLUE)Running full benchmark suite...$(NC)"
+	@echo "  Benchmarks: ir_parsing, pipeline, resource_analysis, bugfix_regression,"
+	@echo "              cpp_rust_accuracy, context_clone, memory_pool, regression_bench"
+	@echo ""
+	$(CARGO) bench --workspace --verbose 2>&1 | tee target/bench-full-$(shell date +%Y%m%d_%H%M%S).log
+
 ## miri: Run Miri for unsafe code validation
 .PHONY: miri
 miri:

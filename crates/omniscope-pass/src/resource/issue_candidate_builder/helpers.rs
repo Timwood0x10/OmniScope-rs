@@ -346,9 +346,24 @@ pub(crate) fn has_null_store_pattern(graph: &ContractGraph, instance_id: &u64) -
 /// pattern common in FFI bridge layers like bun_alloc.
 ///
 /// Returns `true` if the function body contains a `ret` instruction that
-/// returns a register which may hold the acquired value.
+/// returns the acquired SSA register (or any register if the specific
+/// register is not known).
+///
+/// # Arguments
+/// * `func_name` - The function to check.
+/// * `acquire_ssa_reg` - Optional SSA register (e.g., "%result") from the
+///   acquire call. If provided, the ret instruction must return exactly this
+///   register to count as return-value-escape.
+/// * `ir_module` - The IR module containing function bodies.
+///
+/// # Fix 6
+/// Previously this function returned `true` if ANY ret instruction existed,
+/// which was unreliable — `ret void` or `ret i32 0` do NOT return the
+/// acquired resource. Now we check whether the ret instruction actually
+/// returns a register value (SSA operand starting with '%').
 pub(crate) fn function_returns_acquired_resource(
     func_name: &str,
+    acquire_ssa_reg: Option<&str>,
     ir_module: Option<&omniscope_ir::IRModule>,
 ) -> bool {
     let mod_ref = match ir_module {
@@ -361,12 +376,25 @@ pub(crate) fn function_returns_acquired_resource(
         None => return false,
     };
 
-    // If the function body has any ret instruction, it returns something.
-    // Combined with Acquire edges in the same function, this means the
-    // acquired resource escapes via return value.
-    body.instructions
+    // Find the first ret instruction.
+    let ret_inst = match body
+        .instructions
         .iter()
-        .any(|inst| matches!(inst.kind, omniscope_ir::IRInstructionKind::Ret))
+        .find(|inst| matches!(inst.kind, omniscope_ir::IRInstructionKind::Ret))
+    {
+        Some(inst) => inst,
+        None => return false,
+    };
+
+    // If we know the specific acquire SSA register, check if ret returns it.
+    if let Some(reg) = acquire_ssa_reg {
+        return ret_inst.operands.iter().any(|op| op == reg);
+    }
+
+    // Otherwise, check if ret returns any register (starts with '%').
+    // This excludes `ret void` and `ret i32 0` — returning a constant
+    // or void does NOT escape the acquired resource.
+    ret_inst.operands.iter().any(|op| op.starts_with('%'))
 }
 
 /// Check if a function name indicates it's an allocator factory function.
@@ -378,11 +406,14 @@ pub(crate) fn function_returns_acquired_resource(
 ///
 /// This is a stronger version of `is_allocator_thunk` from ffi_boundary_detector
 /// — it requires the name to indicate memory allocation specifically.
-pub(crate) fn is_allocator_factory_function(func_name: &str) -> bool {
+pub(crate) fn is_allocator_factory_function(
+    func_name: &str,
+    ir_module: Option<&omniscope_ir::IRModule>,
+) -> bool {
     use crate::analysis::ffi_boundary_detector::is_allocator_thunk;
 
     // Must be an allocator thunk first
-    if !is_allocator_thunk(func_name) {
+    if !is_allocator_thunk(func_name, ir_module) {
         return false;
     }
 
@@ -415,7 +446,7 @@ pub(crate) fn should_suppress_leak_for_allocator_escape(
 ) -> bool {
     // Rule 1: Return-value-escape — check if the alloc_caller function has ret
     if let Some(caller) = alloc_caller {
-        if function_returns_acquired_resource(caller, ir_module) {
+        if function_returns_acquired_resource(caller, None, ir_module) {
             tracing::debug!(
                 "[LEAK-SUPPRESS] alloc_caller '{}' has ret instruction — \
                  return-value-escape, suppressing leak",
@@ -426,7 +457,7 @@ pub(crate) fn should_suppress_leak_for_allocator_escape(
     }
 
     // Rule 2: Allocator factory — check function name patterns
-    if is_allocator_factory_function(alloc_func) {
+    if is_allocator_factory_function(alloc_func, ir_module) {
         tracing::debug!(
             "[LEAK-SUPPRESS] alloc_func '{}' is allocator factory — suppressing leak",
             alloc_func

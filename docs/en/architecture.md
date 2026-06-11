@@ -83,6 +83,19 @@ pulls in `llvm-sys = 221` (`crates/omniscope-ir/Cargo.toml:13-23`). When the
 feature is off, llvm-sys is not linked at all. The workspace feature
 `llvm-backend` defined in `Cargo.toml:14-16` forwards to this.
 
+## Crate responsibilities
+
+| Crate | Key contents | Source directory |
+|---|---|---|
+| `omniscope-types` | `Language`, `FamilyId`, `OmniScopeConfig`, `BoundaryContext`, `VerifierVerdict`, `Effect`, `Evidence`, `IssueCandidateKind`, `PointerContract` | `crates/omniscope-types/src/` |
+| `omniscope-core` | `Issue`, `IssueKind`, `Severity`, `Confidence`, `Diagnostic`, `Fact`, `IssueCandidate`, `FfiEvidence`, `MemoryPool`, `Profiler` | `crates/omniscope-core/src/` |
+| `omniscope-ir` | IR text parser, `IRModule`, three loading backends (DirectCpp, llvm-sys, CppPass), msgpack support, `IrCache` | `crates/omniscope-ir/src/` |
+| `omniscope-semantics` | `LanguageDetector`, `FamilyRegistry`, language adapters (C++/Python/Java/Go/C#), `SemanticTree`, `SemanticEngine`, `SurfaceClassifier` | `crates/omniscope-semantics/src/` |
+| `omniscope-pass` | `Pass` trait, `PassManager`, `PassContext`, `ModuleIndex`, all 21 analysis passes | `crates/omniscope-pass/src/` |
+| `omniscope-pipeline` | `Pipeline`, registers default passes, drives `PassManager`, `PipelineResult` | `crates/omniscope-pipeline/src/` |
+| `omniscope-cli` | Binary `omniscope`, five subcommands (`analyze`/`audit`/`info`/`init`/`validate`) | `crates/omniscope-cli/src/` |
+| `omniscope-dataflow` | Generic forward/backward dataflow framework (standalone, not currently consumed by the pipeline) | `crates/omniscope-dataflow/src/` |
+
 ## CLI entry point
 
 `crates/omniscope-cli/src/main.rs:100-116` defines five subcommands via clap:
@@ -112,8 +125,8 @@ single analysis:
    into the config
    (`crates/omniscope-cli/src/main.rs:311-333`,
    `crates/omniscope-pass/src/analysis/boundary_inference.rs:26`).
-5. Register the default passes
-   (`crates/omniscope-pipeline/src/pipeline.rs:85-126`).
+5. Register the default passes (21 passes)
+   (`crates/omniscope-pipeline/src/pipeline.rs:85-127`).
 6. Run the pipeline (`Pipeline::run`,
    `crates/omniscope-pipeline/src/pipeline.rs:129-142`).
 7. Optionally filter to FFI-boundary issues only
@@ -140,7 +153,7 @@ sequenceDiagram
     Pipeline->>PassMgr: run_all_with_ir_and_config(module, config)
     PassMgr->>PassMgr: compute_order (topological sort)
     PassMgr->>PassMgr: execute passes (sequential or per-level parallel)
-    PassMgr-->>Pipeline: (pass_results, pass_timings, issues)
+    PassMgr->>Pipeline: ModuleIndex, (pass_results, pass_timings, issues)
     Pipeline-->>CLI: PipelineResult
     CLI->>CLI: filter_boundary_issues if --boundary-only
     CLI->>Out: format(&result)
@@ -172,11 +185,6 @@ with the following variants:
   prefer the text parser first (`loader_v2.rs:333-375`).
 
 The CLI default is `auto-fast` (`crates/omniscope-cli/src/main.rs:162-164`).
-
-The README's "Plan A / Plan B / Plan C" labels do not appear in code; the
-labels in the loader module docstring (`loader_v2.rs:1-11`) call them
-"llvm-sys (Plan C)", "C++ Pass JSON (Plan A)", and "Text parser (legacy)".
-There are actually six concrete strategies plus two auto-detection modes.
 
 ```mermaid
 flowchart TD
@@ -259,6 +267,7 @@ so parallel mode is opt-in.
 - `pool: MemoryPool` — arena allocator for short-lived data.
 - `config: Option<OmniScopeConfig>` — the merged config (FFI boundaries,
   resource families, analysis flags).
+- `next_issue_id: u64` — monotonic issue counter.
 
 Issue emission goes through `emit_issue`, which routes through the SRT
 (Suppress/Review/Track) gate before recording the issue in `issues` or
@@ -283,3 +292,12 @@ which materializes a `BoundaryContext` from configured
 `BoundaryContext` (possibly empty) in the context under the key
 `"boundary_context"` (`manager.rs:155-173`), so verifier passes can rely on
 its presence.
+
+## PipelineResult deduplication
+
+`PipelineResult::with_issues` (`crates/omniscope-pipeline/src/result.rs:62-82`)
+deduplicates issues by precise key `(IssueKind, function, file, line, column, description_hash)`.
+On collision, the issue with higher `(severity, confidence)` is kept and the
+loser is counted in `dedup_dropped`. This ensures that two real findings at
+distinct source positions are both preserved while byte-identical duplicates
+from multiple passes are collapsed.

@@ -158,6 +158,25 @@ impl WriteToImmutablePass {
             return; // Not a violation - runtime internal function
         }
 
+        // R-12b: C++ runtime/internal function patterns that commonly produce WTI FPs.
+        // These include:
+        //   - C++ exception handling (__cxa_*, __gxx_*)
+        //   - C++ guard variables for thread-safe static initialization (__cxa_guard_*)
+        //   - C++ RTTI functions (_ZTI*, _ZTS*, _ZTV*)
+        //   - C++ file-scope static functions (_ZZ*)
+        //   - C++ operator overloads (operator new, operator delete)
+        if self.is_cpp_runtime_internal(caller) {
+            let resolution = SemanticResolution {
+                kind: SemanticKind::RuntimeInternal,
+                confidence: 0.94,
+                evidence: "C++ runtime/internal function (exception/guard/RTTI/operator)"
+                    .to_string(),
+                pattern_id: "R-12b",
+            };
+            semantic_tree.add_resolution(symbol, resolution);
+            return; // Not a violation - C++ runtime internal
+        }
+
         // R-0: Check for mutable parameters (suppresses false positives)
         if self.is_mutable_parameter(caller) {
             let resolution = SemanticResolution {
@@ -358,16 +377,93 @@ impl WriteToImmutablePass {
         let is_plain_c =
             !trimmed.starts_with('_') || trimmed.starts_with("__") || trimmed.starts_with("_$"); // some LLVM-internal C symbols
 
-        let is_cpp = trimmed.starts_with('_');
+        // C++ Itanium ABI mangling prefixes:
+        //   _Z   - regular C++ function
+        //   _ZZ  - C++ file-scope static function
+        //   _ZTV - vtable
+        //   _ZTI - typeinfo
+        //   _ZTS - typeinfo name
+        let is_cpp_mangled = trimmed.starts_with("_Z");
+
+        // C++ standard library / runtime patterns in demangled or decorated names:
+        //   std::      - C++ standard library namespace (demangled)
+        //   __gnu_     - GCC/libstdc++ internal
+        //   __cxx      - C++ ABI / libc++ internal
+        //   operator   - C++ operator overload (e.g. "operator new", "operator delete")
+        //   __cxa_     - Itanium C++ ABI exception handling
+        //   __gxx_     - GCC C++ exception support
+        let is_cpp_runtime = trimmed.contains("std::")
+            || trimmed.contains("__gnu_")
+            || trimmed.contains("__cxx")
+            || trimmed.contains("operator")
+            || trimmed.contains("__cxa_")
+            || trimmed.contains("__gxx_");
+
+        // Any name starting with '_' is assumed C++ unless it's Rust/Zig
+        let is_cpp_by_convention = trimmed.starts_with('_');
 
         // Exclude Rust-mangled names (_R, _ZN) and Zig names (std., zig.)
+        // Note: We check for "std::" (C++) BEFORE checking "std." (Zig) —
+        // a function name starting with "std." is treated as Zig, but
+        // containing "std::" is treated as C++.
         let is_rust_or_zig = trimmed.starts_with("_R")
             || trimmed.starts_with("_ZN")
             || trimmed.starts_with("std.")
             || trimmed.starts_with("zig.")
             || trimmed.starts_with("builtin.");
 
+        let is_cpp = is_cpp_mangled || is_cpp_runtime || is_cpp_by_convention;
+
         (is_plain_c || is_cpp) && !is_rust_or_zig
+    }
+
+    /// R-12b: Checks if caller is a C++ runtime/internal function that
+    /// commonly produces WriteToImmutable false positives.
+    ///
+    /// These patterns are not caught by the broader R-13 `is_c_or_cpp_caller`
+    /// check because they often appear in partially-demangled form or use
+    /// non-standard decoration. Examples:
+    ///   - `__cxa_guard_acquire` / `__cxa_guard_release` (static init guards)
+    ///   - `_ZTI*` / `_ZTS*` / `_ZTV*` (RTTI type info, vtable)
+    ///   - `_ZZ*` (file-scope static functions inside functions)
+    ///   - `operator new` / `operator delete` (C++ memory management)
+    ///   - `__cxa_throw` / `__cxa_begin_catch` (exception handling)
+    ///   - `__gnu_cxx::` / `std::` namespace functions
+    fn is_cpp_runtime_internal(&self, caller: &str) -> bool {
+        let trimmed = caller.trim_start_matches('@');
+
+        // Itanium C++ ABI: vtable, typeinfo, typeinfo name, file-scope static
+        let is_cpp_abi_special = trimmed.starts_with("_ZTI")
+            || trimmed.starts_with("_ZTS")
+            || trimmed.starts_with("_ZTV")
+            || trimmed.starts_with("_ZZ");
+
+        // C++ exception handling and guard functions
+        let is_cpp_exception_guard = trimmed.contains("__cxa_") || trimmed.contains("__gxx_");
+
+        // C++ operator overloads (demangled form in IR comments or metadata)
+        let is_cpp_operator = trimmed.contains("operator new")
+            || trimmed.contains("operator delete")
+            || trimmed.contains("operator=")
+            || trimmed.contains("operator+")
+            || trimmed.contains("operator-");
+
+        // C++ standard library internal (demangled forms)
+        let is_cpp_stdlib_demangled = trimmed.contains("std::")
+            || trimmed.contains("__gnu_cxx::")
+            || trimmed.contains("__cxxabiv1::");
+
+        // C++ static initialization guard variables (__tls_*, _GLOBAL__*)
+        let is_cpp_static_init = trimmed.contains("_GLOBAL__")
+            || trimmed.contains("__tls_")
+            || trimmed.starts_with("_GLOBAL_")
+            || trimmed.starts_with("__T");
+
+        is_cpp_abi_special
+            || is_cpp_exception_guard
+            || is_cpp_operator
+            || is_cpp_stdlib_demangled
+            || is_cpp_static_init
     }
 
     /// R-14: Checks if caller is a Rust arena/allocator internal function.

@@ -199,3 +199,97 @@ jobs:
 
       - name: Build benchmarks (no run)
         run: cargo bench --no-run
+
+  # Job 8: FFI Boundary Informational Check
+  # Non-blocking informational job — reports FFI boundary issues as SARIF
+  # and adds a summary note. Does NOT block the build.
+  ffi-boundary-check:
+    name: FFI Boundary Check
+    needs: test
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzstd-dev mold wget
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo apt-get install -y llvm-22-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build omniscope CLI
+        run: cargo build --release -p omniscope-cli
+
+      - name: Analyze C++ FFI IR files (SARIF output)
+        continue-on-error: true
+        run: |
+          mkdir -p sarif-output
+          for ir_file in tests/integration/cpp_fft.ll tests/integration/cpp_hash.ll tests/integration/c_ffi_bugs.ll tests/integration/c_fft_c_bridge.ll; do
+            if [ -f "$ir_file" ]; then
+              name=$(basename "$ir_file" .ll)
+              echo "::group::Analyzing $ir_file"
+              ./target/release/omniscope analyze "$ir_file" -f sarif -o "sarif-output/${name}.sarif" || true
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Upload SARIF results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffi-boundary-sarif
+          path: sarif-output/
+
+      - name: Summarize FFI boundary issues found
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "## FFI Boundary Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for sarif in sarif-output/*.sarif; do
+            if [ -f "$sarif" ]; then
+              name=$(basename "$sarif" .sarif)
+              issues=$(python3 -c "import json, sys; data=json.load(open('$sarif')); total=sum(len(run.get('results',[])) for run in data.get('runs',[])); print(total)" 2>/dev/null || echo "parse-error")
+              echo "- **$name.ll**: $issues issues" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> This is an informational check — it does not block the build." >> $GITHUB_STEP_SUMMARY
+
+  # Job 9: Benchmark Suite
+  # Runs all registered benchmarks and saves results as artifacts.
+  benchmark:
+    name: Benchmark Suite
+    needs: test
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzstd-dev mold wget
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo apt-get install -y llvm-22-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run all benchmarks
+        continue-on-error: true
+        run: cargo bench --workspace --verbose 2>&1 | tee benchmark-output.log
+
+      - name: Save benchmark results as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            target/criterion/
+            benchmark-output.log

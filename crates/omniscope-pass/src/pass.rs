@@ -443,10 +443,17 @@ impl PassContext {
         // suppression scope — it only applies to issue kinds where the gate
         // already uses RuntimeInternal for suppression:
         //   - FfiUnsafeCall, ConditionalLeak, DefiniteLeak,
-        //     OwnershipEscapeLeak, CrossLanguageFree, OwnershipViolation
-        // It does NOT suppress CrossFamilyFree, UseAfterFree, DoubleFree,
+        //     OwnershipEscapeLeak, CrossLanguageFree, OwnershipViolation,
+        //     UseAfterFree
+        // It does NOT suppress CrossFamilyFree, DoubleFree,
         // or WriteToImmutable — those are about wrong allocator/real bugs,
         // not about runtime-internal noise.
+        //
+        // UseAfterFree IS suppressed when both the symbol and the caller
+        // are runtime-internal (e.g., Zig's mem.Allocator.remap__anon_*
+        // UAF in allocator vtable dispatch functions). When the caller is
+        // user code, UAF is NOT suppressed — the !caller_is_user_code guard
+        // ensures we only suppress UAF in runtime infrastructure code.
         //
         // EXCEPTION: When the issue's location function (the caller) is
         // user code (not runtime-internal), the issue represents a real bug
@@ -481,6 +488,9 @@ impl PassContext {
                     | omniscope_core::IssueKind::OwnershipEscapeLeak
                     | omniscope_core::IssueKind::CrossLanguageFree
                     | omniscope_core::IssueKind::OwnershipViolation
+                    | omniscope_core::IssueKind::UseAfterFree
+                    | omniscope_core::IssueKind::InvalidFree
+                    | omniscope_core::IssueKind::BorrowEscape
             )
         {
             tracing::debug!(
@@ -531,13 +541,30 @@ impl PassContext {
         // twice). When the caller is user code (e.g., double_free() calling
         // free twice on the same pointer), the DoubleFree is a real bug and
         // must NOT be suppressed.
+        //
+        // Additionally, when both the symbol and the location function are
+        // the same libc function (e.g., DoubleFree on `free` reported at
+        // location `free`), the issue is about the libc function itself
+        // rather than user code, and should be suppressed.
         let symbol_is_libc = omniscope_types::call_graph_types::is_libc(&issue.symbol);
-        if symbol_is_libc
-            && !caller_is_user_code
+        let loc_func = issue
+            .location
+            .as_ref()
+            .and_then(|loc| loc.function.as_deref())
+            .unwrap_or("");
+        let is_same_libc_self = symbol_is_libc
+            && loc_func == issue.symbol
             && matches!(
                 issue.kind,
                 omniscope_core::IssueKind::DoubleFree | omniscope_core::IssueKind::UseAfterFree
-            )
+            );
+        if is_same_libc_self
+            || (symbol_is_libc
+                && !caller_is_user_code
+                && matches!(
+                    issue.kind,
+                    omniscope_core::IssueKind::DoubleFree | omniscope_core::IssueKind::UseAfterFree
+                ))
         {
             tracing::debug!(
                 "IssueGate fallback: suppressing libc symbol '{}' for {:?} (caller={:?})",
@@ -560,11 +587,7 @@ impl PassContext {
         // The bridge function just executes the release — it's not at fault.
         // This also applies to unknown-language declaration functions
         // that are C ABI wrappers.
-        let loc_func = issue
-            .location
-            .as_ref()
-            .and_then(|loc| loc.function.as_deref())
-            .unwrap_or("");
+        // Note: loc_func is already defined above in Rule 3.
         let is_ffi_bridge = loc_func.starts_with("c_")
             || loc_func.starts_with("rust_")
             || loc_func.starts_with("py_")

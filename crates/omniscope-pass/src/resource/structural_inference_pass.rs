@@ -757,6 +757,36 @@ pub fn is_runtime_internal(name: &str) -> bool {
         return true;
     }
 
+    // ── Zig runtime internal ──
+    // Zig standard library: std.*, builtin.*, compiler_rt.*
+    if name.starts_with("std.")
+        || name.starts_with("builtin.")
+        || name.starts_with("compiler_rt.")
+        || name.starts_with("root.")
+        || name.starts_with("zig.")
+        || name.starts_with("zig_allocator_")
+    {
+        return true;
+    }
+    // Zig std.mem.Allocator internals (appears without std. prefix in LLVM IR
+    // for deeply nested types, e.g. mem.Allocator.remap__anon_*)
+    if name.starts_with("mem.Allocator.") {
+        return true;
+    }
+
+    // ── Zig std library submodules (appear without std. prefix in LLVM IR) ──
+    // In LLVM IR, Zig std library functions can appear with just their module
+    // path, omitting the `std.` prefix (e.g. `posix.mmap` instead of
+    // `std.posix.mmap`, `array_list.AlignedAllocator.remap` instead of
+    // `std.array_list.AlignedAllocator.remap`).
+    //
+    // We match known Zig module prefixes that are unlikely to collide
+    // with user code. Match using starts_with + dot to avoid partial
+    // matches (e.g. `posix_` is not matched, only `posix.`).
+    if name.starts_with("posix.") || name.starts_with("array_list.") {
+        return true;
+    }
+
     false
 }
 

@@ -226,7 +226,7 @@ impl Pass for IssueVerifierPass {
             // Suppress candidates from allocator thunks and vtable dealloc thunks.
             // These are always FPs in FFI bridge layers like bun_alloc where the
             // module's purpose IS to wrap cross-language allocation calls.
-            if is_ffi_bridge_layer_candidate(&candidate, module_index.as_ref()) {
+            if is_ffi_bridge_layer_candidate(&candidate, ctx.get_ir_module()) {
                 semantic_suppressed += 1;
                 candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
                 candidate.description.get_or_insert_with(|| {
@@ -599,7 +599,7 @@ impl Pass for IssueVerifierPass {
             let base_severity = candidate.severity();
             let is_alloc_crate = module_index
                 .as_ref()
-                .map_or(false, |idx| idx.is_allocator_crate());
+                .is_some_and(|idx| idx.is_allocator_crate());
             let is_target_kind = matches!(
                 candidate.kind,
                 IssueCandidateKind::CrossLanguageFree

@@ -368,7 +368,7 @@ pub(crate) fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind
 ///   always FPs — the thunk is just dispatching a free through a vtable.
 pub(crate) fn is_ffi_bridge_layer_candidate(
     candidate: &IssueCandidate,
-    _index: Option<&crate::module_index::ModuleIndex>,
+    _ir_module: Option<&omniscope_ir::IRModule>,
 ) -> bool {
     use crate::analysis::ffi_boundary_detector::{is_allocator_thunk, is_vtable_dealloc_thunk};
 
@@ -383,7 +383,9 @@ pub(crate) fn is_ffi_bridge_layer_candidate(
         candidate.kind,
         IssueCandidateKind::CrossLanguageFree | IssueCandidateKind::CrossFamilyFree
     ) {
-        if is_allocator_thunk(release_caller) || is_allocator_thunk(alloc_caller) {
+        if is_allocator_thunk(release_caller, _ir_module)
+            || is_allocator_thunk(alloc_caller, _ir_module)
+        {
             return true;
         }
     }

@@ -2,37 +2,38 @@
 
 This document lists every pass that is actually registered by
 `Pipeline::register_default_passes`
-(`crates/omniscope-pipeline/src/pipeline.rs:85-126`), with the name string,
+(`crates/omniscope-pipeline/src/pipeline.rs:85-127`), with the name string,
 dependencies, kind, and source file as found in the code.
 
-The pipeline test at `crates/omniscope-pipeline/src/pipeline.rs:190-199`
-asserts that `register_default_passes` produces exactly 20 passes. The
-README's "20+ analysis passes" matches that count.
+The pipeline test at `crates/omniscope-pipeline/src/pipeline.rs` asserts that
+`register_default_passes` produces exactly **21 passes** (including the newly
+added `AbiLayoutPass`). The README's "20+ analysis passes" matches this count.
 
 ## Registered passes (in source order)
 
 | Pass struct | name() | kind() | dependencies() | Source |
 |---|---|---|---|---|
-| `CallGraphPass` | `CallGraph` | (default) | `[]` | `analysis/call_graph.rs:36` |
+| `CallGraphPass` | `CallGraph` | `Foundation` | `[]` | `analysis/call_graph.rs:36` |
 | `FFIBoundaryPass` | `FFIBoundary` | `Analysis` | `["RawFactCollector"]` | `analysis/mod.rs:67-78` |
-| `SurfaceClassifierPass` | `SurfaceClassifier` | — | `["CallGraph"]` | `analysis/surface_classifier_pass.rs` |
-| `DangerSurfacePass` | `DangerSurface` | — | `["CallGraph", "FFIBoundary"]` | `analysis/danger_surface.rs` |
+| `SurfaceClassifierPass` | `SurfaceClassifier` | `Analysis` | `["CallGraph"]` | `analysis/surface_classifier_pass.rs` |
+| `DangerSurfacePass` | `DangerSurface` | `Analysis` | `["CallGraph", "FFIBoundary"]` | `analysis/danger_surface.rs` |
 | `RawFactCollectorPass` | `RawFactCollector` | `Foundation` | `[]` | `resource/raw_fact_collector.rs:315` |
-| `IRBehaviorSummaryPass` | `IRBehaviorSummary` | — | `["RawFactCollector"]` | `resource/ir_behavior_summary_pass.rs:52` |
-| `LanguageAdapterFactPass` | `LanguageAdapterFact` | — | `["ModuleIndex"]` | `resource/language_adapter_fact_pass.rs:54` |
+| `IRBehaviorSummaryPass` | `IRBehaviorSummary` | `Analysis` | `["RawFactCollector"]` | `resource/ir_behavior_summary_pass.rs:52` |
+| `LanguageAdapterFactPass` | `LanguageAdapterFact` | `Analysis` | `["ModuleIndex"]` | `resource/language_adapter_fact_pass.rs:54` |
+| `AbiLayoutPass` | `AbiLayout` | `Analysis` | `["RawFactCollector"]` | `resource/abi_layout.rs` |
 | `SummaryBuilderPass` | `SummaryBuilder` | `Foundation` | `["RawFactCollector"]` | `resource/summary_builder.rs:35` |
 | `StructuralInferencePass` | `StructuralInference` | `Analysis` | `["SummaryBuilder"]` | `resource/structural_inference_pass.rs:57` |
-| `ContractGraphBuilderPass` | `ContractGraphBuilder` | — | `["StructuralInference"]` | `resource/contract_graph_builder.rs:229` |
+| `ContractGraphBuilderPass` | `ContractGraphBuilder` | `Analysis` | `["StructuralInference"]` | `resource/contract_graph_builder.rs:229` |
 | `OwnershipSolverPass` | `OwnershipSolver` | `Analysis` | `["ContractGraphBuilder"]` | `resource/ownership_solver.rs:62` |
-| `IssueCandidateBuilderPass` | `IssueCandidateBuilder` | — | `["OwnershipSolver"]` | `resource/issue_candidate_builder/mod.rs` |
-| `IssueVerifierPass` | `IssueVerifier` | — | `["IssueCandidateBuilder", "FfiReturnCheck", "LeakDetection"]` | `resource/issue_verifier.rs:51` |
-| `LeakDetectionPass` | `LeakDetection` | — | `["OwnershipSolver"]` | `resource/path_sensitive_leak.rs:97` |
-| `RaiiDropPass` | `RaiiDrop` | — | `["RawFactCollector"]` | `analysis/raii_drop.rs` |
-| `InteriorMutabilityPass` | `InteriorMutability` | — | `["RawFactCollector"]` | `analysis/interior_mutability.rs` |
-| `HeapProvenancePass` | `HeapProvenance` | — | `["RawFactCollector"]` | `analysis/heap_provenance.rs` |
-| `BorrowEscapePass` | `BorrowEscape` | — | `["RawFactCollector"]` | `analysis/borrow_escape.rs` |
-| `WriteToImmutablePass` | `WriteToImmutable` | — | `["RawFactCollector"]` | `analysis/write_to_immutable.rs` |
-| `FfiReturnCheckPass` | `FfiReturnCheck` | — | `[]` (reads `IRModule` directly) | `resource/ffi_return_check.rs:40` |
+| `IssueCandidateBuilderPass` | `IssueCandidateBuilder` | `Analysis` | `["OwnershipSolver"]` | `resource/issue_candidate_builder/mod.rs` |
+| `IssueVerifierPass` | `IssueVerifier` | `Analysis` | `["IssueCandidateBuilder", "FfiReturnCheck", "LeakDetection"]` | `resource/issue_verifier.rs:51` |
+| `LeakDetectionPass` | `LeakDetection` | `Analysis` | `["OwnershipSolver"]` | `resource/path_sensitive_leak.rs:97` |
+| `RaiiDropPass` | `RaiiDrop` | `Analysis` | `["RawFactCollector"]` | `analysis/raii_drop.rs` |
+| `InteriorMutabilityPass` | `InteriorMutability` | `Analysis` | `["RawFactCollector"]` | `analysis/interior_mutability.rs` |
+| `HeapProvenancePass` | `HeapProvenance` | `Analysis` | `["RawFactCollector"]` | `analysis/heap_provenance.rs` |
+| `BorrowEscapePass` | `BorrowEscape` | `Analysis` | `["RawFactCollector"]` | `analysis/borrow_escape.rs` |
+| `WriteToImmutablePass` | `WriteToImmutable` | `Analysis` | `["RawFactCollector"]` | `analysis/write_to_immutable.rs` |
+| `FfiReturnCheckPass` | `FfiReturnCheck` | `Analysis` | `[]` (reads `IRModule` directly) | `resource/ffi_return_check.rs:40` |
 
 All source paths are relative to `crates/omniscope-pass/src/`.
 
@@ -90,6 +91,12 @@ from `omniscope-semantics`) over the indexed function list and produces
 semantic facts. This is the "language adapter semantic fact extraction"
 referenced in commit `0117c19`. Depends on the cached `ModuleIndex`
 (`crates/omniscope-pass/src/manager.rs:179-183`).
+
+### AbiLayoutPass
+File: `resource/abi_layout.rs`. Analyzes ABI layout compatibility for
+cross-language calls. Checks struct padding, alignment, and calling
+convention mismatches between caller and callee languages. Produces
+`AbiMismatch` and `FfiTypeMismatch` issue candidates for the verifier.
 
 ### SummaryBuilderPass
 File: `resource/summary_builder.rs`. Foundation pass. Consumes raw facts to
@@ -207,6 +214,7 @@ graph LR
     FB --> DS
     RFC --> IRB[IRBehaviorSummary]
     RFC --> SB[SummaryBuilder]
+    RFC --> AL[AbiLayout]
     RFC --> RD[RaiiDrop]
     RFC --> IM[InteriorMutability]
     RFC --> HP[HeapProvenance]
@@ -222,3 +230,12 @@ graph LR
     FRC[FfiReturnCheck] -.candidates.-> IV
     MI[ModuleIndex blackboard] -.cached.-> LAF[LanguageAdapterFact]
 ```
+
+## Stub / placeholder status summary
+
+| Pass | Status | Notes |
+|---|---|---|
+| `DangerSurface` | **Diagnostic** (no issues emitted) | Only counts known resource families |
+| `LeakDetection` | **Partially implemented** | `path_budget` / `max_path_length` fields unused |
+| `RaiiDrop` / `InteriorMutability` / `HeapProvenance` | **Complete** but SemanticTree only | They emit no issues, only provide data for SRT gate |
+| Remaining 17 passes | **Fully implemented** | Detailed fields, error handling, and tests present |

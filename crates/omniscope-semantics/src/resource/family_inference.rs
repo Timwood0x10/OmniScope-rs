@@ -257,6 +257,18 @@ fn try_alloc_pattern(symbol: &str, _registry: &FamilyRegistry) -> Option<Inferre
         });
     }
 
+    // Zig allocator pattern: ends with allocImpl (e.g., zig_allocator_allocImpl,
+    // page_allocator_allocImpl, c_allocator_allocImpl)
+    if lower.ends_with("allocimpl") {
+        return Some(InferredFamily {
+            family_id: Some(FamilyId::ZIG_ALLOCATOR),
+            effect: Some(SymbolEffect::Acquire),
+            language_hint: LanguageHint::Unknown,
+            confidence: 0.7,
+            reason: format!("symbol ends with allocImpl — Zig allocator vtable pattern: {symbol}"),
+        });
+    }
+
     None
 }
 
@@ -278,6 +290,17 @@ fn try_release_pattern(symbol: &str, _registry: &FamilyRegistry) -> Option<Infer
             language_hint: infer_language_hint(symbol),
             confidence: 0.4,
             reason: format!("symbol ends with free/destroy/delete/deinit pattern: {symbol}"),
+        });
+    }
+
+    // Zig allocator pattern: ends with freeImpl (e.g., zig_allocator_freeImpl)
+    if lower.ends_with("freeimpl") {
+        return Some(InferredFamily {
+            family_id: Some(FamilyId::ZIG_ALLOCATOR),
+            effect: Some(SymbolEffect::Release),
+            language_hint: LanguageHint::Unknown,
+            confidence: 0.7,
+            reason: format!("symbol ends with freeImpl — Zig allocator vtable pattern: {symbol}"),
         });
     }
 

@@ -540,7 +540,7 @@ impl FFIBoundaryPass {
         // the cross-language boundaries but don't treat them as warnings.
         let is_allocator = ctx
             .get_ref::<crate::module_index::ModuleIndex>("module_index")
-            .map_or(false, |idx| idx.is_allocator_crate());
+            .is_some_and(|idx| idx.is_allocator_crate());
         let severity = if is_allocator
             && matches!(
                 kind,

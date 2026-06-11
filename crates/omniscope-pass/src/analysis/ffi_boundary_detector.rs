@@ -5,6 +5,7 @@
 //! false-positive filtering used by both `FFIBoundaryPass` and
 //! `CallGraphPass`.
 
+use omniscope_ir::IRModule;
 use omniscope_semantics::LanguageDetector;
 use omniscope_types::{call_graph_types::is_libc, config::Language};
 
@@ -185,6 +186,100 @@ fn is_filtered_callee(callee: &str, callee_lang: Language) -> bool {
         || callee.contains("panic")
 }
 
+/// Get the instruction count of a function body from the IR module.
+///
+/// Returns `None` if the function body is not available (declaration only, or
+/// no IR module provided).
+pub fn get_function_body_size(func_name: &str, ir_module: Option<&IRModule>) -> Option<usize> {
+    let name = func_name.trim_start_matches('@');
+    ir_module.and_then(|m| {
+        m.function_bodies
+            .get(name)
+            .map(|body| body.instructions.len())
+    })
+}
+
+/// Known allocator function names (the actual runtime allocators, not wrappers).
+///
+/// When a function body calls one of these, it is strong evidence that
+/// the function is an allocator thunk.
+fn is_known_allocator_callee(name: &str) -> bool {
+    let n = name.trim_start_matches('@');
+    // C heap allocators
+    n == "malloc"
+        || n == "free"
+        || n == "calloc"
+        || n == "realloc"
+        || n == "valloc"
+        || n == "aligned_alloc"
+        || n == "posix_memalign"
+        || n == "reallocarray"
+    // mimalloc
+    || n.starts_with("mi_malloc")
+    || n.starts_with("mi_free")
+    || n.starts_with("mi_calloc")
+    || n.starts_with("mi_realloc")
+    // Rust allocator
+    || n.starts_with("__rust_")
+    // C++ allocators
+    || n.starts_with("_Znwm")
+    || n.starts_with("_Znam")
+    || n.starts_with("_ZdlPv")
+    || n.starts_with("_ZdaPv")
+    // Zig allocator
+    || n.starts_with("zig_allocator_")
+    // Windows
+    || n == "HeapAlloc"
+    || n == "HeapFree"
+    || n == "VirtualAlloc"
+    || n == "VirtualFree"
+}
+
+/// Check if a function name matches a strong allocator name pattern
+/// (used as fallback when no IRModule body info is available).
+fn has_strong_allocator_name(name: &str) -> bool {
+    let n = name.trim_start_matches('@').to_lowercase();
+    // Exact matches for raw allocator functions
+    n == "free"
+        || n == "malloc"
+        || n == "calloc"
+        || n == "realloc"
+        || n == "valloc"
+        || n == "aligned_alloc"
+    // Prefix-matched known allocator families
+    || n.starts_with("mi_free")
+    || n.starts_with("mi_malloc")
+    || n.starts_with("mi_calloc")
+    || n.starts_with("mi_realloc")
+    || n.starts_with("je_free")
+    || n.starts_with("je_malloc")
+    || n.starts_with("tc_free")
+    || n.starts_with("tc_malloc")
+    // Rust runtime
+    || n.starts_with("__rust_")
+    || n.starts_with("_ZN4core")
+    || n.starts_with("_ZN5alloc")
+    // C++ new/delete
+    || n.starts_with("_Znwm")
+    || n.starts_with("_Znam")
+    || n.starts_with("_ZdlPv")
+    || n.starts_with("_ZdaPv")
+    // Zig allocator
+    || n.starts_with("zig_allocator_")
+    // Python
+    || n.starts_with("pyobject_")
+    || n.starts_with("pymem_")
+    // Go runtime
+    || n.starts_with("runtime.mallocgc")
+    || n.starts_with("runtime.alloc")
+    || n.starts_with("_cgo_")
+    // Java/JNI
+    || n.starts_with("newglobalref")
+    || n.starts_with("deletelobalref")
+    || n.starts_with("newlocalref")
+    || n.starts_with("deletelocalref")
+}
+
 /// Check if a function name matches the allocator thunk pattern.
 ///
 /// Allocator thunks are thin wrapper functions whose sole purpose is to
@@ -196,19 +291,76 @@ fn is_filtered_callee(callee: &str, callee_lang: Language) -> bool {
 /// When such a function is the `release_caller` or `alloc_caller` of a
 /// CrossLanguageFree or OwnershipViolation candidate, the cross-language
 /// call is expected behavior — the thunk's job IS to cross the boundary.
-pub fn is_allocator_thunk(func_name: &str) -> bool {
+///
+/// # Stricter Constraints (Fix: issue-candidate-fp-1)
+///
+/// To avoid false-positive suppression of genuine bugs:
+/// 1. When `ir_module` is available, the function body must be small
+///    (≤ 8 instructions, thin wrapper) OR call a known allocator callee.
+/// 2. When `ir_module` is not available, only strong name patterns match
+///    (exact allocator names or known prefix patterns), not any function
+///    whose name merely *contains* "free" or "create".
+pub fn is_allocator_thunk(func_name: &str, ir_module: Option<&IRModule>) -> bool {
     let name = func_name.trim_start_matches('@').to_lowercase();
 
-    // Allocator free/dealloc thunks
+    // ── Priority: vtable/wrapper/shim patterns ──
+    // These are very specific identifiers that always indicate a thunk
+    // regardless of body size.
+    if name.contains("vtable") || name.contains("thunk") || name.contains("shim") {
+        return true;
+    }
+
+    // ── Zig allocator vtable dispatch internals ──
+    // Zig's `mem.Allocator.remap__anon_*` functions are anonymous dispatch
+    // functions in the allocator vtable. They should always be treated as
+    // allocator thunks regardless of body size, since they are runtime-internal
+    // forwarding functions, not user code.
+    if name.contains("mem.allocator.remap") {
+        return true;
+    }
+
+    // ── Body-aware checking ──
+    // If we have IRModule, check body size and callee context.
+    let has_body_info = get_function_body_size(func_name, ir_module).is_some();
+    let calls_known_allocator = ir_module
+        .and_then(|m| {
+            let name_no_at = func_name.trim_start_matches('@');
+            m.function_bodies.get(name_no_at).map(|body| {
+                body.call_instructions().iter().any(|instr| {
+                    instr
+                        .callee
+                        .as_deref()
+                        .is_some_and(|callee| is_known_allocator_callee(callee))
+                })
+            })
+        })
+        .unwrap_or(false);
+
+    // When body info is available, require: small body OR calls known allocator
+    if has_body_info {
+        let body_size = get_function_body_size(func_name, ir_module).unwrap_or(0);
+        // A genuine allocator thunk must be small (thin wrapper)
+        // OR directly call a known allocator
+        if body_size > 8 && !calls_known_allocator {
+            return false;
+        }
+    }
+
+    // ── Allocator free/dealloc patterns ──
     if name.contains("free")
         || name.contains("dealloc")
         || name.contains("release")
         || name.contains("destroy")
     {
-        return true;
+        // With body info: trust the body-size check above
+        if has_body_info {
+            return true;
+        }
+        // Without body info: require strong name pattern
+        return has_strong_allocator_name(&name);
     }
 
-    // Allocator alloc/malloc thunks
+    // ── Allocator alloc/malloc patterns ──
     if name.contains("alloc")
         || name.contains("malloc")
         || name.contains("zalloc")
@@ -216,16 +368,19 @@ pub fn is_allocator_thunk(func_name: &str) -> bool {
         || name.contains("dupe")
         || name.contains("create")
     {
-        return true;
+        if has_body_info {
+            return true;
+        }
+        return has_strong_allocator_name(&name);
     }
 
-    // vtable-related deallocation (common in FFI bridge layers)
-    if name.contains("vtable")
-        || name.contains("thunk")
-        || name.contains("wrapper")
-        || name.contains("shim")
-    {
-        return true;
+    // ── wrapper pattern (less specific, only with body evidence) ──
+    if name.contains("wrapper") {
+        if has_body_info {
+            return true;
+        }
+        // Without body info, "wrapper" alone is too vague
+        return false;
     }
 
     false
@@ -922,61 +1077,86 @@ mod tests {
     // ── Allocator thunk detection ──
 
     /// Objective: Verify allocator thunk detection correctly identifies thunk functions.
-    /// Invariants: Functions with alloc/free/dealloc/vtable/thunk patterns are thunks.
+    /// Invariants: Only functions with body evidence or strong name patterns are thunks.
     #[test]
     fn test_is_allocator_thunk() {
-        // Free/dealloc thunks
+        // Free/dealloc thunks — strong name patterns (no IRModule available)
         assert!(
-            is_allocator_thunk("mi_free"),
+            is_allocator_thunk("mi_free", None),
             "mi_free must be allocator thunk"
         );
         assert!(
-            is_allocator_thunk("free_sensitive_cstr"),
-            "free_sensitive_cstr must be thunk"
-        );
-        assert!(
-            is_allocator_thunk("vtable_free"),
-            "vtable_free must be thunk"
-        );
-        assert!(
-            is_allocator_thunk("default_allocator_free"),
-            "default_allocator_free must be thunk"
+            is_allocator_thunk("vtable_free", None),
+            "vtable_free must be thunk (vtable pattern)"
         );
 
-        // Alloc/malloc thunks
+        // Alloc/malloc thunks — strong name patterns
         assert!(
-            is_allocator_thunk("mi_malloc"),
+            is_allocator_thunk("mi_malloc", None),
             "mi_malloc must be allocator thunk"
         );
         assert!(
-            is_allocator_thunk("alloc_with_default_allocator"),
-            "alloc_with_default must be thunk"
+            is_allocator_thunk("realloc", None),
+            "realloc must be allocator thunk (exact match)"
         );
         assert!(
-            is_allocator_thunk("realloc_raw"),
-            "realloc_raw must be allocator thunk"
-        );
-        assert!(
-            is_allocator_thunk("default_dupe"),
-            "default_dupe must be allocator thunk"
+            is_allocator_thunk("free", None),
+            "free must be allocator thunk (exact match)"
         );
 
-        // Vtable/wrapper/shim patterns
+        // Vtable/thunk/shim patterns (always matched)
         assert!(
-            is_allocator_thunk("c_thunks::mi_malloc_items"),
+            is_allocator_thunk("c_thunks::mi_malloc_items", None),
             "c_thunks must be thunk"
         );
-        assert!(
-            is_allocator_thunk("ffi_wrapper_free"),
-            "wrapper must be thunk"
-        );
 
-        // Non-thunk functions
+        // Non-thunk functions — names containing "free"/"create" without
+        // strong patterns must NOT be classified as allocator thunks
         assert!(
-            !is_allocator_thunk("process_data"),
+            !is_allocator_thunk("free_sensitive_cstr", None),
+            "free_sensitive_cstr must NOT be thunk (no strong allocator name pattern)"
+        );
+        assert!(
+            !is_allocator_thunk("process_data", None),
             "process_data must NOT be thunk"
         );
-        assert!(!is_allocator_thunk("main"), "main must NOT be thunk");
+        assert!(!is_allocator_thunk("main", None), "main must NOT be thunk");
+        assert!(
+            !is_allocator_thunk("my_create_config", None),
+            "my_create_config must NOT be thunk (no body evidence)"
+        );
+        assert!(
+            !is_allocator_thunk("process_free_list", None),
+            "process_free_list must NOT be thunk (no strong allocator pattern)"
+        );
+
+        // With body info available: small body OR calls known allocator
+        // Create a minimal IRModule with a tiny function body for testing
+        let mut module = omniscope_ir::IRModule::new();
+        module.function_bodies.insert(
+            "tiny_thunk".to_string(),
+            omniscope_ir::FunctionBody {
+                name: "tiny_thunk".to_string(),
+                instructions: vec![omniscope_ir::IRInstruction {
+                    kind: omniscope_ir::IRInstructionKind::Call,
+                    callee: Some("free".to_string()),
+                    dest: None,
+                    operands: vec![],
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: String::new(),
+                    result_type: None,
+                    element_type: None,
+                    function_signature: None,
+                    conversion_opcode: None,
+                    binary_opcode: None,
+                }],
+            },
+        );
+        assert!(
+            is_allocator_thunk("tiny_thunk", Some(&module)),
+            "tiny_thunk calling 'free' with 1 instruction must be thunk"
+        );
     }
 
     // ── Non-allocator API detection ──

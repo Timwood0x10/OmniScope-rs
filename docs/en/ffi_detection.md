@@ -117,13 +117,10 @@ the following built-in constants (`resource_family.rs:18-96`):
 | 23 | `WIN32_HEAP` | `HeapAlloc`/`HeapFree` |
 | 24 | `WIN32_VIRTUAL` | `VirtualAlloc`/`VirtualFree` |
 
-User-mined families start from `USER_FAMILY_START = 256`
-(`resource_family.rs:99`) via the `FamilyId::custom(name)` constructor
-which hashes the name (`resource_family.rs:111-123`).
-
-The README mentions "Win32/Zig resource families" added in commit
-`f533a4d` — these are `WIN32_HEAP`, `WIN32_VIRTUAL`, and `ZIG_ALLOCATOR`
-above.
+Total: **24 built-in families**. User-mined families start from
+`USER_FAMILY_START = 256` (`resource_family.rs:99`) via the
+`FamilyId::custom(name)` constructor which hashes the name
+(`resource_family.rs:111-123`).
 
 ## Cross-family matching
 
@@ -180,57 +177,60 @@ and is the "first" piece of evidence (the boundary itself).
 ## Issue kinds
 
 The reported issue type is `IssueKind`
-(`crates/omniscope-core/src/issue.rs:27-96`). The full list of variants:
+(`crates/omniscope-core/src/issue.rs:27-96`). The full list of **28 variants**:
 
-FFI boundary group (`is_ffi_boundary` returns true,
-`issue.rs:100-112`):
-1. `CrossLanguageFree`
-2. `OwnershipViolation`
-3. `FfiTypeMismatch`
-4. `AbiMismatch`
-5. `UncheckedReturn`
-6. `FfiUnsafeCall`
-7. `CallbackEscape`
-8. `LengthTruncation`
+### FFI boundary group (is_ffi_boundary returns true, issue.rs:100-112)
 
-Local-only memory group (`is_local_memory`, `issue.rs:115-126`):
-9. `DoubleFree`
-10. `UseAfterFree`
-11. `InvalidFree`
-12. `MemoryLeak`
-13. `BufferOverflow`
-14. `NullDereference`
-15. `IntegerOverflow`
+| Variant | CWE | Meaning |
+|---|---|---|
+| `CrossLanguageFree` | 762 | Cross-language free mismatch |
+| `OwnershipViolation` | 763 | Ownership transfer violation |
+| `FfiTypeMismatch` | 843 | ABI type mismatch |
+| `AbiMismatch` | 758 | Calling convention mismatch |
+| `UncheckedReturn` | 252 | FFI return value unchecked |
+| `FfiUnsafeCall` | 119 | Dangerous FFI call semantics |
+| `CallbackEscape` | 749 | Callback escape across boundary |
+| `LengthTruncation` | 197 | Length truncation (usize→u32) |
 
-Resource contract group (`is_resource_contract`, `issue.rs:132-145`):
-16. `CrossFamilyFree`
-17. `ConditionalLeak`
-18. `DefiniteLeak`
-19. `BorrowEscape`
-20. `CallbackEscapeIssue`
-21. `NeedsModel`
-22. `WriteToImmutable`
-23. `DoubleReclaim`
-24. `OwnershipEscapeLeak`
+### Local-only memory group (is_local_memory, issue.rs:115-126)
 
-Concurrency group:
-25. `DataRace`
-26. `LockOrderViolation`
-27. `ThreadCrossing`
+| Variant | CWE | Meaning |
+|---|---|---|
+| `DoubleFree` | 415 | Double free of same allocation |
+| `UseAfterFree` | 416 | Dangling pointer dereference |
+| `InvalidFree` | 763 | Free of non-malloc pointer |
+| `MemoryLeak` | 401 | Allocation never freed |
+| `BufferOverflow` | 120 | Write past allocation bounds |
+| `NullDereference` | 476 | NULL pointer dereference |
+| `IntegerOverflow` | 190 | Integer overflow |
 
-Catch-all:
-28. `Unknown`
+### Resource contract group (is_resource_contract, issue.rs:132-145)
 
-That is **28 variants** in total. The README's "23 issue kinds" is out of
-date: counting only the FFI boundary + local-only + resource contract
-groups (8 + 7 + 9) gives 24; counting only the resource-contract +
-FFI-boundary groups gives 17. No subset of the enum sums to exactly 23.
-The number 23 also matches the highest `FamilyId` constant
-(`WIN32_HEAP = FamilyId(23)`), but families are distinct from issue
-kinds — these may have been conflated in the README.
+| Variant | CWE | Meaning |
+|---|---|---|
+| `CrossFamilyFree` | 762 | Cross-resource-family free |
+| `ConditionalLeak` | 772 | Partial path leak |
+| `DefiniteLeak` | 772 | All-path leak |
+| `BorrowEscape` | 822 | Borrowed pointer escapes context |
+| `CallbackEscapeIssue` | 749 | Pointer escapes to callback |
+| `NeedsModel` | — | Requires model annotation |
+| `WriteToImmutable` | 123 | Write to immutable memory |
+| `DoubleReclaim` | 415 | Multiple from_raw on same pointer |
+| `OwnershipEscapeLeak` | 772 | into_raw never reclaimed |
 
-CWE mappings for each variant are listed in
-`IssueKind::cwe_id` (`issue.rs:158-194`).
+### Concurrency group
+
+| Variant | CWE | Meaning |
+|---|---|---|
+| `DataRace` | 362 | Data race across FFI |
+| `LockOrderViolation` | 833 | Lock ordering violation |
+| `ThreadCrossing` | 362 | Unsafe pointer thread crossing |
+
+### Catch-all
+
+| Variant | CWE | Meaning |
+|---|---|---|
+| `Unknown` | — | Unclassifiable |
 
 ## Pipeline flow for FFI candidates
 
@@ -242,12 +242,14 @@ flowchart TD
     CGB --> OS[OwnershipSolver] --> ICB[IssueCandidateBuilder]
     OS --> LD[LeakDetection]
     IR --> FRC[FfiReturnCheck]
+    IR --> AL[AbiLayout]
     FB -.facts.-> ICB
     ICB --> DG{has FFI evidence?}
     DG -->|no, FFI-only kind| BS[boundary_suppressed metric]
     DG -->|yes, or local kind| Verify[IssueVerifier]
     LD --> Verify
     FRC --> Verify
+    AL --> Verify
     Verify --> Out{verdict}
     Out -->|ConfirmedIssue / ProbableIssue| Reported[Issue]
     Out -->|ExplainedSafe / Diagnostic| Suppressed[suppressed_issues]

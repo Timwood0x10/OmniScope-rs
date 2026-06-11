@@ -43,16 +43,36 @@ fn test_accuracy_regression() {
     }
 
     // ── Count TP ────────────────────────────────────────────────────
+    // Fix 4: Diagnostic-only issues (UncheckedReturn, WriteToImmutable)
+    // are excluded from TP counting AND from FP denominator. Previously,
+    // they counted in TP but were excluded from the FP denominator,
+    // inflating precision. Now they are excluded from both.
     let mut tp_count = 0usize;
     let mut ffi_metrics = CategoryMetrics::new();
     eprintln!("\n--- True Positives (Bugs Detected) ---");
     for bug in EXPECTED_BUGS {
+        // Skip diagnostic-only bugs — they are not resource safety bugs
+        // and should not count toward TP (which would inflate precision
+        // since they're also excluded from FP denominator).
+        let is_diagnostic_bug = bug
+            .accepted_kinds
+            .iter()
+            .all(|k| CategoryMetrics::is_diagnostic_only(*k));
         let file_result = all_results.iter().find(|(name, _)| name == bug.file);
         if let Some((_, result)) = file_result {
             if let Some(matched_kind) = is_bug_detected(result.issues(), bug) {
-                tp_count += 1;
+                if !is_diagnostic_bug {
+                    tp_count += 1;
+                }
                 ffi_metrics.record_tp(matched_kind);
-                eprintln!("  [TP] {}: {}", bug.file, bug.description);
+                if is_diagnostic_bug {
+                    eprintln!(
+                        "  [DIAG] {}: {} (diagnostic-only, excluded from TP/FP)",
+                        bug.file, bug.description
+                    );
+                } else {
+                    eprintln!("  [TP] {}: {}", bug.file, bug.description);
+                }
             } else {
                 if let Some(&kind) = bug.accepted_kinds.first() {
                     ffi_metrics.record_fn(kind);
@@ -68,35 +88,40 @@ fn test_accuracy_regression() {
     }
 
     // ── Check forbidden kinds (FP from wrong classification) ─────────
+    // Fix 5: Previously, the forbidden kind checker required func_substring
+    // to match the issue's location.function, symbol, or description. This
+    // missed cases like c_merkle_tree.ll/merkle_root where the DoubleFree
+    // issue reports at the `free` call site (location.function="free"),
+    // which doesn't contain "merkle_root".
+    //
+    // Now: For each issue in a file, if the file has ANY ExpectedBug entry
+    // whose forbidden_kinds contain the issue's kind, it counts as a
+    // forbidden FP. The func_substring restriction is removed because:
+    // - Files with forbidden_kinds entries are few and well-understood
+    // - Any issue of the forbidden kind in that file IS misclassification
+    // - Legitimate detections of the forbidden kind would be listed as
+    //   accepted_kinds in EXPECTED_BUGS entries
     let mut forbidden_fp = 0usize;
     eprintln!("\n--- Forbidden-Kind False Positives ---");
     for (file_name, result) in &all_results {
+        // Collect all forbidden kinds for this file across all ExpectedBug entries.
+        let file_forbidden_kinds: Vec<IssueKind> = EXPECTED_BUGS
+            .iter()
+            .filter(|bug| bug.file == file_name)
+            .flat_map(|bug| bug.forbidden_kinds.iter())
+            .copied()
+            .collect();
+        if file_forbidden_kinds.is_empty() {
+            continue;
+        }
         for issue in result.issues() {
-            for bug in EXPECTED_BUGS {
-                if bug.file == file_name {
-                    let func_match = [
-                        // Primary: location.function (where the issue manifests)
-                        issue.location.as_ref().and_then(|l| l.function.as_deref()),
-                        // Secondary: symbol (alloc/release function name)
-                        Some(issue.symbol.as_str()),
-                        // Tertiary: description text (often mentions the buggy function)
-                        Some(issue.description.as_str()),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|field| field.contains(bug.func_substring));
-                    if func_match
-                        && !bug.forbidden_kinds.is_empty()
-                        && bug.forbidden_kinds.contains(&issue.kind)
-                    {
-                        forbidden_fp += 1;
-                        ffi_metrics.record_fp(issue.kind);
-                        eprintln!(
-                            "  [FP-forbidden] {} {:?} on {} — kind {:?} is forbidden for this fixture",
-                            file_name, issue.kind, bug.func_substring, issue.kind
-                        );
-                    }
-                }
+            if file_forbidden_kinds.contains(&issue.kind) {
+                forbidden_fp += 1;
+                ffi_metrics.record_fp(issue.kind);
+                eprintln!(
+                    "  [FP-forbidden] {} {:?} — kind {:?} is forbidden for this fixture",
+                    file_name, issue.kind, issue.kind
+                );
             }
         }
     }

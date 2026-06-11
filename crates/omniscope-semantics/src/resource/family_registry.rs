@@ -228,6 +228,8 @@ impl FamilyRegistry {
         self.add_csharp_symbols();
         // Go (GC + cgo)
         self.add_go_symbols();
+        // Zig allocator vtable
+        self.add_zig_symbols();
         // Library-managed families (IR Pattern Atlas §1.4, §9)
         self.add_zlib_symbols();
         self.add_openssl_symbols();
@@ -471,6 +473,24 @@ impl FamilyRegistry {
             SymbolEffect::Acquire,
             lang,
         );
+    }
+
+    /// Register Zig allocator vtable symbols.
+    ///
+    /// Zig uses a vtable-based allocation pattern where the allocator
+    /// implementation functions (`zig_allocator_allocImpl`,
+    /// `zig_allocator_freeImpl`) are the actual memory management
+    /// routines. These are called through the allocator vtable.
+    ///
+    /// Evidence: `boundary_test.ll`, `zig_hidden_bugs.ll` — Zig allocator
+    /// vtable dispatch and cross-family bug patterns.
+    fn add_zig_symbols(&mut self) {
+        let f = FamilyId::ZIG_ALLOCATOR;
+        let lang = LanguageHint::C;
+        // Zig allocator vtable alloc implementation
+        self.add_symbol("zig_allocator_allocImpl", f, SymbolEffect::Acquire, lang);
+        // Zig allocator vtable free implementation
+        self.add_symbol("zig_allocator_freeImpl", f, SymbolEffect::Release, lang);
     }
 
     /// Register zlib stream family symbols.

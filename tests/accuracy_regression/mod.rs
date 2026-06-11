@@ -26,14 +26,18 @@ const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 /// from resource/overall metrics as diagnostic-only (not resource safety bugs).
 /// ReturnAlias BorrowEscape filtered by return-type guard (non-pointer returns).
 ///
+/// After Fix 4: Diagnostic-only issues (UncheckedReturn) no longer counted
+/// as TP, correcting precision inflation from diagnostic TP being excluded
+/// from FP denominator but still counted in TP.
+///
 /// Metrics reflect corrected classification where defensive-programming hints
 /// and correctness issues don't inflate resource safety vulnerability counts.
-const BASELINE_TP: usize = 17;
+const BASELINE_TP: usize = 16;
 const BASELINE_FP: usize = 11; // Non-deterministic range [10,12] due to HashMap iteration order
 const BASELINE_FN: usize = 3;
-const BASELINE_PRECISION: f64 = 0.630; // 63.0% (TP=17, total=27)
-const BASELINE_RECALL: f64 = 0.850; // 85.0% (17/20)
-const BASELINE_F1: f64 = 0.723; // 72.3%
+const BASELINE_PRECISION: f64 = 0.593; // 59.3% (TP=16, total=27)
+const BASELINE_RECALL: f64 = 0.842; // 84.2% (16/19)
+const BASELINE_F1: f64 = 0.696; // 69.6%
 
 /// Tolerance for non-deterministic pipeline output.
 const METRICS_TOLERANCE: f64 = 0.08;

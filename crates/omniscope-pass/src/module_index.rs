@@ -40,6 +40,7 @@ use omniscope_types::config::Language;
 
 use crate::analysis::boundary_seeds::{classify_seed, FfiSlice, SeedContext};
 use crate::analysis::ffi_boundary_detector::FFIBoundaryDetector;
+use crate::resource::structural_inference_pass;
 
 /// Pre-computed metadata for a single call instruction.
 ///
@@ -207,6 +208,63 @@ fn is_runtime_intrinsic_cached(name: &str, language: Language) -> bool {
         }
         _ => false,
     }
+}
+
+/// Check if a function name suggests it is part of the Zig runtime.
+///
+/// Zig runtime functions include:
+/// - `std.*` — Zig standard library
+/// - `builtin.*` — Zig compiler builtins
+/// - `compiler_rt` — Zig compiler runtime
+/// - `zig.*` — Zig compiler support
+///
+/// NOTE: `main.*` and `root.*` are intentionally excluded — these are
+/// user-level Zig module namespaces, not runtime internals. Marking them
+/// as runtime-internal would suppress legitimate bug reports from all
+/// Zig entry-point functions (e.g., main.c_alloc_buffer leaks).
+fn is_zig_runtime(name: &str) -> bool {
+    name.starts_with("std.")
+        || name.starts_with("builtin.")
+        || name.starts_with("compiler_rt.")
+        || name.starts_with("zig.")
+        || name.starts_with("zig_allocator_")
+        // Zig test runner / comptime-generated functions
+        || name.contains("test_runner")
+}
+
+/// Check if a function name suggests it is part of the C++ runtime.
+///
+/// This covers C++ ABI/runtime infrastructure, not user-facing
+/// allocation operators (operator new/delete). User-facing C++ allocation
+/// functions (`_Znwm`, `_Znam`, `_Znwj`, `_Znaj`, `_ZdlPv`, `_ZdaPv`)
+/// should NOT be classified as runtime-internal — doing so could suppress
+/// legitimate leak/bug reports from the IssueGate.
+fn is_cpp_runtime(name: &str) -> bool {
+    // C++ ABI / runtime support (NOT operator new/delete)
+    name.starts_with("__cxxabiv1") || name.starts_with("__cxa_") || name.starts_with("__gxx_")
+}
+
+/// Check if a function name suggests it is part of the C runtime.
+///
+/// C runtime infrastructure functions that are internal to the runtime,
+/// not user-facing allocation APIs like malloc/free. User-facing alloc
+/// functions (malloc, free, calloc, realloc, aligned_alloc) should NOT
+/// be classified as runtime-internal — doing so would suppress genuine
+/// leak/UAF bug reports from the IssueGate.
+///
+/// Low-level OS memory functions (mmap, munmap, brk, sbrk) are already
+/// handled by `structural_inference_pass::is_runtime_internal`, so they
+/// don't need to be duplicated here.
+fn is_c_runtime(name: &str) -> bool {
+    name.starts_with("__libc_")
+        || name.starts_with("__cxa_")
+        || name.starts_with("_Unwind_")
+        || name.starts_with("_tlv_")
+        || name.starts_with("__stack_chk_")
+        || name.starts_with("__asan_")
+        || name.starts_with("__tsan_")
+        || name.starts_with("__msan_")
+        || name.starts_with("__ubsan_")
 }
 
 /// Classify a function based on its name, declaration status, and language (cached version).
@@ -689,7 +747,10 @@ impl ModuleIndex {
                 .unwrap_or(false);
 
             // Check if this function is runtime internal
-            let is_runtime_internal = false;
+            let is_runtime_internal = structural_inference_pass::is_runtime_internal(&trimmed)
+                || is_zig_runtime(&trimmed)
+                || is_cpp_runtime(&trimmed)
+                || is_c_runtime(&trimmed);
 
             function_metas.insert(
                 trimmed.clone(),
@@ -717,7 +778,10 @@ impl ModuleIndex {
             let call_count = calls.map(|c| c.len()).unwrap_or(0);
 
             // Check if this function is runtime internal
-            let is_runtime_internal = false;
+            let is_runtime_internal = structural_inference_pass::is_runtime_internal(&trimmed)
+                || is_zig_runtime(&trimmed)
+                || is_cpp_runtime(&trimmed)
+                || is_c_runtime(&trimmed);
 
             function_metas.insert(
                 trimmed.clone(),

@@ -29,19 +29,34 @@ C, C++, Rust, Zig, Go, Python, Java, C# — with automatic language detection fr
 
 ## Architecture
 
-```
-User IR (.ll / .bc)
-       │
-       ├── Plan C: llvm-sys C API (feature-gated, direct IRModule construction)
-       ├── Plan A: SafetyExportPass.so (C++ LLVM Pass → enriched JSON)
-       └── Plan B (fallback): Pure-text IR parser (zero deps)
+```mermaid
+flowchart TD
+    A["User IR (.ll / .bc)"] --> B{"Load Strategy"}
+    B -->|"Plan C<br/>llvm-sys C API"| C["Direct IRModule Construction"]
+    B -->|"Plan A<br/>SafetyExportPass.so"| D["C++ LLVM Pass<br/>→ Enriched JSON"]
+    B -->|"Plan B<br/>(fallback)"| E["Pure-text IR Parser<br/>(zero deps)"]
+    C --> F["OmniScope Pipeline"]
+    D --> F
+    E --> F
+    F --> G["Raw Facts"]
+    G --> H["IR Behavior Summary"]
+    H --> I["Structural Inference"]
+    I --> J["Contract Graph"]
+    J --> K["Ownership Solver"]
+    K --> L["Issue Candidates"]
+    L --> M["Issue Verifier"]
 ```
 
 > The loader actually exposes 8 `LoadStrategy` variants — Plan A/B/C is the high-level narrative. See `docs/en/architecture.md` for all 8 strategies.
 
-```
-Raw Facts → IR Behavior Summary → Structural Inference
-       → Contract Graph → Ownership Solver → Issue Candidates → Verifier
+```mermaid
+flowchart LR
+    A["Raw Facts"] --> B["IR Behavior Summary"]
+    B --> C["Structural Inference"]
+    C --> D["Contract Graph"]
+    D --> E["Ownership Solver"]
+    E --> F["Issue Candidates"]
+    F --> G["Issue Verifier"]
 ```
 
 ### Crates
@@ -198,27 +213,96 @@ make pass-build # compile SafetyExportPass.so
 
 ## Usage
 
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `analyze` | Analyze an LLVM IR file for memory safety issues |
+| `audit`   | FFI-focused audit of a dynamic library |
+| `info`    | Show configuration and registered passes |
+
+### Common Workflows
+
+#### Basic Analysis
 ```bash
-# Analyze an IR file
-omniscope analyze -i target/release/project.bc -o report.json --format json
+# Analyze a single IR file
+omniscope analyze -i file.ll -o report.json
 
-# FFI-focused audit of a dynamic library
+# Quick analysis with terminal output (rich format)
+omniscope analyze -i file.bc
+```
+
+#### FFI Security Audit
+```bash
+# Focus on cross-language boundary issues
+omniscope analyze -i project.bc --boundary-only
+omniscope analyze -i project.bc -b  # short flag
+
+# Audit a dynamic library
 omniscope audit -i /usr/lib/libfoo.dylib
+```
 
-# Show config and registered passes
-omniscope info
-
-# Specify loading strategy
-omniscope analyze -i file.ll --load-strategy text-parser
-
-# Output as SARIF for GitHub Code Scanning
+#### CI Integration (SARIF output)
+```bash
+# Generate SARIF for GitHub Code Scanning
 omniscope analyze -i file.bc --format sarif -o results.sarif
+```
 
-# Only show FFI boundary issues (cross-language memory safety)
-omniscope analyze -i file.bc --boundary-only
+#### Loading Strategy Control
+```bash
+# Use specific IR loading strategy
+omniscope analyze -i file.ll --load-strategy text-parser
+omniscope analyze -i file.bc --load-strategy llvm-sys
+```
 
-# Boundary-only with short flag
-omniscope analyze -i file.bc -b
+### Output Formats
+- **rich** — colorized terminal output with detection trace (default)
+- **json** — machine-readable for CI ingestion
+- **sarif** — GitHub Code Scanning standard format
+
+## Configuration
+
+OmniScope can be configured via a `omniscope.toml` file in the project root:
+
+```toml
+[analysis]
+# Analysis options
+boundary_only = false
+load_strategy = "auto"  # "auto", "text-parser", "safety-export-pass", "llvm-sys"
+
+[boundary]
+# FFI boundary configuration
+declare_boundary = [
+    { from = "Rust", to = "C" },
+    { from = "C", to = "Rust" },
+    { from = "Zig", to = "C" },
+    { from = "Python", to = "C" },
+]
+
+[boundary.patterns]
+# Pattern-based boundary detection
+patterns = [
+    { from = "Rust", to = "C", pattern = "*_ffi_*" },
+    { from = "C", to = "Rust", pattern = "*_rs_*" },
+]
+
+[suppression]
+# FP suppression rules
+enable_r0 = true   # Mutable parameter suppression
+enable_r1 = true   # Heap provenance classification
+enable_r2 = true   # Interior mutability detection
+enable_r3 = true   # RAII drop glue
+enable_r4 = true   # POSIX syscall semantics
+enable_r6 = true   # Box::into_raw / CString::into_raw
+enable_r13 = true  # C/C++ caller WTI suppression
+enable_r14 = true  # Rust allocator internal suppression
+enable_r15 = true  # RawVec/buffer write suppression
+
+[output]
+# Output configuration
+format = "rich"    # "rich", "json", "sarif"
+color = true
+verbose = false
 ```
 
 ## API Documentation
@@ -332,6 +416,18 @@ GitHub Actions runs on every push and PR across `ubuntu-latest`, `macos-latest`,
 - [ ] Cross-function lifetime tracking
 - [ ] C++/C#/Java language adapters (full implementation)
 
+## Limitations
+
+OmniScope has important limitations. Please read [LIMITATIONS.md](LIMITATIONS.md) before using in production.
+
+**Quick summary:**
+- ❌ Not a formal verification tool
+- ❌ Not suitable for pure C/C++ memory safety auditing
+- ❌ Not a standalone security solution
+- ✅ CI/CD informational check (non-blocking)
+- ✅ Security auditor's first-pass triage tool
+- ✅ Educational FFI surface mapping
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow and commit conventions.
@@ -348,3 +444,17 @@ perf: reduce allocation in issue builder
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE) for details.
+
+---
+
+## 限制说明 (中文)
+
+使用前请阅读 [LIMITATIONS.md](LIMITATIONS.md) 了解完整限制。
+
+**快速总结：**
+- ❌ 不是形式化验证工具
+- ❌ 不适合纯 C/C++ 内存安全审计
+- ❌ 不能作为唯一的安全保障
+- ✅ CI/CD 参考检查（不阻断构建）
+- ✅ 安全审计员初筛工具
+- ✅ 教学/学术 FFI Surface 映射

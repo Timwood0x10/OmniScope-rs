@@ -305,8 +305,8 @@ impl Pass for IssueCandidateBuilderPass {
                             // language boundaries. Suppress as FP.
                             let release_caller_name = graph.edges[ri].caller_name.as_str();
                             let alloc_caller_name = graph.edges[ai].caller_name.as_str();
-                            if is_allocator_thunk(release_caller_name)
-                                || is_allocator_thunk(alloc_caller_name)
+                            if is_allocator_thunk(release_caller_name, ir_module)
+                                || is_allocator_thunk(alloc_caller_name, ir_module)
                             {
                                 tracing::debug!(
                                     "[FP-SUPPRESS] CrossLanguageFree suppressed: \
@@ -417,8 +417,8 @@ impl Pass for IssueCandidateBuilderPass {
                             // ── FFI Bridge Layer suppression (regular cross-family) ──
                             let reg_release_caller = graph.edges[ri].caller_name.as_str();
                             let reg_alloc_caller = graph.edges[ai].caller_name.as_str();
-                            if is_allocator_thunk(reg_release_caller)
-                                || is_allocator_thunk(reg_alloc_caller)
+                            if is_allocator_thunk(reg_release_caller, ir_module)
+                                || is_allocator_thunk(reg_alloc_caller, ir_module)
                             {
                                 tracing::debug!(
                                     "[FP-SUPPRESS] CrossFamilyFree suppressed: \
