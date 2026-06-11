@@ -456,13 +456,17 @@ pub(crate) fn should_suppress_leak_for_allocator_escape(
         }
     }
 
-    // Rule 2: Allocator factory — check function name patterns
-    if is_allocator_factory_function(alloc_func, ir_module) {
-        tracing::debug!(
-            "[LEAK-SUPPRESS] alloc_func '{}' is allocator factory — suppressing leak",
-            alloc_func
-        );
-        return true;
+    // Rule 2: Allocator factory — check if the CALLER (not alloc_func) is
+    // a thin wrapper/factory whose job is to allocate and return memory.
+    // Only suppress when the caller itself looks like an allocator wrapper.
+    if let Some(caller) = alloc_caller {
+        if is_allocator_factory_function(caller, ir_module) {
+            tracing::debug!(
+                "[LEAK-SUPPRESS] alloc_caller '{}' is allocator factory — suppressing leak",
+                caller
+            );
+            return true;
+        }
     }
 
     // Rule 3: Arena allocator — arena allocations are intentionally never freed individually

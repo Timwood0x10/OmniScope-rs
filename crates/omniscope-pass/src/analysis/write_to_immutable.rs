@@ -150,8 +150,7 @@ impl WriteToImmutablePass {
             let resolution = SemanticResolution {
                 kind: SemanticKind::RuntimeInternal,
                 confidence: 0.95,
-                evidence: "Function is runtime internal (stdlib/compiler_rt/allocator)"
-                    .to_string(),
+                evidence: "Function is runtime internal (stdlib/compiler_rt/allocator)".to_string(),
                 pattern_id: "R-12",
             };
             semantic_tree.add_resolution(symbol, resolution);
@@ -406,8 +405,7 @@ impl WriteToImmutablePass {
         // Note: We check for "std::" (C++) BEFORE checking "std." —
         // a function name starting with "std." could be ambiguous, but
         // containing "std::" is treated as C++.
-        let is_rust_only = trimmed.starts_with("_R")
-            || trimmed.starts_with("_ZN");
+        let is_rust_only = trimmed.starts_with("_R") || trimmed.starts_with("_ZN");
 
         let is_cpp = is_cpp_mangled || is_cpp_runtime || is_cpp_by_convention;
 

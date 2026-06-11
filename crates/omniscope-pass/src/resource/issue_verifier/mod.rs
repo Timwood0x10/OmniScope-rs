@@ -637,10 +637,18 @@ impl Pass for IssueVerifierPass {
                 // Pattern-based issues (BorrowEscape, BoundaryMisuse, etc.)
                 // use alloc_caller as location since the bug is in the caller
                 // function, not in a specific alloc/release API call.
+                //
+                // DoubleRelease/DoubleFree also uses alloc_caller: the bug is
+                // that a *caller* function invokes free() twice on the same
+                // pointer — the location must be the caller, not the deallocator
+                // itself.  Using alloc_function (e.g. "free") would cause
+                // IssueGate Rule 3 (libc self-suppression) to incorrectly
+                // suppress genuine user-code double-frees.
                 IssueCandidateKind::BorrowEscape
                 | IssueCandidateKind::AbiLayoutMismatch
                 | IssueCandidateKind::BoundaryMisuse
-                | IssueCandidateKind::UseAfterFree => candidate
+                | IssueCandidateKind::UseAfterFree
+                | IssueCandidateKind::DoubleRelease => candidate
                     .alloc_caller
                     .as_deref()
                     .unwrap_or(&candidate.alloc_function),

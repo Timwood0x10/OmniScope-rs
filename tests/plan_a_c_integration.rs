@@ -946,6 +946,10 @@ mod plan_c_without_feature {
 
     #[test]
     fn test_llvm_sys_not_available_without_feature() {
+        if !rust_hash_fixture().exists() {
+            eprintln!("[LOCAL-ONLY] Skipping test_llvm_sys_not_available_without_feature: rust_hash.ll fixture not found");
+            return;
+        }
         // The loader_v2 module's can_use_llvm_sys is private, but we can
         // test the public entry point.
         let path = rust_hash_fixture();
@@ -965,6 +969,10 @@ mod plan_c_without_feature {
 
     #[test]
     fn test_auto_strategy_falls_back_to_text_parser() {
+        if !rust_hash_fixture().exists() {
+            eprintln!("[LOCAL-ONLY] Skipping test_auto_strategy_falls_back_to_text_parser: rust_hash.ll fixture not found");
+            return;
+        }
         // Auto strategy should fall through llvm-sys and cpp-pass and
         // land on text parser.
         let path = rust_hash_fixture();
@@ -1002,6 +1010,10 @@ mod plan_c_with_feature {
 
     #[test]
     fn test_llvm_sys_parse_real_fixture() {
+        if !rust_hash_fixture().exists() {
+            eprintln!("[LOCAL-ONLY] Skipping test_llvm_sys_parse_real_fixture: rust_hash.ll fixture not found");
+            return;
+        }
         // Parse the rust_hash.ll fixture via llvm-sys.
         let path = rust_hash_fixture();
         let result = omniscope_ir::llvm_sys_adapter::parse_with_llvm_sys(&path);
@@ -1065,6 +1077,10 @@ mod plan_c_with_feature {
 
     #[test]
     fn test_llvm_sys_type_fields_populated() {
+        if !rust_hash_fixture().exists() {
+            eprintln!("[LOCAL-ONLY] Skipping test_llvm_sys_type_fields_populated: rust_hash.ll fixture not found");
+            return;
+        }
         // Verify that result_type and element_type are populated for
         // load/store/call instructions when LLVM is available.
         let path = rust_hash_fixture();
@@ -1102,6 +1118,12 @@ mod plan_c_with_feature {
 
     #[test]
     fn test_llvm_sys_cfg_edges() {
+        if !rust_hash_fixture().exists() {
+            eprintln!(
+                "[LOCAL-ONLY] Skipping test_llvm_sys_cfg_edges: rust_hash.ll fixture not found"
+            );
+            return;
+        }
         // Verify that the parsed module has function bodies with
         // multiple instructions (CFG is captured implicitly through
         // instruction ordering across basic blocks).
@@ -1142,6 +1164,10 @@ mod plan_c_with_feature {
 
     #[test]
     fn test_llvm_sys_via_loader_strategy() {
+        if !rust_hash_fixture().exists() {
+            eprintln!("[LOCAL-ONLY] Skipping test_llvm_sys_via_loader_strategy: rust_hash.ll fixture not found");
+            return;
+        }
         // Test that load_ir with LlvmSys strategy properly delegates
         // to the llvm-sys adapter.
         let path = rust_hash_fixture();
@@ -1164,6 +1190,12 @@ mod plan_c_with_feature {
 
     #[test]
     fn test_llvm_sys_auto_strategy() {
+        if !rust_hash_fixture().exists() {
+            eprintln!(
+                "[LOCAL-ONLY] Skipping test_llvm_sys_auto_strategy: rust_hash.ll fixture not found"
+            );
+            return;
+        }
         // Auto strategy should try llvm-sys first. If it succeeds, great.
         // If not, it falls back to text parser.
         let path = rust_hash_fixture();
@@ -1197,6 +1229,10 @@ mod plan_c_with_feature {
 /// - Call targets (callees)
 #[test]
 fn test_plan_a_json_vs_text_parser_consistency() {
+    if !rust_hash_fixture().exists() {
+        eprintln!("[LOCAL-ONLY] Skipping test_plan_a_json_vs_text_parser_consistency: rust_hash.ll fixture not found");
+        return;
+    }
     // Text parser baseline.
     let text_module = text_parse_rust_hash();
 
@@ -1292,6 +1328,10 @@ fn test_plan_a_json_vs_text_parser_consistency() {
 /// which serves as the ground truth for Plan A consistency checks.
 #[test]
 fn test_text_parser_rust_hash_baseline() {
+    if !rust_hash_fixture().exists() {
+        eprintln!("[LOCAL-ONLY] Skipping test_text_parser_rust_hash_baseline: rust_hash.ll fixture not found");
+        return;
+    }
     let module = text_parse_rust_hash();
 
     // Target triple.
@@ -1411,6 +1451,12 @@ fn test_text_parser_rust_hash_baseline() {
 /// When the llvm-sys implementation lands, a second comparison can be added.
 #[test]
 fn test_plan_a_plan_c_consistency() {
+    if !rust_hash_fixture().exists() {
+        eprintln!(
+            "[LOCAL-ONLY] Skipping test_plan_a_plan_c_consistency: rust_hash.ll fixture not found"
+        );
+        return;
+    }
     // Plan A: JSON model -> IRModule.
     let plan_a_module = build_rust_hash_json_model().to_ir_module();
 
@@ -1523,6 +1569,10 @@ fn test_plan_a_plan_c_consistency() {
 #[cfg(feature = "llvm-backend")]
 #[test]
 fn test_plan_c_vs_baseline_consistency() {
+    if !rust_hash_fixture().exists() {
+        eprintln!("[LOCAL-ONLY] Skipping test_plan_c_vs_baseline_consistency: rust_hash.ll fixture not found");
+        return;
+    }
     let path = rust_hash_fixture();
     let plan_c_result = omniscope_ir::llvm_sys_adapter::parse_with_llvm_sys(&path);
 
@@ -1627,6 +1677,12 @@ fn test_plan_c_vs_baseline_consistency() {
 fn test_text_parser_loads_all_fixtures() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let fixtures_dir = Path::new(manifest_dir).join("tests/integration");
+
+    // Guard: skip if no fixtures available (CI environment).
+    if !fixtures_dir.exists() {
+        eprintln!("[LOCAL-ONLY] Skipping test_text_parser_loads_all_fixtures: tests/integration/ directory not found");
+        return;
+    }
 
     let fixtures = [
         "c_ffi_bugs.ll",

@@ -13,7 +13,10 @@ fn test_accuracy_regression() {
     // Verify ffi-demo directory exists (skip in CI where ffi-demo is unavailable)
     let ffi_demo_dir = PathBuf::from(FFI_DEMO_OUTPUT_DIR);
     if !ffi_demo_dir.exists() {
-        info!("Skipping accuracy regression: ffi-demo directory not found ({:?})", FFI_DEMO_OUTPUT_DIR);
+        info!(
+            "Skipping accuracy regression: ffi-demo directory not found ({:?})",
+            FFI_DEMO_OUTPUT_DIR
+        );
         return;
     }
 

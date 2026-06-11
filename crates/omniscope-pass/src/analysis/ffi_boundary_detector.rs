@@ -339,10 +339,8 @@ pub fn is_allocator_thunk(func_name: &str, ir_module: Option<&IRModule>) -> bool
         || name.contains("release")
         || name.contains("destroy")
     {
-        // With body info: trust the body-size check above
-        if has_body_info {
-            return true;
-        }
+        // With body info: require STRONG name match only
+        // (calls_known_allocator alone is too broad — many user functions call free)
         // Without body info: require strong name pattern
         return has_strong_allocator_name(&name);
     }
@@ -355,16 +353,17 @@ pub fn is_allocator_thunk(func_name: &str, ir_module: Option<&IRModule>) -> bool
         || name.contains("dupe")
         || name.contains("create")
     {
-        if has_body_info {
-            return true;
-        }
+        // With body info: require STRONG name match only
+        // (calls_known_allocator alone is too broad — many user functions call malloc)
+        // Without body info: require strong name pattern
         return has_strong_allocator_name(&name);
     }
 
     // ── wrapper pattern (less specific, only with body evidence) ──
     if name.contains("wrapper") {
+        // Require both: small body AND strong name or known callee
         if has_body_info {
-            return true;
+            return has_strong_allocator_name(&name) || calls_known_allocator;
         }
         // Without body info, "wrapper" alone is too vague
         return false;
