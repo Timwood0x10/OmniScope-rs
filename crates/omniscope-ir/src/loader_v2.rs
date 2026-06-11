@@ -1079,11 +1079,12 @@ mod tests {
 
     #[test]
     fn test_which_finds_known_binary() {
-        // `sh` should exist on any POSIX system
-        let result = which("sh");
+        // Use a binary that exists on both Unix and Windows
+        let binary = if cfg!(windows) { "cmd" } else { "sh" };
+        let result = which(binary);
         assert!(
             result.is_some(),
-            "which('sh') should find /bin/sh or similar"
+            "which('{binary}') should find a known system binary"
         );
     }
 
