@@ -309,8 +309,7 @@ pub fn family_to_resource_class(family_id: FamilyId) -> ResourceClass {
         | FamilyId::SQLITE_RESOURCE
         | FamilyId::CSHARP_HGLOBAL
         | FamilyId::CSHARP_COTASK
-        | FamilyId::CSHARP_COM
-        | FamilyId::ZIG_ALLOCATOR => ResourceClass::HeapMemory,
+        | FamilyId::CSHARP_COM => ResourceClass::HeapMemory,
 
         // Unknown family
         _ => ResourceClass::Unknown,

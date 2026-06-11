@@ -185,6 +185,127 @@ fn is_filtered_callee(callee: &str, callee_lang: Language) -> bool {
         || callee.contains("panic")
 }
 
+/// Check if a function name matches the allocator thunk pattern.
+///
+/// Allocator thunks are thin wrapper functions whose sole purpose is to
+/// forward allocation/deallocation calls to an underlying allocator
+/// (e.g., mimalloc, system malloc, jemalloc). These functions:
+/// - Have names containing alloc/malloc/realloc/free/dealloc patterns
+/// - Are typically used in vtable contexts or FFI bridge layers
+///
+/// When such a function is the `release_caller` or `alloc_caller` of a
+/// CrossLanguageFree or OwnershipViolation candidate, the cross-language
+/// call is expected behavior — the thunk's job IS to cross the boundary.
+pub fn is_allocator_thunk(func_name: &str) -> bool {
+    let name = func_name.trim_start_matches('@').to_lowercase();
+
+    // Allocator free/dealloc thunks
+    if name.contains("free")
+        || name.contains("dealloc")
+        || name.contains("release")
+        || name.contains("destroy")
+    {
+        return true;
+    }
+
+    // Allocator alloc/malloc thunks
+    if name.contains("alloc")
+        || name.contains("malloc")
+        || name.contains("zalloc")
+        || name.contains("realloc")
+        || name.contains("dupe")
+        || name.contains("create")
+    {
+        return true;
+    }
+
+    // vtable-related deallocation (common in FFI bridge layers)
+    if name.contains("vtable")
+        || name.contains("thunk")
+        || name.contains("wrapper")
+        || name.contains("shim")
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Check if a function name is a known non-allocator macOS/POSIX API.
+///
+/// These functions look like they allocate memory (they take pointer args,
+/// sometimes return pointers) but are NOT resource-acquiring functions.
+/// Treating them as acquires produces DefiniteLeak/ConditionalLeak FPs.
+pub fn is_non_allocator_api(func_name: &str) -> bool {
+    let name = func_name.trim_start_matches('@');
+
+    // macOS zone/memory APIs that are NOT allocators
+    matches!(
+        name,
+        "malloc_set_zone_name"
+            | "malloc_create_zone"
+            | "malloc_default_zone"
+            | "malloc_destroy_zone"
+            | "malloc_zone_from_ptr"
+            | "malloc_zone_malloc"
+            | "malloc_zone_calloc"
+            | "malloc_zone_valloc"
+            | "malloc_zone_realloc"
+            | "malloc_zone_free"
+            | "mi_heap_new"
+            | "mi_heap_delete"
+            | "mi_heap_visit_blocks"
+            | "mi_heap_visit_area"
+            | "mi_thread_init"
+            | "mi_stats_merge"
+            | "mi_collect"
+            | "mi_option_get"
+            | "mi_option_set"
+    )
+}
+
+/// Check if a function looks like an arena/bump allocator that intentionally
+/// never frees individual allocations.
+///
+/// Arena allocators (bump allocators, zone allocators, region allocators)
+/// allocate from a pre-mapped region and free the entire region at once,
+/// not individual allocations. Leak reports for these are false positives.
+pub fn is_arena_allocator(func_name: &str) -> bool {
+    let name = func_name.trim_start_matches('@').to_lowercase();
+    name.contains("arena")
+        || name.contains("bump")
+        || name.contains("pool")
+        || name.contains("region")
+        || name.contains("zone_init")
+        || name.contains("map_arena")
+        || name.contains("bss_arena")
+}
+
+/// Check if a function is a vtable/deallocator thunk — a small function
+/// whose sole purpose is to dispatch a free/dealloc call through a vtable
+/// or function pointer. UAF and DF reports inside these are always FPs
+/// because the thunk is just doing what it's designed to do.
+pub fn is_vtable_dealloc_thunk(func_name: &str, body_size: Option<usize>) -> bool {
+    let name = func_name.trim_start_matches('@').to_lowercase();
+
+    // Name-based heuristics
+    let name_indicates_thunk = name.contains("vtable")
+        || name.contains("dealloc") && (name.contains("thunk") || name.contains("free"))
+        || name.contains("nullable") && name.contains("free")
+        || name.contains("default_deallocator");
+
+    if !name_indicates_thunk {
+        return false;
+    }
+
+    // If body size info available, also require small body (thunks are tiny)
+    if let Some(size) = body_size {
+        size <= 20 // Thunks typically have < 20 instructions
+    } else {
+        true // No size info — trust name heuristic
+    }
+}
+
 /// Check if a function name is a language runtime intrinsic.
 ///
 /// Runtime intrinsics are compiler/language runtime support functions
@@ -323,11 +444,6 @@ mod tests {
             detector.is_ffi_boundary("c_handler", Language::Rust, Language::C),
             "Rust calling C user function must be FFI boundary"
         );
-        assert!(
-            detector.is_ffi_boundary("c_process", Language::Zig, Language::C),
-            "Zig calling C function must be FFI boundary"
-        );
-
         // drop_in_place → filtered out
         assert!(
             !detector.is_ffi_boundary("core::ptr::drop_in_place", Language::C, Language::Rust),
@@ -647,22 +763,6 @@ mod tests {
             "Go function with _Cfunc_ prefix must be detected as Go"
         );
 
-        // Zig function
-        let lang = detector.detect_callee_lang("zig.debug.print");
-        assert_eq!(
-            lang,
-            Language::Zig,
-            "Zig function with zig. prefix must be detected as Zig"
-        );
-
-        // Zig function with main. prefix (Zig also uses main.)
-        let lang = detector.detect_callee_lang("main.doubleFreeDemo");
-        assert_eq!(
-            lang,
-            Language::Zig,
-            "Zig function with main. prefix must be detected as Zig"
-        );
-
         // Python function
         let lang = detector.detect_callee_lang("PyObject_GetAttr");
         assert_eq!(
@@ -799,12 +899,6 @@ mod tests {
             "C++ calling C++ user function must not be FFI boundary"
         );
 
-        // Zig calling Zig user function → not FFI
-        assert!(
-            !detector.is_ffi_boundary("zig_function", Language::Zig, Language::Zig),
-            "Zig calling Zig user function must not be FFI boundary"
-        );
-
         // Same language with runtime intrinsic → not FFI (even if it might be filtered)
         assert!(
             !detector.is_ffi_boundary("__rust_dealloc", Language::Rust, Language::Rust),
@@ -822,6 +916,175 @@ mod tests {
         assert!(
             result.is_none(),
             "Aggressive detection must not flag same language calls as FFI"
+        );
+    }
+
+    // ── Allocator thunk detection ──
+
+    /// Objective: Verify allocator thunk detection correctly identifies thunk functions.
+    /// Invariants: Functions with alloc/free/dealloc/vtable/thunk patterns are thunks.
+    #[test]
+    fn test_is_allocator_thunk() {
+        // Free/dealloc thunks
+        assert!(
+            is_allocator_thunk("mi_free"),
+            "mi_free must be allocator thunk"
+        );
+        assert!(
+            is_allocator_thunk("free_sensitive_cstr"),
+            "free_sensitive_cstr must be thunk"
+        );
+        assert!(
+            is_allocator_thunk("vtable_free"),
+            "vtable_free must be thunk"
+        );
+        assert!(
+            is_allocator_thunk("default_allocator_free"),
+            "default_allocator_free must be thunk"
+        );
+
+        // Alloc/malloc thunks
+        assert!(
+            is_allocator_thunk("mi_malloc"),
+            "mi_malloc must be allocator thunk"
+        );
+        assert!(
+            is_allocator_thunk("alloc_with_default_allocator"),
+            "alloc_with_default must be thunk"
+        );
+        assert!(
+            is_allocator_thunk("realloc_raw"),
+            "realloc_raw must be allocator thunk"
+        );
+        assert!(
+            is_allocator_thunk("default_dupe"),
+            "default_dupe must be allocator thunk"
+        );
+
+        // Vtable/wrapper/shim patterns
+        assert!(
+            is_allocator_thunk("c_thunks::mi_malloc_items"),
+            "c_thunks must be thunk"
+        );
+        assert!(
+            is_allocator_thunk("ffi_wrapper_free"),
+            "wrapper must be thunk"
+        );
+
+        // Non-thunk functions
+        assert!(
+            !is_allocator_thunk("process_data"),
+            "process_data must NOT be thunk"
+        );
+        assert!(!is_allocator_thunk("main"), "main must NOT be thunk");
+    }
+
+    // ── Non-allocator API detection ──
+
+    /// Objective: Verify non-allocator API detection excludes macOS zone APIs.
+    /// Invariants: malloc_set_zone_name, mi_heap_new etc. are NOT allocators.
+    #[test]
+    fn test_is_non_allocator_api() {
+        assert!(
+            is_non_allocator_api("malloc_set_zone_name"),
+            "malloc_set_zone_name must be recognized as non-allocator API"
+        );
+        assert!(
+            is_non_allocator_api("malloc_create_zone"),
+            "malloc_create_zone must be recognized as non-allocator API"
+        );
+        assert!(
+            is_non_allocator_api("mi_heap_new"),
+            "mi_heap_new must be recognized as non-allocator API"
+        );
+        assert!(
+            is_non_allocator_api("mi_heap_visit_blocks"),
+            "mi_heap_visit_blocks must be recognized as non-allocator API"
+        );
+
+        // Actual allocators should NOT be excluded
+        assert!(
+            !is_non_allocator_api("malloc"),
+            "malloc must NOT be classified as non-allocator API"
+        );
+        assert!(
+            !is_non_allocator_api("mi_malloc"),
+            "mi_malloc must NOT be classified as non-allocator API"
+        );
+        assert!(
+            !is_non_allocator_api("free"),
+            "free must NOT be classified as non-allocator API"
+        );
+    }
+
+    // ── Arena allocator detection ──
+
+    /// Objective: Verify arena allocator detection.
+    /// Invariants: arena/bump/pool/zone_init functions are arena allocators.
+    #[test]
+    fn test_is_arena_allocator() {
+        assert!(
+            is_arena_allocator("bss_arena_bump"),
+            "bss_arena_bump must be arena"
+        );
+        assert!(
+            is_arena_allocator("map_arena_alloc"),
+            "map_arena must be arena"
+        );
+        assert!(is_arena_allocator("zone_init"), "zone_init must be arena");
+        assert!(
+            is_arena_allocator("bump_allocator"),
+            "bump_allocator must be arena"
+        );
+
+        assert!(!is_arena_allocator("malloc"), "malloc must NOT be arena");
+        assert!(!is_arena_allocator("free"), "free must NOT be arena");
+        assert!(
+            !is_arena_allocator("my_function"),
+            "generic function must NOT be arena"
+        );
+    }
+
+    // ── Vtable dealloc thunk detection ──
+
+    /// Objective: Verify vtable dealloc thunk detection with name and size.
+    /// Invariants: vtable/dealloc/thunk + small body → thunk; large body → not thunk.
+    #[test]
+    fn test_is_vtable_dealloc_thunk() {
+        // Name-based detection (no size info)
+        assert!(
+            is_vtable_dealloc_thunk("NullableAllocator::free", None),
+            "NullableAllocator::free must be vtable dealloc thunk"
+        );
+        assert!(
+            is_vtable_dealloc_thunk("vtable_free", None),
+            "vtable_free must be vtable dealloc thunk"
+        );
+        assert!(
+            is_vtable_dealloc_thunk("default_deallocator", None),
+            "default_deallocator must be vtable dealloc thunk"
+        );
+
+        // Size-gated: small body → thunk
+        assert!(
+            is_vtable_dealloc_thunk("NullableAllocator::free", Some(10)),
+            "small-body NullableAllocator::free must be thunk"
+        );
+
+        // Size-gated: large body → NOT thunk (too big to be a simple dispatch)
+        assert!(
+            !is_vtable_dealloc_thunk("NullableAllocator::free", Some(100)),
+            "large-body function must NOT be classified as thunk"
+        );
+
+        // Non-matching names
+        assert!(
+            !is_vtable_dealloc_thunk("process_data", None),
+            "process_data must NOT be vtable dealloc thunk"
+        );
+        assert!(
+            !is_vtable_dealloc_thunk("my_free", None),
+            "generic my_free must NOT be vtable dealloc thunk (no vtable/dealloc keyword)"
         );
     }
 }

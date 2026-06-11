@@ -300,81 +300,6 @@ entry:
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 4. Zig Language
-// ═══════════════════════════════════════════════════════════════════
-
-/// Zig: Zig alloc + Zig free (same-language, no bug) → zero FP
-#[test]
-fn zig_same_lang_alloc_free_safe() {
-    let ir = r#"
-declare i8* @heap.c_allocator_impl(i64)
-declare void @heap.c_allocator_impl_free(i8*)
-
-define void @zig_safe() {
-entry:
-  %p = call i8* @heap.c_allocator_impl(i64 64)
-  call void @heap.c_allocator_impl_free(i8* %p)
-  ret void
-}
-"#;
-    let issues = analyze(ir);
-    // Zig runtime internals should be suppressed by noise reduction
-    // No high-severity issue expected for same-language safe pattern
-    let high_severity: Vec<_> = issues
-        .iter()
-        .filter(|k| !matches!(k, IssueKind::FfiUnsafeCall))
-        .collect();
-    assert!(
-        high_severity.is_empty() || !has_kind(&issues, IssueKind::CrossFamilyFree),
-        "Zig same-language safe pattern should not report CrossFamilyFree, got {:?}",
-        issues
-    );
-}
-
-/// Zig→C: malloc + operator delete (cross-family) → CrossFamilyFree
-#[test]
-fn zig_to_c_cross_language_free_bug() {
-    let ir = r#"
-declare i8* @malloc(i64)
-declare void @_ZdlPv(i8*)
-
-define void @zig_cross_free() {
-entry:
-  %p = call i8* @malloc(i64 64)
-  call void @_ZdlPv(i8* %p)
-  ret void
-}
-"#;
-    let issues = analyze(ir);
-    assert!(
-        has_kind(&issues, IssueKind::CrossFamilyFree),
-        "malloc + operator delete is cross-family, must report CrossFamilyFree, got {:?}",
-        issues
-    );
-}
-
-/// Zig: Zig runtime internal (munmap) must NOT report FP
-#[test]
-fn zig_runtime_munmap_no_fp() {
-    let ir = r#"
-declare void @posix.munmap(i8*, i64)
-
-define void @zig_runtime_cleanup() {
-entry:
-  call void @posix.munmap(i8* null, i64 4096)
-  call void @posix.munmap(i8* null, i64 4096)
-  ret void
-}
-"#;
-    let issues = analyze(ir);
-    assert!(
-        !has_kind(&issues, IssueKind::DoubleFree),
-        "Zig runtime munmap must NOT report DoubleFree FP, got {:?}",
-        issues
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // 5. Python C-API Language
 // ═══════════════════════════════════════════════════════════════════
 
@@ -527,9 +452,9 @@ entry:
     );
 }
 
-/// FFI: Zig calling C c_alloc_buffer + operator delete (cross-family)
+/// FFI: Go calling C c_alloc_buffer + operator delete (cross-family)
 #[test]
-fn ffi_zig_c_cross_family_free_bug() {
+fn ffi_go_c_cross_family_free_bug() {
     let ir = r#"
 declare i8* @c_alloc_buffer(i64)
 declare void @_ZdlPv(i8*)
@@ -547,7 +472,7 @@ entry:
             || has_kind(&issues, IssueKind::CrossLanguageFree)
             || has_kind(&issues, IssueKind::DefiniteLeak)
             || has_kind(&issues, IssueKind::ConditionalLeak),
-        "Zig→C c_alloc_buffer + operator delete must report an issue, got {:?}",
+        "Go→C c_alloc_buffer + operator delete must report an issue, got {:?}",
         issues
     );
 }

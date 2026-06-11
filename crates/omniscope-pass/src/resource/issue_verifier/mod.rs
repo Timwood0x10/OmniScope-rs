@@ -44,9 +44,9 @@ pub(crate) use cross_family::{
 pub(crate) use double_free::{verify_double_release, verify_double_release_with_bundle};
 pub(crate) use helpers::{
     build_verdict_description, deduplicate_leak_candidates, has_escape_evidence,
-    is_declaration_only_candidate, is_ffi_specific_issue, is_leak_candidate, is_leakable_resource,
-    is_memory_resource, is_runtime_allocator_function, is_runtime_deallocator_function,
-    is_same_language_allocator_wrapper_noise,
+    is_declaration_only_candidate, is_ffi_bridge_layer_candidate, is_ffi_specific_issue,
+    is_leak_candidate, is_leakable_resource, is_memory_resource, is_runtime_allocator_function,
+    is_runtime_deallocator_function, is_same_language_allocator_wrapper_noise,
 };
 pub(crate) use leak::{
     verify_borrow_escape, verify_conditional_leak, verify_conditional_leak_with_bundle,
@@ -220,6 +220,20 @@ impl Pass for IssueVerifierPass {
                     verified.push(candidate);
                     continue;
                 }
+            }
+
+            // ── FFI Bridge Layer / Vtable Thunk suppression ──
+            // Suppress candidates from allocator thunks and vtable dealloc thunks.
+            // These are always FPs in FFI bridge layers like bun_alloc where the
+            // module's purpose IS to wrap cross-language allocation calls.
+            if is_ffi_bridge_layer_candidate(&candidate, module_index.as_ref()) {
+                semantic_suppressed += 1;
+                candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                candidate.description.get_or_insert_with(|| {
+                    "FFI bridge layer / vtable thunk — cross-language alloc/free is expected behavior".to_string()
+                });
+                verified.push(candidate);
+                continue;
             }
 
             // ── Single-language filter ──
@@ -575,10 +589,35 @@ impl Pass for IssueVerifierPass {
         for idx in emit_indices {
             let candidate = &verified[idx];
             let issue_id = ctx.next_issue_id();
+
+            // ── Allocator crate downgrading ──
+            // Allocator crates (e.g., bun_alloc) wrap C allocation APIs
+            // in safe Rust abstractions. Their CrossLanguageFree and
+            // OwnershipViolation issues are intentional FFI bridge calls,
+            // not bugs. Downgrade from Warning → Note so users still see
+            // the cross-language boundaries but don't treat them as warnings.
+            let base_severity = candidate.severity();
+            let is_alloc_crate = module_index
+                .as_ref()
+                .map_or(false, |idx| idx.is_allocator_crate());
+            let is_target_kind = matches!(
+                candidate.kind,
+                IssueCandidateKind::CrossLanguageFree
+                    | IssueCandidateKind::CrossFamilyFree
+                    | IssueCandidateKind::UseAfterRelease
+                    | IssueCandidateKind::DoubleRelease
+            );
+            let is_warning = base_severity == omniscope_core::diagnostics::Severity::Warning;
+            let severity = if is_alloc_crate && is_target_kind && is_warning {
+                omniscope_core::diagnostics::Severity::Note
+            } else {
+                base_severity
+            };
+
             let mut issue = Issue::new(
                 issue_id,
                 candidate.to_issue_kind(),
-                candidate.severity(),
+                severity,
                 candidate.description.clone().unwrap_or_default(),
             );
 

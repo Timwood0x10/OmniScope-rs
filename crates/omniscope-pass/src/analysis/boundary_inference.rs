@@ -173,18 +173,13 @@ fn detect_naming_conventions(module: &IRModule) -> Vec<(String, Language)> {
 /// The guessed language, or `Language::Unknown` if uncertain.
 fn guess_language_from_name(name: &str) -> Language {
     // Go functions
-    if name.starts_with("_Cfunc_") || name.starts_with("_cgo_") {
+    if name.starts_with("_Cfunc_") || name.starts_with("_cgo_") || name.starts_with("runtime.") {
         return Language::Go;
     }
 
     // Rust functions
     if name.starts_with("__rust_") || name.contains("rust_") {
         return Language::Rust;
-    }
-
-    // Zig functions
-    if name.starts_with("zig_") || name.contains(".allocator") {
-        return Language::Zig;
     }
 
     // Python functions
@@ -242,6 +237,11 @@ mod tests {
             "_cgo_ prefix must be detected as Go"
         );
         assert_eq!(
+            guess_language_from_name("runtime.mallocgc"),
+            Language::Go,
+            "runtime. prefix must be detected as Go"
+        );
+        assert_eq!(
             guess_language_from_name("malloc"),
             Language::Unknown,
             "malloc should be Unknown"
@@ -261,27 +261,6 @@ mod tests {
             guess_language_from_name("rust_main"),
             Language::Rust,
             "rust_ prefix must be detected as Rust"
-        );
-        assert_eq!(
-            guess_language_from_name("malloc"),
-            Language::Unknown,
-            "malloc should be Unknown"
-        );
-    }
-
-    /// Objective: Verify Zig function detection.
-    /// Invariants: Zig functions should be detected.
-    #[test]
-    fn test_zig_function_detection() {
-        assert_eq!(
-            guess_language_from_name("zig_alloc"),
-            Language::Zig,
-            "zig_ prefix must be detected as Zig"
-        );
-        assert_eq!(
-            guess_language_from_name("heap.allocator"),
-            Language::Zig,
-            ".allocator suffix must be detected as Zig"
         );
         assert_eq!(
             guess_language_from_name("malloc"),

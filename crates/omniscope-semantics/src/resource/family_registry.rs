@@ -240,8 +240,6 @@ impl FamilyRegistry {
         // Windows platform families
         self.add_win32_heap_symbols();
         self.add_win32_virtual_symbols();
-        // Zig allocator (additional symbols)
-        self.add_zig_symbols();
     }
 
     fn add_c_heap_symbols(&mut self) {
@@ -300,21 +298,6 @@ impl FamilyRegistry {
         // Rust allocator deallocation symbols (evidence: bun_alloc.ll)
         self.add_symbol("__rdl_dealloc", f, SymbolEffect::Release, lang);
         self.add_symbol("__rg_dealloc", f, SymbolEffect::Release, lang);
-        // Zig allocator vtable symbols (evidence: boundary_test.ll, zig_main.ll)
-        let zig_f = FamilyId::ZIG_ALLOCATOR;
-        let zig_lang = LanguageHint::Zig;
-        self.add_symbol(
-            "zig_allocator_allocImpl",
-            zig_f,
-            SymbolEffect::Acquire,
-            zig_lang,
-        );
-        self.add_symbol(
-            "zig_allocator_freeImpl",
-            zig_f,
-            SymbolEffect::Release,
-            zig_lang,
-        );
     }
 
     /// Registers Rust raw ownership transfer symbols: Box/CString::into_raw
@@ -649,16 +632,6 @@ impl FamilyRegistry {
         self.add_symbol("VirtualAllocEx", f, SymbolEffect::Acquire, lang);
         self.add_symbol("VirtualFree", f, SymbolEffect::Release, lang);
         self.add_symbol("VirtualFreeEx", f, SymbolEffect::Release, lang);
-    }
-
-    /// Register additional Zig allocator symbols.
-    /// allocInternal is the general-purpose Zig allocator entry point
-    /// that dispatches through the vtable — belongs to ZIG_ALLOCATOR family.
-    fn add_zig_symbols(&mut self) {
-        let f = FamilyId::ZIG_ALLOCATOR;
-        let lang = LanguageHint::Zig;
-        self.add_symbol("allocInternal", f, SymbolEffect::Acquire, lang);
-        self.add_symbol("freeInternal", f, SymbolEffect::Release, lang);
     }
 }
 

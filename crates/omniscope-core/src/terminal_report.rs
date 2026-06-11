@@ -405,7 +405,6 @@ fn infer_lang_from_family(family: omniscope_types::FamilyId) -> LanguageHint {
             LanguageHint::CSharp
         }
         omniscope_types::FamilyId::GO_GC => LanguageHint::Go,
-        omniscope_types::FamilyId::ZIG_ALLOCATOR => LanguageHint::Zig,
         FamilyId(_) => LanguageHint::Unknown,
     }
 }
@@ -457,11 +456,6 @@ mod tests {
             language_label(LanguageHint::Go),
             "Go",
             "Go language should display as 'Go'"
-        );
-        assert_eq!(
-            language_label(LanguageHint::Zig),
-            "Zig",
-            "Zig language should display as 'Zig'"
         );
         assert_eq!(
             language_label(LanguageHint::Unknown),

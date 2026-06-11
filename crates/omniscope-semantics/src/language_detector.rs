@@ -45,9 +45,6 @@ impl LanguageDetector {
         if module_name.ends_with(".rs") || module_name.contains("rust") {
             return Language::Rust;
         }
-        if module_name.ends_with(".zig") || module_name.contains("zig") {
-            return Language::Zig;
-        }
         if module_name.ends_with(".go") || module_name.contains("go") {
             return Language::Go;
         }
@@ -105,14 +102,6 @@ impl LanguageDetector {
             LanguagePattern::new(Language::Cpp, "_Z").prefix(),  // C++ mangling (short)
             LanguagePattern::new(Language::Cpp, "std::").contains(),
             LanguagePattern::new(Language::Cpp, "::").contains(),
-            // Zig patterns (before Go to avoid main. ambiguity)
-            LanguagePattern::new(Language::Zig, "zig.").prefix(),
-            LanguagePattern::new(Language::Zig, "zig_allocator_").prefix(),
-            LanguagePattern::new(Language::Zig, "heap.").prefix(),
-            LanguagePattern::new(Language::Zig, "Io.").prefix(),
-            LanguagePattern::new(Language::Zig, "posix.").prefix(),
-            LanguagePattern::new(Language::Zig, "Thread.").prefix(),
-            LanguagePattern::new(Language::Zig, "main.").prefix(), // Zig also uses main.
             // Go patterns (more specific than just main.)
             LanguagePattern::new(Language::Go, "_Cfunc_").prefix(),
             LanguagePattern::new(Language::Go, "_cgo_").prefix(),

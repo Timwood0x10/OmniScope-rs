@@ -430,7 +430,7 @@ mod tests {
             "malloc",
         )
         .with_ffi_evidence(FfiEvidence::CrossLanguageCall {
-            caller_lang: "Zig".to_string(),
+            caller_lang: "Rust".to_string(),
             callee_lang: "C".to_string(),
         });
         assert!(

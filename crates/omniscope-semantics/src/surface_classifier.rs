@@ -292,7 +292,6 @@ impl SurfaceClassifier {
                     || func_name.contains("c_api")
                     || func_name.contains("_with_c")
             }
-            Language::Zig => func_name.contains("cImport") || func_name.contains("c_"),
             Language::Go => func_name.starts_with("C.") || func_name.contains("cgo"),
             _ => false,
         }
@@ -346,7 +345,6 @@ impl SurfaceClassifier {
             Language::Rust,
             vec!["core::", "alloc::", "std::", "std_unicode::"],
         );
-        map.insert(Language::Zig, vec!["std."]);
         map.insert(
             Language::Go,
             vec!["runtime.", "fmt.", "strings.", "strconv."],

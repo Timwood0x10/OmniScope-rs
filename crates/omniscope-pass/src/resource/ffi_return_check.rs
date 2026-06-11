@@ -563,13 +563,6 @@ fn is_system_allocator(name: &str) -> bool {
         || name.starts_with("mi_")
         || name.starts_with("je_")
         || name.starts_with("tc_")
-        // Zig runtime allocators — these are wrapper calls that abort on OOM
-        // in the default configuration, so unchecked returns are not bugs.
-        || name.starts_with("zig_allocator_")
-        || name.starts_with("std.heap.")
-        // Zig's generic alloc() method — most Zig allocators abort on OOM
-        || name == "alloc" || name == "allocAligned"
-        || name == "alignedAlloc" || name == "allocWithFlags"
 }
 
 /// Functions that are null-sinks — passing a null pointer to them

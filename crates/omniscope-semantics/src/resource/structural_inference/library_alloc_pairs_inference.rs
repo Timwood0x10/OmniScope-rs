@@ -10,7 +10,6 @@
 //! - Go cgo (`_cgo_allocate` / `_cgo_free`, etc.)
 //! - Python CFFI (`Py_DECREF` / `Py_XDECREF` / `PyList_GetItem`, etc.)
 //! - JNI (`NewGlobalRef` / `DeleteGlobalRef` / `GetStringUTFChars`, etc.)
-//! - Zig allocator vtable (`zig_allocator_allocImpl` / `zig_allocator_freeImpl`)
 //!
 //! Evidence source: `ir.md` §9 (manual per-file .ll analysis, each entry
 //! annotated with source file). This detector complements R-4 POSIX syscall
@@ -320,23 +319,8 @@ const LIBRARY_ALLOC_TABLE: &[LibraryAllocEntry] = &[
         effect: LibraryAllocEffect::Release,
         evidence_file: "java_jni_bugs.ll",
     },
-    // ── Zig allocator vtable ──
-    // Evidence: boundary_test.ll
-    LibraryAllocEntry {
-        name: "zig_allocator_allocImpl",
-        language: LanguageHint::Zig,
-        effect: LibraryAllocEffect::Acquire,
-        evidence_file: "boundary_test.ll",
-    },
-    LibraryAllocEntry {
-        name: "zig_allocator_freeImpl",
-        language: LanguageHint::Zig,
-        effect: LibraryAllocEffect::Release,
-        evidence_file: "boundary_test.ll",
-    },
 ];
 
-// ──────────────────────────────────────────────────────────────────────────
 // Lookup + summary inference
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -566,22 +550,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_zig() {
-        let alloc = lookup_library_alloc("zig_allocator_allocImpl")
-            .expect("library_alloc_pairs_inference::test_lookup_zig: in table");
-        assert_eq!(
-            alloc.effect,
-            LibraryAllocEffect::Acquire,
-            "zig_allocator_allocImpl should be classified as Acquire effect"
-        );
-        assert_eq!(
-            alloc.language,
-            LanguageHint::Zig,
-            "zig_allocator_allocImpl should be identified as Zig language"
-        );
-    }
-
-    #[test]
     fn test_lookup_unknown() {
         assert!(
             lookup_library_alloc("some_random_function").is_none(),
@@ -620,7 +588,6 @@ mod tests {
             ("_cgo_allocate", "go_cgo"),
             ("Py_DECREF", "python"),
             ("NewGlobalRef", "jni"),
-            ("zig_allocator_allocImpl", "zig"),
         ];
         for (name, family_name) in &families {
             assert!(

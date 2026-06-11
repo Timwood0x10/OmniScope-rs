@@ -69,39 +69,89 @@ impl NoiseReduction {
                 // Stack canary
                 "__stack_chk_fail",
                 "__stack_chk_guard",
-                // Zig runtime internals
-                "Io.Threaded",
-                "posix.mmap",
-                "posix.munmap",
-                "posix.",
-                "Thread.PosixThreadImpl",
-                "zig_allocator_",
-                // Zig C allocator wrapper — legitimate Zig→C malloc/free bridge
-                "heap.c_allocator_impl",
-                "heap.page_allocator",
-                "heap.",
-                // Zig memory management internals — manage their own arenas
-                "mem.Allocator",
-                "mem.alignForward",
-                "mem.alignBackward",
-                "mem.isValidAlign",
-                // Zig runtime startup / OS abstraction
-                "start.known",
-                "os.argv",
-                // Zig munmap / mmap wrappers (runtime-internal)
-                "munmap",
+                // ── Rust FFI allocator/arena patterns (Bun-specific) ──
+                // Bun's allocator crate (mangled with crate hash)
+                "bun_alloc",
+                "9bun_alloc",
+                // Mimalloc arena wrappers used in Bun
+                "MimallocArena",
+                "mimalloc_arena",
+                // ZAllocator — Bun's generic allocator abstraction
+                "ZAllocator",
+                "zallocator",
+                // NullableAllocator / CAllocator
+                "NullableAllocator",
+                "nullable_allocator",
+                "CAllocator",
+                "c_allocator",
+                // heap_breakdown module (Bun's JS heap zone tracking)
+                "heap_breakdown",
+                "heap_break",
+                // bss_arena_bump (Bun's BSS arena bump allocator)
+                "bss_arena_bump",
+                "BssArenaBump",
+                // c_thunks module (mi_free_bytes, mi_free_opaque, mi_malloc_items)
+                "c_thunks",
+                "c_thunk",
+                // Zone-based allocation (Bun's JS heap zones)
+                "Zone::",
+                "4zone",
+                // SliceCursor / Write trait impls writing to buffers
+                "SliceCursor",
+                "slice_cursor",
+                "WritePtr",
+                "write_ptr",
+                // RawVec / alloc crate internals
+                "RawVec",
+                "raw_vec",
+                "7raw_vec",
+                "finish_grow",
+                "grow_one",
+                // ── macOS memory zone APIs (non-allocator but misidentified) ──
+                "malloc_set_zone_name",
+                "malloc_create_zone",
+                "malloc_default_zone",
+                "malloc_zone_memalign",
+                "malloc_zone_from_ptr",
+                "malloc_zone_malloc",
+                "malloc_zone_free",
+                "malloc_zone_realloc",
+                "malloc_zone_calloc",
+                "malloc_destroy_zone",
+                // ── miminaloc API (allocator pair recognition) ──
+                "mi_heap_new",
+                "mi_heap_destroy",
+                "mi_heap_visit_blocks",
+                "mi_heap_visit",
+                "mi_is_in_heap_region",
+                "mi_is_in_heap",
+                "mi_malloc",
+                "mi_free",
+                "mi_realloc",
+                "mi_calloc",
+                "mi_realpath",
+                "mi_strdup",
+                "mi_strndup",
+                "mi_recalloc",
             ],
             // Patterns for runtime-internal *caller* functions.
             // When a generic C function (free/malloc) is called FROM one of these
             // callers, the resulting issue is a runtime false positive.
             runtime_caller_patterns: vec![
-                // Zig memory management internals
-                "mem.Allocator",
-                "mem.alignForward",
-                "heap.c_allocator_impl",
-                "heap.page_allocator",
-                "heap.",
-                "start.known",
+                // Rust FFI allocator/arena internals (Bun-specific)
+                "bun_alloc",
+                "9bun_alloc",
+                "MimallocArena",
+                "ZAllocator",
+                "NullableAllocator",
+                "CAllocator",
+                "heap_breakdown",
+                "bss_arena_bump",
+                "c_thunks",
+                "Zone::",
+                "RawVec",
+                "raw_vec",
+                "SliceCursor",
             ],
         }
     }
@@ -144,12 +194,20 @@ impl NoiseReduction {
     /// an instance. Used by IssueGate fallback rules in pass.rs.
     pub fn runtime_caller_match(caller_name: &str) -> bool {
         static PATTERNS: &[&str] = &[
-            "mem.Allocator",
-            "mem.alignForward",
-            "heap.c_allocator_impl",
-            "heap.page_allocator",
-            "heap.",
-            "start.known",
+            // Rust FFI allocator/arena internals (Bun-specific)
+            "bun_alloc",
+            "9bun_alloc",
+            "MimallocArena",
+            "ZAllocator",
+            "NullableAllocator",
+            "CAllocator",
+            "heap_breakdown",
+            "bss_arena_bump",
+            "c_thunks",
+            "Zone::",
+            "RawVec",
+            "raw_vec",
+            "SliceCursor",
         ];
         PATTERNS.iter().any(|p| caller_name.contains(p))
     }

@@ -13,6 +13,7 @@
 use omniscope_core::Result;
 use omniscope_types::{Effect, FamilyId, FunctionId, Language, OmniScopeConfig};
 
+use crate::analysis::ffi_boundary_detector::is_non_allocator_api;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::raw_fact_collector::RawResourceFact;
 use omniscope_semantics::ffi_contract::{ContractType, FFIContractDB};
@@ -335,6 +336,18 @@ impl Pass for ContractGraphBuilderPass {
             let key = (fact.function, family);
 
             if fact.is_acquire {
+                // ── Non-allocator API filter ──
+                // Functions like malloc_set_zone_name, mi_heap_new, etc. look
+                // like they acquire resources but are actually zone/metadata APIs.
+                // Treating them as Acquire edges produces DefiniteLeak FPs.
+                if is_non_allocator_api(&fact.function_name) {
+                    tracing::debug!(
+                        "[CGB] Skipping non-allocator API acquire: {}",
+                        fact.function_name
+                    );
+                    continue;
+                }
+
                 // Create a new resource instance for this acquire
                 let instance_id = graph.alloc_instance();
                 graph.add_edge(ContractEdge {
@@ -564,8 +577,16 @@ impl Pass for ContractGraphBuilderPass {
                     if let Some(entry) = registry.lookup(callee) {
                         match entry.effect {
                             omniscope_semantics::SymbolEffect::Acquire => {
-                                let id = graph.alloc_instance();
-                                func_acquires.push_back((id, entry.family_id, callee));
+                                // Skip non-allocator APIs (e.g., malloc_set_zone_name)
+                                if is_non_allocator_api(callee) {
+                                    tracing::debug!(
+                                        "[CGB] Skipping non-allocator API acquire from registry: {}",
+                                        callee
+                                    );
+                                } else {
+                                    let id = graph.alloc_instance();
+                                    func_acquires.push_back((id, entry.family_id, callee));
+                                }
                             }
                             omniscope_semantics::SymbolEffect::Reclaim => {
                                 let id = graph.alloc_instance();
@@ -589,9 +610,17 @@ impl Pass for ContractGraphBuilderPass {
                         // Use FFI contract database for functions not in FamilyRegistry
                         match contract.contract_type {
                             ContractType::Allocator => {
-                                let id = graph.alloc_instance();
-                                if let Some(family) = contract.family_id {
-                                    func_acquires.push_back((id, family, callee));
+                                // Skip non-allocator APIs
+                                if is_non_allocator_api(callee) {
+                                    tracing::debug!(
+                                        "[CGB] Skipping non-allocator API from FFI DB: {}",
+                                        callee
+                                    );
+                                } else {
+                                    let id = graph.alloc_instance();
+                                    if let Some(family) = contract.family_id {
+                                        func_acquires.push_back((id, family, callee));
+                                    }
                                 }
                             }
                             ContractType::Deallocator => {
@@ -1293,7 +1322,6 @@ pub fn is_cross_language_mismatch(
         FamilyId::CSHARP_COM,
     ];
     let go_families = [FamilyId::GO_GC, FamilyId::GO_CGO];
-    let zig_families = [FamilyId::ZIG_ALLOCATOR];
 
     // Check if alloc and release families are in different language groups
     let alloc_is_rust = rust_families.contains(&alloc_fam);
@@ -1302,7 +1330,6 @@ pub fn is_cross_language_mismatch(
     let alloc_is_java = java_families.contains(&alloc_fam);
     let alloc_is_csharp = csharp_families.contains(&alloc_fam);
     let alloc_is_go = go_families.contains(&alloc_fam);
-    let alloc_is_zig = zig_families.contains(&alloc_fam);
 
     let release_is_rust = rust_families.contains(&release_fam);
     let release_is_c = c_families.contains(&release_fam);
@@ -1310,7 +1337,6 @@ pub fn is_cross_language_mismatch(
     let release_is_java = java_families.contains(&release_fam);
     let release_is_csharp = csharp_families.contains(&release_fam);
     let release_is_go = go_families.contains(&release_fam);
-    let release_is_zig = zig_families.contains(&release_fam);
 
     // Cross-language if both are in different language groups
     (alloc_is_rust
@@ -1318,50 +1344,37 @@ pub fn is_cross_language_mismatch(
             || release_is_python
             || release_is_java
             || release_is_csharp
-            || release_is_go
-            || release_is_zig))
+            || release_is_go))
         || (alloc_is_c
             && (release_is_rust
                 || release_is_python
                 || release_is_java
                 || release_is_csharp
-                || release_is_go
-                || release_is_zig))
+                || release_is_go))
         || (alloc_is_python
             && (release_is_rust
                 || release_is_c
                 || release_is_java
                 || release_is_csharp
-                || release_is_go
-                || release_is_zig))
+                || release_is_go))
         || (alloc_is_java
             && (release_is_rust
                 || release_is_c
                 || release_is_python
                 || release_is_csharp
-                || release_is_go
-                || release_is_zig))
+                || release_is_go))
         || (alloc_is_csharp
             && (release_is_rust
                 || release_is_c
                 || release_is_python
                 || release_is_java
-                || release_is_go
-                || release_is_zig))
+                || release_is_go))
         || (alloc_is_go
             && (release_is_rust
                 || release_is_c
                 || release_is_python
                 || release_is_java
-                || release_is_csharp
-                || release_is_zig))
-        || (alloc_is_zig
-            && (release_is_rust
-                || release_is_c
-                || release_is_python
-                || release_is_java
-                || release_is_csharp
-                || release_is_go))
+                || release_is_csharp))
 }
 
 /// Converts an Effect to a ContractEdge for a given call context.

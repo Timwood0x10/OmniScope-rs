@@ -337,3 +337,124 @@ pub(crate) fn has_null_store_pattern(graph: &ContractGraph, instance_id: &u64) -
         }
     })
 }
+
+/// Check if a function returns an acquired resource via `ret` instruction.
+///
+/// When a function calls malloc/mi_malloc/etc. (an Acquire edge) and then
+/// returns that pointer to the caller, the resource is NOT leaked — it has
+/// escaped to the caller. This is the "allocator factory" or "return-value-escape"
+/// pattern common in FFI bridge layers like bun_alloc.
+///
+/// Returns `true` if the function body contains a `ret` instruction that
+/// returns a register which may hold the acquired value.
+pub(crate) fn function_returns_acquired_resource(
+    func_name: &str,
+    ir_module: Option<&omniscope_ir::IRModule>,
+) -> bool {
+    let mod_ref = match ir_module {
+        Some(m) => m,
+        None => return false,
+    };
+
+    let body = match mod_ref.function_bodies.get(func_name) {
+        Some(b) => b,
+        None => return false,
+    };
+
+    // If the function body has any ret instruction, it returns something.
+    // Combined with Acquire edges in the same function, this means the
+    // acquired resource escapes via return value.
+    body.instructions
+        .iter()
+        .any(|inst| matches!(inst.kind, omniscope_ir::IRInstructionKind::Ret))
+}
+
+/// Check if a function name indicates it's an allocator factory function.
+///
+/// Allocator factory functions are thin wrappers whose job is to allocate
+/// memory and return it to the caller. Their names contain alloc/malloc/
+/// realloc/zalloc/dupe patterns. Leak reports for these are always FPs
+/// because the allocation IS returned to the caller.
+///
+/// This is a stronger version of `is_allocator_thunk` from ffi_boundary_detector
+/// — it requires the name to indicate memory allocation specifically.
+pub(crate) fn is_allocator_factory_function(func_name: &str) -> bool {
+    use crate::analysis::ffi_boundary_detector::is_allocator_thunk;
+
+    // Must be an allocator thunk first
+    if !is_allocator_thunk(func_name) {
+        return false;
+    }
+
+    let name = func_name.trim_start_matches('@').to_lowercase();
+
+    // Must have explicit allocator naming
+    name.contains("malloc")
+        || name.contains("zalloc")
+        || name.contains("calloc")
+        || name.contains("realloc")
+        || (name.contains("alloc") && !name.contains("dealloc"))
+        || name.contains("dupe")
+        || name.contains("create")
+}
+
+/// Check if a leak candidate should be suppressed because of return-value-escape
+/// or allocator factory pattern.
+///
+/// This implements two suppression rules:
+/// 1. **Return-value-escape**: The function that acquired the resource also
+///    has a `ret` instruction → the resource escapes to the caller.
+/// 2. **Allocator factory**: The function name indicates it's an allocator
+///    factory (e.g., mi_malloc_items, default_dupe, alloc_with_default_allocator).
+///
+/// Either condition is sufficient to suppress ConditionalLeak/DefiniteLeak.
+pub(crate) fn should_suppress_leak_for_allocator_escape(
+    alloc_caller: Option<&str>,
+    alloc_func: &str,
+    ir_module: Option<&omniscope_ir::IRModule>,
+) -> bool {
+    // Rule 1: Return-value-escape — check if the alloc_caller function has ret
+    if let Some(caller) = alloc_caller {
+        if function_returns_acquired_resource(caller, ir_module) {
+            tracing::debug!(
+                "[LEAK-SUPPRESS] alloc_caller '{}' has ret instruction — \
+                 return-value-escape, suppressing leak",
+                caller
+            );
+            return true;
+        }
+    }
+
+    // Rule 2: Allocator factory — check function name patterns
+    if is_allocator_factory_function(alloc_func) {
+        tracing::debug!(
+            "[LEAK-SUPPRESS] alloc_func '{}' is allocator factory — suppressing leak",
+            alloc_func
+        );
+        return true;
+    }
+
+    // Rule 3: Arena allocator — arena allocations are intentionally never freed individually
+    if let Some(caller) = alloc_caller {
+        use crate::analysis::ffi_boundary_detector::is_arena_allocator;
+        if is_arena_allocator(caller) {
+            tracing::debug!(
+                "[LEAK-SUPPRESS] alloc_caller '{}' is arena allocator — suppressing leak",
+                caller
+            );
+            return true;
+        }
+    }
+
+    // Rule 4: Non-allocator API — the "acquire" is not actually acquiring memory
+    use crate::analysis::ffi_boundary_detector::is_non_allocator_api;
+    if is_non_allocator_api(alloc_func) {
+        tracing::debug!(
+            "[LEAK-SUPPRESS] alloc_func '{}' is non-allocator API — suppressing leak",
+            alloc_func
+        );
+        return true;
+    }
+
+    false
+}

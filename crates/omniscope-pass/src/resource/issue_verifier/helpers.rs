@@ -357,6 +357,61 @@ pub(crate) fn has_escape_evidence(candidate: &IssueCandidate, kind: EvidenceKind
         .any(|e| e.kind == kind && e.escape.is_some())
 }
 
+/// Check if an issue candidate should be suppressed because it originates
+/// from an FFI bridge layer / allocator thunk context.
+///
+/// This handles categories A (CrossLanguageFree) and B (OwnershipViolation)
+/// from the bun_alloc FP analysis:
+/// - When alloc_caller or release_caller is an allocator thunk, the cross-
+///   language call is expected behavior in FFI bridge layers.
+/// - UseAfterFree and DoubleFree in vtable/deallocator thunk functions are
+///   always FPs — the thunk is just dispatching a free through a vtable.
+pub(crate) fn is_ffi_bridge_layer_candidate(
+    candidate: &IssueCandidate,
+    _index: Option<&crate::module_index::ModuleIndex>,
+) -> bool {
+    use crate::analysis::ffi_boundary_detector::{is_allocator_thunk, is_vtable_dealloc_thunk};
+
+    let alloc_caller = candidate
+        .alloc_caller
+        .as_deref()
+        .unwrap_or(&candidate.alloc_function);
+    let release_caller = candidate.release_caller.as_deref().unwrap_or(alloc_caller);
+
+    // CrossLanguageFree/CrossFamilyFree in allocator thunk context → FP
+    if matches!(
+        candidate.kind,
+        IssueCandidateKind::CrossLanguageFree | IssueCandidateKind::CrossFamilyFree
+    ) {
+        if is_allocator_thunk(release_caller) || is_allocator_thunk(alloc_caller) {
+            return true;
+        }
+    }
+
+    // UseAfterFree / DoubleRelease in vtable dealloc thunk → FP
+    if matches!(
+        candidate.kind,
+        IssueCandidateKind::UseAfterFree | IssueCandidateKind::DoubleRelease
+    ) {
+        // Check if the release_function (the free being called) is a vtable thunk
+        let release_func = candidate
+            .release_function
+            .as_deref()
+            .unwrap_or(&candidate.alloc_function);
+        if is_vtable_dealloc_thunk(release_func, None) {
+            return true;
+        }
+        // Also check caller context
+        if is_vtable_dealloc_thunk(release_caller, None)
+            || is_vtable_dealloc_thunk(alloc_caller, None)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Builds a human-readable description for a verified candidate.
 pub(crate) fn build_verdict_description(
     candidate: &IssueCandidate,

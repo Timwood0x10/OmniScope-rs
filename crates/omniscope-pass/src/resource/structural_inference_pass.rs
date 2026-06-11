@@ -340,8 +340,8 @@ impl Pass for StructuralInferencePass {
                 kinds.push(fn_name_kind);
             }
 
-            // R-12: RuntimeInternal — Zig runtime functions (std.*, builtin.*,
-            // compiler_rt.*, zig_allocator_*, zig.*, zig.heap.*, zig.mem.*)
+            // R-12: RuntimeInternal — runtime-internal functions (POSIX mmap/munmap,
+            // Rust __rust_*, C++ __cxa_*, etc.)
             // These are compiler/runtime-internal and should suppress
             // WriteToImmutable and Leak issues.
             if is_runtime_internal(symbol) && !kinds.contains(&SemanticKind::RuntimeInternal) {
@@ -693,43 +693,12 @@ fn is_ffi_boundary_function(name: &str) -> bool {
 ///
 /// Runtime-internal functions are compiler/runtime-generated code that
 /// should not be flagged as user bugs. This includes:
-/// - Zig runtime: std.*, builtin.*, compiler_rt.*, zig_allocator_*, zig.*
 /// - Rust runtime: __rust_*, core::panicking, alloc::raw_vec, etc.
 /// - C runtime: __cxa_*, __llvm_*, compiler_builtins, etc.
 ///
-/// These patterns mirror `is_zig_runtime_internal` in module_index.rs
-/// and the NoiseReduction safe_patterns list, but are applied at the
+/// These patterns mirror the NoiseReduction safe_patterns list, but are applied at the
 /// SRT level so IssueGate can use RuntimeInternal for suppression.
 pub fn is_runtime_internal(name: &str) -> bool {
-    // ── Zig runtime internal ──
-    if name.starts_with("std.") {
-        return true;
-    }
-    if name.starts_with("builtin.") {
-        return true;
-    }
-    if name.starts_with("compiler_rt.") || name == "compiler_rt" {
-        return true;
-    }
-    if name.starts_with("zig_allocator_") || name.starts_with("zig.") {
-        return true;
-    }
-    // Zig heap/memory management
-    if name.starts_with("zig.heap.") || name.starts_with("zig.mem.") {
-        return true;
-    }
-    // Zig runtime threading / I/O (mirrors NoiseReduction safe_patterns)
-    if name.contains("Io.Threaded") {
-        return true;
-    }
-    // Zig POSIX wrappers (mirrors NoiseReduction safe_patterns)
-    if name.contains("posix.mmap") {
-        return true;
-    }
-    if name.contains("Thread.PosixThreadImpl") {
-        return true;
-    }
-
     // ── POSIX/libc system functions (runtime-internal allocations) ──
     // mmap/munmap are OS-level memory mapping, managed by the runtime.
     // Reporting leaks for these is noise — the runtime handles cleanup.

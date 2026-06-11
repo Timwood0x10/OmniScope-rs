@@ -421,10 +421,6 @@ mod tests {
             is_ffi_boundary("rust_main", "c_handler", Language::Rust, Language::C),
             "Rust calling C user function must be FFI boundary"
         );
-        assert!(
-            is_ffi_boundary("zig_main", "c_process", Language::Zig, Language::C),
-            "Zig calling C function must be FFI boundary"
-        );
     }
 
     /// Objective: Verify CallGraphPass creation and Pass trait compliance.

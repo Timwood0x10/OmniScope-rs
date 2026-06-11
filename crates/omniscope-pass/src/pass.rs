@@ -527,7 +527,7 @@ impl PassContext {
         // ── Rule 3: libc symbol DoubleFree suppression ──
         // libc functions (free, mmap, etc.) are trusted C ABI interfaces.
         // Reporting DoubleFree on free() is noise ONLY when the caller is
-        // also runtime-internal (e.g., a Zig allocator wrapper calling free
+        // also runtime-internal (e.g., an allocator wrapper calling free
         // twice). When the caller is user code (e.g., double_free() calling
         // free twice on the same pointer), the DoubleFree is a real bug and
         // must NOT be suppressed.
@@ -567,7 +567,6 @@ impl PassContext {
             .unwrap_or("");
         let is_ffi_bridge = loc_func.starts_with("c_")
             || loc_func.starts_with("rust_")
-            || loc_func.starts_with("zig_")
             || loc_func.starts_with("py_")
             || loc_func.starts_with("java_")
             || loc_func.starts_with("go_");

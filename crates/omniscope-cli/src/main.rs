@@ -39,7 +39,7 @@ impl std::str::FromStr for CrossBoundary {
 
     /// Parse a cross boundary from "FROM:TO" format.
     ///
-    /// Supported language names: C, Cpp/C++, Rust/RS, Zig, Go, Python/Py,
+    /// Supported language names: C, Cpp/C++, Rust/RS, Go, Python/Py,
     /// Java, CSharp/C#/CS.  Case-insensitive.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
@@ -65,7 +65,6 @@ fn parse_language(s: &str) -> Result<Language, String> {
         "c" => Ok(Language::C),
         "cpp" | "c++" => Ok(Language::Cpp),
         "rust" | "rs" => Ok(Language::Rust),
-        "zig" => Ok(Language::Zig),
         "go" => Ok(Language::Go),
         "python" | "py" => Ok(Language::Python),
         "java" => Ok(Language::Java),
@@ -129,12 +128,12 @@ struct AnalyzeCommand {
     #[arg(short = 'f', long, default_value = "rich")]
     format: String,
 
-    /// Target language (c, cpp, rust, zig, go, python, java)
+    /// Target language (c, cpp, rust, go, python, java)
     #[arg(short = 'l', long)]
     language: Option<String>,
 
     /// Cross-language boundaries (format: FROM:TO, repeatable).
-    /// Example: --cross C:Cpp --cross Zig:C
+    /// Example: --cross C:Cpp
     #[arg(long = "cross", value_name = "FROM:TO")]
     cross: Vec<CrossBoundary>,
 
@@ -1207,8 +1206,8 @@ mod tests {
         // Should have example FFI boundaries
         assert_eq!(
             config.ffi_boundary.len(),
-            2,
-            "Default config should have 2 example FFI boundaries"
+            1,
+            "Default config should have 1 example FFI boundary"
         );
 
         // First boundary should be C -> C++

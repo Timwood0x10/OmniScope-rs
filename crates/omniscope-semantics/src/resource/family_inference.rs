@@ -136,10 +136,6 @@ pub static EXACT_ALLOC_SET: phf::Map<&'static str, LanguageHint> = phf_map! {
     "_Cfunc_GoMalloc" => LanguageHint::Go,
     "_Cfunc_GoFree" => LanguageHint::Go,
 
-    // ── Zig allocator ──────────────────────────────────────────────
-    "zig_allocator_allocImpl" => LanguageHint::Zig,
-    "zig_allocator_freeImpl" => LanguageHint::Zig,
-
     // ── mimalloc (C-based custom allocator) ────────────────────────
     "mi_malloc" => LanguageHint::C,
     "mi_free" => LanguageHint::C,
@@ -379,8 +375,6 @@ pub fn infer_language_hint(symbol: &str) -> LanguageHint {
         LanguageHint::Go
     } else if symbol.starts_with("Java_") {
         LanguageHint::Java
-    } else if symbol.starts_with("zig.") {
-        LanguageHint::Zig
     } else if symbol.contains("::") {
         LanguageHint::Cpp
     } else {
@@ -559,13 +553,6 @@ mod tests {
             "_cgo_allocate must be classified as Go"
         );
 
-        // Zig allocators
-        assert_eq!(
-            EXACT_ALLOC_SET.get("zig_allocator_allocImpl"),
-            Some(&LanguageHint::Zig),
-            "zig_allocator_allocImpl must be classified as Zig"
-        );
-
         // Custom allocators (mimalloc, jemalloc, tcmalloc) should be C
         assert_eq!(
             EXACT_ALLOC_SET.get("mi_malloc"),
@@ -632,11 +619,6 @@ mod tests {
             LanguageHint::Go,
             "infer_language_hint must classify runtime.mallocgc as Go"
         );
-        assert_eq!(
-            infer_language_hint("zig_allocator_allocImpl"),
-            LanguageHint::Zig,
-            "infer_language_hint must classify zig_allocator_allocImpl as Zig"
-        );
     }
 
     /// Objective: Verify infer_language_hint falls back to prefix heuristics.
@@ -668,11 +650,6 @@ mod tests {
             infer_language_hint("Java_com_example_MyClass"),
             LanguageHint::Java,
             "Java JNI functions must be classified as Java"
-        );
-        assert_eq!(
-            infer_language_hint("zig.my_function"),
-            LanguageHint::Zig,
-            "Zig functions must be classified as Zig"
         );
     }
 

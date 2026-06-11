@@ -138,10 +138,9 @@ pub enum SemanticKind {
     /// May be garbage collected; must check with IsSameObject before use.
     JavaWeakRef,
 
-    // ── Zig: Runtime internal functions ──
-    /// Zig runtime internal function (std.*, builtin, compiler_rt, allocator glue).
-    /// These functions are part of the Zig runtime and should be suppressed
-    /// in WriteToImmutable analysis to reduce false positives.
+    // ── Runtime internal functions ──
+    /// Runtime-internal function (POSIX mmap/munmap, Rust __rust_*,
+    /// C++ __cxa_*, compiler builtins, etc.).
     RuntimeInternal,
 
     // ── Cross-language boundary classification ──

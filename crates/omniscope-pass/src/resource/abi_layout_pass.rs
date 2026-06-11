@@ -147,7 +147,7 @@ impl Pass for AbiLayoutPass {
                     abi_facts.push(abi_issue_to_fact(&issue, &layout.name));
                 }
 
-                // Check C vs Zig (similar risk: zig may use packed or reorder fields)
+                // Check C vs Rust (Rust can reorder struct fields)
                 if let Some(issue) = detector.analyze_cross_language_abi(layout, "c", "rust") {
                     // Only count if it's about field ordering (Rust can reorder)
                     if matches!(issue, AbiIssue::CrossLanguageMismatch { .. }) {
@@ -198,7 +198,7 @@ impl Default for AbiLayoutPass {
 /// A function is considered an FFI boundary candidate when its name matches
 /// known cross-language export patterns:
 /// - `ffi_*` prefix — explicit FFI marker
-/// - `c_*`, `rust_`, `zig_`, `go_`, `py_`, `java_` prefix — language bridge
+/// - `c_*`, `rust_`, `go_`, `py_`, `java_` prefix — language bridge
 /// - Contains `export`, `extern`, `_wrapper`, `_bindgen`, `marshal`
 /// - Has `dllexport` / `externally_visible` attributes
 fn identify_ffi_boundary_functions(ir_text: &str) -> HashSet<String> {
@@ -262,7 +262,6 @@ fn looks_like_ffi_export(func_name: &str) -> bool {
     if name.starts_with("ffi_")
         || name.starts_with("c_")
         || name.starts_with("rust_")
-        || name.starts_with("zig_")
         || name.starts_with("go_")
         || name.starts_with("py_")
         || name.starts_with("java_")

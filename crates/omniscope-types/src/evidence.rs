@@ -145,7 +145,7 @@ pub enum BoundaryEvidenceKind {
     /// boundary (e.g., #[no_mangle] extern "C" fn in Rust).
     ExportedWrapper,
     /// Runtime or compiler-generated bridge function that mediates
-    /// between languages (e.g., Rust __rust_alloc, Zig c_allocator_impl).
+    /// between languages (e.g., Rust __rust_alloc).
     RuntimeBridge,
 }
 
@@ -335,11 +335,11 @@ pub enum IssueCandidateKind {
     /// ABI layout mismatch: struct has padding/alignment issues that
     /// cause incorrect field offsets when accessed across FFI boundaries.
     /// Example: {u32, u8, size_t} has 3 bytes of padding that a packed
-    /// layout caller (Zig/Go) does not account for.
+    /// layout caller does not account for.
     AbiLayoutMismatch,
     /// Boundary misuse: data is passed across an FFI boundary with
     /// incompatible types, causing silent truncation or corruption.
-    /// Example: Zig passes {u64,u64} (16B) via void*, C reads as
+    /// Example: C passes {u64,u64} (16B) via void*, C reads as
     /// {u32,u32} (8B) — high 32 bits silently truncated (FN-8).
     BoundaryMisuse,
 }

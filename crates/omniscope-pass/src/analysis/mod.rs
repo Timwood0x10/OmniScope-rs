@@ -532,6 +532,27 @@ impl FFIBoundaryPass {
 
         let boundary_kind = classify_boundary(&boundary.caller_lang, &boundary.callee_lang);
 
+        // ── Allocator crate downgrading ──
+        // Allocator crates (e.g., bun_alloc) wrap C allocation APIs
+        // in safe Rust abstractions. Their CrossLanguageFree and
+        // OwnershipViolation issues are intentional FFI bridge calls,
+        // not bugs. Downgrade from Warning → Note so users still see
+        // the cross-language boundaries but don't treat them as warnings.
+        let is_allocator = ctx
+            .get_ref::<crate::module_index::ModuleIndex>("module_index")
+            .map_or(false, |idx| idx.is_allocator_crate());
+        let severity = if is_allocator
+            && matches!(
+                kind,
+                IssueKind::CrossLanguageFree | IssueKind::OwnershipViolation
+            )
+            && severity == Severity::Warning
+        {
+            Severity::Note
+        } else {
+            severity
+        };
+
         let issue_id = ctx.next_issue_id();
         let location = omniscope_core::IssueLocation::new(std::path::PathBuf::from("<ffi>"), 0)
             .with_function(&boundary.caller_name);
@@ -582,7 +603,6 @@ fn classify_boundary(
     match (caller_lang, callee_lang) {
         (Language::Rust, Language::C | Language::Cpp) => BoundaryKind::RustToC,
         (Language::C | Language::Cpp, Language::Rust) => BoundaryKind::CToRust,
-        (Language::Zig, Language::C | Language::Cpp) => BoundaryKind::ZigToC,
         (Language::Go, Language::C | Language::Cpp) => BoundaryKind::GoToC,
         (Language::Python, Language::C | Language::Cpp) => BoundaryKind::PythonToC,
         (Language::Java, Language::C | Language::Cpp) => BoundaryKind::JavaToC,

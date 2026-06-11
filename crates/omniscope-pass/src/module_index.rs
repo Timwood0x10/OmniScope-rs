@@ -151,6 +151,17 @@ pub struct ModuleIndex {
     /// This is determined by checking whether all detected languages
     /// (from both call_metas and function_metas) are the same.
     pub is_single_language: bool,
+    /// Whether this module is an allocator crate (e.g., bun_alloc).
+    ///
+    /// Allocator crates wrap C allocation APIs (mi_malloc, mi_free,
+    /// mmap, etc.) in safe Rust abstractions. Cross-language issues
+    /// inside these crates are almost always false positives — the
+    /// Rust code correctly manages ownership across the FFI boundary.
+    ///
+    /// Detected by checking whether a significant fraction of defined
+    /// function names match known allocator patterns (bun_alloc crate
+    /// hash, mimalloc API names, arena/zone types, etc.).
+    pub is_allocator_crate: bool,
 }
 
 /// Check if a function signature involves pointer types (params or return).
@@ -227,55 +238,6 @@ fn classify_function_cached(name: &str, is_declaration: bool, language: Language
     FunctionKind::ExternalUnknown
 }
 
-/// Check if a function is Zig runtime internal.
-///
-/// This includes Zig standard library, compiler runtime, allocator glue,
-/// and other runtime initialization paths that should be suppressed in
-/// WriteToImmutable analysis to reduce false positives.
-fn is_zig_runtime_internal(name: &str, language: Language) -> bool {
-    // Only apply to Zig functions
-    if language != Language::Zig {
-        return false;
-    }
-
-    // Zig standard library functions (std.*)
-    if name.starts_with("std.") {
-        return true;
-    }
-
-    // Zig builtin functions (use precise prefix to avoid matching user code)
-    if name.starts_with("builtin.") {
-        return true;
-    }
-
-    // Zig compiler runtime (use precise prefix to avoid matching user code)
-    if name.starts_with("compiler_rt.") || name == "compiler_rt" {
-        return true;
-    }
-
-    // Zig allocator vtable and runtime glue
-    if name.starts_with("zig_allocator_") {
-        return true;
-    }
-
-    // Zig runtime initialization and glue
-    if name.starts_with("zig.") {
-        return true;
-    }
-
-    // Zig heap management functions
-    if name.starts_with("zig.heap.") {
-        return true;
-    }
-
-    // Zig memory management functions
-    if name.starts_with("zig.mem.") {
-        return true;
-    }
-
-    false
-}
-
 /// Count extern declarations whose names do NOT match the mangling scheme
 /// of the dominant language. These are foreign-ABI symbols (typically C
 /// libraries imported into a Rust/C++/Zig module) and constitute FFI
@@ -330,6 +292,74 @@ fn count_foreign_declared_externs(
         count += 1;
     }
     count
+}
+
+/// Allocator-related name patterns that indicate a function belongs to
+/// an allocator crate (bun_alloc, mimalloc wrapper, etc.).
+///
+/// Used by `detect_allocator_crate` to classify modules that primarily
+/// implement memory allocation abstractions over C FFI APIs.
+fn is_allocator_name(name: &str) -> bool {
+    // Bun's allocator crate (mangled with crate disambiguator hash)
+    if name.contains("bun_alloc") || name.contains("9bun_alloc") {
+        return true;
+    }
+    // Mimalloc API wrappers
+    if name.contains("mi_heap")
+        || name.contains("mi_malloc")
+        || name.contains("mi_free")
+        || name.contains("mi_realloc")
+        || name.contains("mi_calloc")
+        || name.contains("mi_recalloc")
+    {
+        return true;
+    }
+    // Arena / zone types used in allocators
+    if name.contains("MimallocArena")
+        || name.contains("ZAllocator")
+        || name.contains("NullableAllocator")
+        || name.contains("CAllocator")
+    {
+        return true;
+    }
+    // Allocator-internal module names
+    if name.contains("heap_breakdown")
+        || name.contains("bss_arena_bump")
+        || name.contains("c_thunk")
+    {
+        return true;
+    }
+    false
+}
+
+/// Detects whether the IR module is an allocator crate.
+///
+/// An allocator crate is one where a significant portion of defined
+/// functions are allocator-related (wrapping mi_*, malloc, mmap, etc.).
+/// The threshold is 30%: if ≥30% of defined function names match
+/// allocator patterns, the module is classified as an allocator crate.
+///
+/// Allocator crates need special treatment because their cross-language
+/// FFI patterns (Rust calling C malloc/free/mi_malloc) are intentional
+/// design choices, not bugs.
+fn detect_allocator_crate(module: &IRModule) -> bool {
+    let defined_count = module.functions.len();
+    if defined_count == 0 {
+        return false;
+    }
+
+    let mut allocator_match_count = 0usize;
+    for name in module.functions.keys() {
+        let trimmed = name.trim_start_matches('@');
+        if is_allocator_name(trimmed) {
+            allocator_match_count += 1;
+        }
+    }
+
+    // Threshold: at least 30% of defined functions must be allocator-related,
+    // OR at least 10 absolute matches (for small crates with few functions).
+    let ratio = allocator_match_count as f64 / defined_count as f64;
+    ratio >= 0.30 || allocator_match_count >= 10
 }
 
 impl ModuleIndex {
@@ -658,8 +688,8 @@ impl ModuleIndex {
                 })
                 .unwrap_or(false);
 
-            // Check if this function is Zig runtime internal
-            let is_runtime_internal = is_zig_runtime_internal(&trimmed, language);
+            // Check if this function is runtime internal
+            let is_runtime_internal = false;
 
             function_metas.insert(
                 trimmed.clone(),
@@ -686,8 +716,8 @@ impl ModuleIndex {
             let calls = caller_calls.get(&trimmed);
             let call_count = calls.map(|c| c.len()).unwrap_or(0);
 
-            // Check if this function is Zig runtime internal
-            let is_runtime_internal = is_zig_runtime_internal(&trimmed, language);
+            // Check if this function is runtime internal
+            let is_runtime_internal = false;
 
             function_metas.insert(
                 trimmed.clone(),
@@ -796,6 +826,7 @@ impl ModuleIndex {
             syscall_cache,
             function_kind_cache,
             is_single_language,
+            is_allocator_crate: detect_allocator_crate(module),
         }
     }
 
@@ -888,6 +919,15 @@ impl ModuleIndex {
             .get(name.trim_start_matches('@'))
             .map(|meta| meta.is_runtime_internal)
             .unwrap_or(false)
+    }
+
+    /// Returns whether this module is an allocator crate.
+    ///
+    /// Allocator crates (e.g., bun_alloc) wrap C allocation APIs in
+    /// safe Rust abstractions. Cross-language FFI issues inside
+    /// these crates are almost always false positives.
+    pub fn is_allocator_crate(&self) -> bool {
+        self.is_allocator_crate
     }
 }
 
@@ -1191,166 +1231,6 @@ mod tests {
         );
     }
 
-    /// Objective: Verify that is_zig_runtime_internal correctly identifies Zig runtime functions.
-    /// Invariants: Zig stdlib, builtin, compiler_rt, and allocator functions are detected.
-    #[test]
-    fn test_is_zig_runtime_internal() {
-        // Zig standard library functions
-        assert!(
-            is_zig_runtime_internal("std.mem.Allocator", Language::Zig),
-            "std.mem.Allocator must be Zig runtime internal"
-        );
-        assert!(
-            is_zig_runtime_internal("std.heap.page_allocator", Language::Zig),
-            "std.heap.page_allocator must be Zig runtime internal"
-        );
-        assert!(
-            is_zig_runtime_internal("std.math.log2", Language::Zig),
-            "std.math.log2 must be Zig runtime internal"
-        );
-
-        // Zig builtin functions
-        assert!(
-            is_zig_runtime_internal("builtin.mul", Language::Zig),
-            "builtin.mul must be Zig runtime internal"
-        );
-        assert!(
-            is_zig_runtime_internal("zig.builtin.add", Language::Zig),
-            "zig.builtin.add must be Zig runtime internal"
-        );
-
-        // Zig compiler runtime
-        assert!(
-            is_zig_runtime_internal("compiler_rt.add", Language::Zig),
-            "compiler_rt.add must be Zig runtime internal"
-        );
-
-        // Zig allocator vtable
-        assert!(
-            is_zig_runtime_internal("zig_allocator_allocImpl", Language::Zig),
-            "zig_allocator_allocImpl must be Zig runtime internal"
-        );
-        assert!(
-            is_zig_runtime_internal("zig_allocator_freeImpl", Language::Zig),
-            "zig_allocator_freeImpl must be Zig runtime internal"
-        );
-
-        // Zig runtime functions
-        assert!(
-            is_zig_runtime_internal("zig.heap.page_allocator", Language::Zig),
-            "zig.heap.page_allocator must be Zig runtime internal"
-        );
-        assert!(
-            is_zig_runtime_internal("zig.mem.Allocator", Language::Zig),
-            "zig.mem.Allocator must be Zig runtime internal"
-        );
-
-        // Non-Zig functions should not be detected
-        assert!(
-            !is_zig_runtime_internal("std::vector", Language::Cpp),
-            "C++ std::vector must not be Zig runtime internal"
-        );
-        assert!(
-            !is_zig_runtime_internal("_ZN4core3str4len", Language::Rust),
-            "Rust function must not be Zig runtime internal"
-        );
-        assert!(
-            !is_zig_runtime_internal("malloc", Language::C),
-            "C malloc must not be Zig runtime internal"
-        );
-
-        // User Zig functions should not be detected
-        assert!(
-            !is_zig_runtime_internal("my_function", Language::Zig),
-            "User Zig function must not be Zig runtime internal"
-        );
-        assert!(
-            !is_zig_runtime_internal("main", Language::Zig),
-            "main function must not be Zig runtime internal"
-        );
-    }
-
-    /// Objective: Verify that ModuleIndex caches is_runtime_internal correctly.
-    /// Invariants: Zig runtime functions have is_runtime_internal=true in cached metadata.
-    #[test]
-    fn test_module_index_runtime_internal_cache() {
-        let mut module = IRModule::new();
-
-        // Add a Zig runtime function with explicit Zig prefix
-        module.functions.insert(
-            "@zig.mem.Allocator".to_string(),
-            Function {
-                name: "zig.mem.Allocator".to_string(),
-                is_declaration: false,
-                params: vec![],
-                return_type: "void".to_string(),
-            },
-        );
-
-        // Add a Zig allocator function
-        module.functions.insert(
-            "@zig_allocator_allocImpl".to_string(),
-            Function {
-                name: "zig_allocator_allocImpl".to_string(),
-                is_declaration: false,
-                params: vec![],
-                return_type: "void".to_string(),
-            },
-        );
-
-        // Add a user function
-        module.functions.insert(
-            "@my_function".to_string(),
-            Function {
-                name: "my_function".to_string(),
-                is_declaration: false,
-                params: vec![],
-                return_type: "void".to_string(),
-            },
-        );
-
-        let index = ModuleIndex::build(&module);
-
-        // Check that runtime internal is cached correctly
-        assert!(
-            index.is_runtime_internal("zig.mem.Allocator"),
-            "zig.mem.Allocator must be cached as runtime internal"
-        );
-        assert!(
-            index.is_runtime_internal("zig_allocator_allocImpl"),
-            "zig_allocator_allocImpl must be cached as runtime internal"
-        );
-        assert!(
-            !index.is_runtime_internal("my_function"),
-            "my_function must not be cached as runtime internal"
-        );
-
-        // Check function_meta returns correct is_runtime_internal
-        let zig_runtime_meta = index
-            .function_meta("zig.mem.Allocator")
-            .expect("zig.mem.Allocator must have cached profile");
-        assert!(
-            zig_runtime_meta.is_runtime_internal,
-            "zig.mem.Allocator profile must have is_runtime_internal=true"
-        );
-
-        let zig_allocator_meta = index
-            .function_meta("zig_allocator_allocImpl")
-            .expect("zig_allocator_allocImpl must have cached profile");
-        assert!(
-            zig_allocator_meta.is_runtime_internal,
-            "zig_allocator_allocImpl profile must have is_runtime_internal=true"
-        );
-
-        let user_func_meta = index
-            .function_meta("my_function")
-            .expect("my_function must have cached profile");
-        assert!(
-            !user_func_meta.is_runtime_internal,
-            "my_function profile must have is_runtime_internal=false"
-        );
-    }
-
     /// Helper: insert a Rust-mangled defined function with no calls.
     fn insert_rust_defined(module: &mut IRModule, mangled_name: &str) {
         let key = format!("@{}", mangled_name);
@@ -1438,6 +1318,52 @@ mod tests {
         assert!(
             index.is_single_language,
             "Rust module with only 2 C externs must remain single-language (below threshold of 3)"
+        );
+    }
+
+    /// Objective: A module with many bun_alloc / mimalloc functions must
+    /// be detected as an allocator crate.
+    /// Invariants: is_allocator_crate() == true when ≥30% or ≥10 matches.
+    #[test]
+    fn test_detect_allocator_crate() {
+        let mut module = IRModule::new();
+        // Insert enough allocator-related functions to exceed threshold
+        for i in 0..15 {
+            insert_rust_defined(
+                &mut module,
+                &format!(
+                    "_RNvCs92_9bun_alloc_7abe075f8accee73_5alloc_8allocator9ZAllocator{}alloc",
+                    i
+                ),
+            );
+        }
+        // A few non-allocator functions (to keep ratio realistic)
+        insert_rust_defined(&mut module, "_ZN4core3str4len");
+
+        let index = ModuleIndex::build(&module);
+
+        assert!(
+            index.is_allocator_crate(),
+            "Module with mostly bun_alloc functions must be detected as allocator crate"
+        );
+    }
+
+    /// Objective: A normal Rust module without allocator patterns must NOT
+    /// be detected as an allocator crate.
+    /// Invariants: is_allocator_crate() == false.
+    #[test]
+    fn test_non_allocator_crate() {
+        let mut module = IRModule::new();
+        insert_rust_defined(&mut module, "_ZN5alloc7raw_vec8allocate");
+        insert_rust_defined(&mut module, "_ZN4core3str4len");
+        insert_rust_defined(&mut module, "_ZN3my_app4main");
+        insert_rust_defined(&mut module, "_ZN3my_app3run");
+
+        let index = ModuleIndex::build(&module);
+
+        assert!(
+            !index.is_allocator_crate(),
+            "Normal application module must NOT be detected as allocator crate"
         );
     }
 }

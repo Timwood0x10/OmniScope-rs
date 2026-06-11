@@ -39,6 +39,7 @@ use omniscope_types::{
     EvidenceKind, FamilyId, IssueCandidateKind, PointerContract,
 };
 
+use crate::analysis::ffi_boundary_detector::is_allocator_thunk;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
 use crate::resource::may_alias::{may_alias, MayAliasResult};
@@ -47,6 +48,7 @@ use grouping::InstanceEdgeGroups;
 use helpers::{
     build_free_site_for_edge, collect_boundary_from_edges, edge_has_boundary_evidence,
     fact_to_evidence, has_null_store_pattern, is_null_guarded_release, is_pure_deallocator,
+    should_suppress_leak_for_allocator_escape,
 };
 // Re-export public API
 pub use helpers::build_cross_family_candidate;
@@ -295,6 +297,26 @@ impl Pass for IssueCandidateBuilderPass {
                                 }
                             }
 
+                            // ── FFI Bridge Layer suppression ──
+                            // When the release_caller is an allocator thunk (e.g.,
+                            // free_sensitive_cstr, vtable_free, mi_free_bytes), the
+                            // cross-language free IS the intended behavior — this
+                            // function's job is to bridge allocation between
+                            // language boundaries. Suppress as FP.
+                            let release_caller_name = graph.edges[ri].caller_name.as_str();
+                            let alloc_caller_name = graph.edges[ai].caller_name.as_str();
+                            if is_allocator_thunk(release_caller_name)
+                                || is_allocator_thunk(alloc_caller_name)
+                            {
+                                tracing::debug!(
+                                    "[FP-SUPPRESS] CrossLanguageFree suppressed: \
+                                     alloc_caller={} release_caller={} is allocator thunk",
+                                    alloc_caller_name,
+                                    release_caller_name
+                                );
+                                continue;
+                            }
+
                             candidates.push(candidate);
                         } else {
                             // Regular cross-family free
@@ -390,6 +412,21 @@ impl Pass for IssueCandidateBuilderPass {
                                         candidate = candidate.with_boundary(be);
                                     }
                                 }
+                            }
+
+                            // ── FFI Bridge Layer suppression (regular cross-family) ──
+                            let reg_release_caller = graph.edges[ri].caller_name.as_str();
+                            let reg_alloc_caller = graph.edges[ai].caller_name.as_str();
+                            if is_allocator_thunk(reg_release_caller)
+                                || is_allocator_thunk(reg_alloc_caller)
+                            {
+                                tracing::debug!(
+                                    "[FP-SUPPRESS] CrossFamilyFree suppressed: \
+                                     alloc_caller={} release_caller={} is allocator thunk",
+                                    reg_alloc_caller,
+                                    reg_release_caller
+                                );
+                                continue;
                             }
 
                             candidates.push(candidate);
@@ -927,6 +964,24 @@ impl Pass for IssueCandidateBuilderPass {
                         )
                         .with_confidence(0.6),
                     );
+
+                    // ── Allocator escape / arena / non-allocator API suppression ──
+                    // Suppress ConditionalLeak when:
+                    // 1. The alloc_caller returns the resource (return-value-escape)
+                    // 2. The function is an allocator factory (malloc/realloc wrapper)
+                    // 3. The function is an arena/bump allocator (intentional no-free)
+                    // 4. The "acquire" is a non-allocator API (malloc_set_zone_name, etc.)
+                    if should_suppress_leak_for_allocator_escape(
+                        None, // ownership_state instances don't have alloc_caller
+                        func_name, ir_module,
+                    ) {
+                        tracing::debug!(
+                            "[LEAK-SUPPRESS] ConditionalLeak suppressed for '{}' — \
+                             allocator escape / arena / non-allocator API",
+                            func_name
+                        );
+                        continue;
+                    }
 
                     candidates.push(candidate);
                 }

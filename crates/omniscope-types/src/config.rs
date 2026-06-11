@@ -88,8 +88,6 @@ pub enum Language {
     Cpp,
     /// Rust language
     Rust,
-    /// Zig language
-    Zig,
     /// Go language
     Go,
     /// Python (via C API)
@@ -98,6 +96,8 @@ pub enum Language {
     Java,
     /// C# (via P/Invoke)
     CSharp,
+    /// Zig language
+    Zig,
     /// Unknown language
     #[default]
     Unknown,
@@ -113,12 +113,7 @@ impl Language {
     pub fn has_ffi(&self) -> bool {
         matches!(
             self,
-            Language::Rust
-                | Language::Zig
-                | Language::Go
-                | Language::Python
-                | Language::Java
-                | Language::CSharp
+            Language::Rust | Language::Go | Language::Python | Language::Java | Language::CSharp
         )
     }
 }
@@ -129,11 +124,11 @@ impl std::fmt::Display for Language {
             Language::C => write!(f, "C"),
             Language::Cpp => write!(f, "C++"),
             Language::Rust => write!(f, "Rust"),
-            Language::Zig => write!(f, "Zig"),
             Language::Go => write!(f, "Go"),
             Language::Python => write!(f, "Python"),
             Language::Java => write!(f, "Java"),
             Language::CSharp => write!(f, "C#"),
+            Language::Zig => write!(f, "Zig"),
             Language::Unknown => write!(f, "Unknown"),
         }
     }
@@ -349,22 +344,13 @@ impl OmniScopeConfig {
                 name: None,
                 description: Some("OmniScope project".to_string()),
             }),
-            ffi_boundary: vec![
-                FFIBoundaryConfig {
-                    from: Language::C,
-                    to: Language::Cpp,
-                    functions: vec!["example_c_to_cpp".to_string()],
-                    pattern: None,
-                    description: Some("Example C to C++ boundary".to_string()),
-                },
-                FFIBoundaryConfig {
-                    from: Language::Zig,
-                    to: Language::C,
-                    functions: vec!["example_zig_to_c".to_string()],
-                    pattern: None,
-                    description: Some("Example Zig to C boundary".to_string()),
-                },
-            ],
+            ffi_boundary: vec![FFIBoundaryConfig {
+                from: Language::C,
+                to: Language::Cpp,
+                functions: vec!["example_c_to_cpp".to_string()],
+                pattern: None,
+                description: Some("Example C to C++ boundary".to_string()),
+            }],
             resource_family: vec![ResourceFamilyConfig {
                 name: "custom_allocator".to_string(),
                 kind: FamilyKind::ManualHeap,
@@ -576,11 +562,6 @@ to = "cpp"
 functions = ["c_fft_forward", "c_hash"]
 description = "C -> C++ bridge"
 
-[[ffi_boundary]]
-from = "zig"
-to = "c"
-functions = ["c_alloc_buffer"]
-
 [[resource_family]]
 name = "custom_allocator"
 kind = "ManualHeap"
@@ -597,10 +578,9 @@ use_after_free = false
         let config = OmniScopeConfig::parse_toml(toml).unwrap();
 
         assert_eq!(config.project.unwrap().name.unwrap(), "test_project");
-        assert_eq!(config.ffi_boundary.len(), 2);
+        assert_eq!(config.ffi_boundary.len(), 1);
         assert_eq!(config.ffi_boundary[0].from, Language::C);
         assert_eq!(config.ffi_boundary[0].to, Language::Cpp);
-        assert_eq!(config.ffi_boundary[0].functions.len(), 2);
         assert_eq!(config.resource_family.len(), 1);
         assert_eq!(config.resource_family[0].kind, FamilyKind::ManualHeap);
         assert!(!config.analysis.use_after_free);
@@ -615,22 +595,16 @@ use_after_free = false
 from = "c"
 to = "cpp"
 functions = ["func1", "func2"]
-
-[[ffi_boundary]]
-from = "zig"
-to = "c"
-functions = ["func3"]
 "#;
 
         let config = OmniScopeConfig::parse_toml(toml).unwrap();
         let functions = config.ffi_boundary_functions();
 
-        assert_eq!(functions.len(), 3);
+        assert_eq!(functions.len(), 2);
         assert_eq!(functions[0].0, "func1");
         assert_eq!(functions[0].1, Language::C);
         assert_eq!(functions[0].2, Language::Cpp);
-        assert_eq!(functions[2].0, "func3");
-        assert_eq!(functions[2].1, Language::Zig);
+        assert_eq!(functions[1].0, "func2");
     }
 
     /// Objective: Verify that invalid TOML returns an error.
