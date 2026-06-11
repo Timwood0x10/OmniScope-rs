@@ -385,7 +385,7 @@ impl Pass for ContractGraphBuilderPass {
                     // Cross-family matching is a fallback for real patterns like:
                     //   malloc → operator delete   (C ↔ C++ scalar)
                     //   new[]   → free              (C++ array ↔ C)
-                    //   Zig allocator → raw free    (Zig ↔ C)
+                    //   custom allocator → raw free    (cross-language)
                     //
                     // BUT it must NOT blindly pair every different-family acquire,
                     // which would create FP in functions managing multiple resources

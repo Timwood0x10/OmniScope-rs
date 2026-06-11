@@ -107,7 +107,7 @@ pub struct CachedFunctionMeta {
     pub has_ffi_calls: bool,
     /// Whether this function has any store instructions (in function body).
     pub has_stores: bool,
-    /// Whether this function is runtime internal (Zig stdlib, compiler_rt, etc.).
+    /// Whether this function is runtime internal (compiler_rt, etc.).
     pub is_runtime_internal: bool,
 }
 
@@ -210,28 +210,6 @@ fn is_runtime_intrinsic_cached(name: &str, language: Language) -> bool {
     }
 }
 
-/// Check if a function name suggests it is part of the Zig runtime.
-///
-/// Zig runtime functions include:
-/// - `std.*` — Zig standard library
-/// - `builtin.*` — Zig compiler builtins
-/// - `compiler_rt` — Zig compiler runtime
-/// - `zig.*` — Zig compiler support
-///
-/// NOTE: `main.*` and `root.*` are intentionally excluded — these are
-/// user-level Zig module namespaces, not runtime internals. Marking them
-/// as runtime-internal would suppress legitimate bug reports from all
-/// Zig entry-point functions (e.g., main.c_alloc_buffer leaks).
-fn is_zig_runtime(name: &str) -> bool {
-    name.starts_with("std.")
-        || name.starts_with("builtin.")
-        || name.starts_with("compiler_rt.")
-        || name.starts_with("zig.")
-        || name.starts_with("zig_allocator_")
-        // Zig test runner / comptime-generated functions
-        || name.contains("test_runner")
-}
-
 /// Check if a function name suggests it is part of the C++ runtime.
 ///
 /// This covers C++ ABI/runtime infrastructure, not user-facing
@@ -298,7 +276,7 @@ fn classify_function_cached(name: &str, is_declaration: bool, language: Language
 
 /// Count extern declarations whose names do NOT match the mangling scheme
 /// of the dominant language. These are foreign-ABI symbols (typically C
-/// libraries imported into a Rust/C++/Zig module) and constitute FFI
+/// libraries imported into a Rust/C++ module) and constitute FFI
 /// evidence even when no foreign function is *defined* in the IR.
 ///
 /// LLVM intrinsics (`llvm.*`) and runtime intrinsics that already belong
@@ -748,7 +726,6 @@ impl ModuleIndex {
 
             // Check if this function is runtime internal
             let is_runtime_internal = structural_inference_pass::is_runtime_internal(&trimmed)
-                || is_zig_runtime(&trimmed)
                 || is_cpp_runtime(&trimmed)
                 || is_c_runtime(&trimmed);
 
@@ -779,7 +756,6 @@ impl ModuleIndex {
 
             // Check if this function is runtime internal
             let is_runtime_internal = structural_inference_pass::is_runtime_internal(&trimmed)
-                || is_zig_runtime(&trimmed)
                 || is_cpp_runtime(&trimmed)
                 || is_c_runtime(&trimmed);
 

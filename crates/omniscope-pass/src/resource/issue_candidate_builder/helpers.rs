@@ -146,7 +146,7 @@ fn is_pointer_type(type_str: &str) -> bool {
 /// - Functions with well-known FFI/export markers in name or path
 /// - C-style snake_case functions at language boundaries
 ///
-/// Internal helpers from standard libraries (Zig stdlib, Rust std, etc.)
+/// Internal helpers from standard libraries (Rust std, etc.)
 /// are excluded even if they match generic heuristics, because their
 /// return-alias patterns are well-known idioms within that ecosystem.
 ///

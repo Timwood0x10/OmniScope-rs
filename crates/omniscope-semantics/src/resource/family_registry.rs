@@ -40,7 +40,7 @@ pub enum SymbolEffect {
 
 /// Registry mapping symbol names to resource families.
 ///
-/// Built-in entries cover C, C++, Rust, Python, Java/JNI, C#, Go, and Zig
+/// Built-in entries cover C, C++, Rust, Python, Java/JNI, C#, Go
 /// allocation/deallocation functions. User-inferred entries can be added
 /// from model mining (Phase 7).
 #[derive(Debug, Clone)]
@@ -228,8 +228,6 @@ impl FamilyRegistry {
         self.add_csharp_symbols();
         // Go (GC + cgo)
         self.add_go_symbols();
-        // Zig allocator vtable
-        self.add_zig_symbols();
         // Library-managed families (IR Pattern Atlas §1.4, §9)
         self.add_zlib_symbols();
         self.add_openssl_symbols();
@@ -475,24 +473,6 @@ impl FamilyRegistry {
         );
     }
 
-    /// Register Zig allocator vtable symbols.
-    ///
-    /// Zig uses a vtable-based allocation pattern where the allocator
-    /// implementation functions (`zig_allocator_allocImpl`,
-    /// `zig_allocator_freeImpl`) are the actual memory management
-    /// routines. These are called through the allocator vtable.
-    ///
-    /// Evidence: `boundary_test.ll`, `zig_hidden_bugs.ll` — Zig allocator
-    /// vtable dispatch and cross-family bug patterns.
-    fn add_zig_symbols(&mut self) {
-        let f = FamilyId::ZIG_ALLOCATOR;
-        let lang = LanguageHint::C;
-        // Zig allocator vtable alloc implementation
-        self.add_symbol("zig_allocator_allocImpl", f, SymbolEffect::Acquire, lang);
-        // Zig allocator vtable free implementation
-        self.add_symbol("zig_allocator_freeImpl", f, SymbolEffect::Release, lang);
-    }
-
     /// Register zlib stream family symbols.
     /// Evidence: `zlib_binding.ll` — library-level resource pairing.
     fn add_zlib_symbols(&mut self) {
@@ -674,8 +654,8 @@ mod tests {
         );
         assert_eq!(
             registry.family_count(),
-            24,
-            "Must have 24 built-in families (including WIN32_HEAP, WIN32_VIRTUAL)"
+            23,
+            "Must have 23 built-in families (including WIN32_HEAP, WIN32_VIRTUAL)"
         );
     }
 

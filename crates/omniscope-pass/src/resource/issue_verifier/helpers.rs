@@ -382,12 +382,10 @@ pub(crate) fn is_ffi_bridge_layer_candidate(
     if matches!(
         candidate.kind,
         IssueCandidateKind::CrossLanguageFree | IssueCandidateKind::CrossFamilyFree
-    ) {
-        if is_allocator_thunk(release_caller, _ir_module)
-            || is_allocator_thunk(alloc_caller, _ir_module)
-        {
-            return true;
-        }
+    ) && (is_allocator_thunk(release_caller, _ir_module)
+        || is_allocator_thunk(alloc_caller, _ir_module))
+    {
+        return true;
     }
 
     // UseAfterFree / DoubleRelease in vtable dealloc thunk → FP

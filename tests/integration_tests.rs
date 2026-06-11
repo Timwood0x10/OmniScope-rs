@@ -9,7 +9,7 @@
 //! - **True-negative (noise)**: benign patterns the pipeline should NOT flag.
 //! - **Edge-case**: cross-family, conditional release, RAII, library families.
 //!
-//! Language coverage: C, C++, Rust, Python, Java/JNI, Go/cgo, Zig.
+//! Language coverage: C, C++, Rust, Python, Java/JNI, Go/cgo.
 
 use omniscope_core::IssueKind;
 use omniscope_ir::IRModule;
@@ -807,52 +807,6 @@ fn test_go_mallocgc_no_false_positive() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ZIG
-// ═══════════════════════════════════════════════════════════════════════
-
-/// TRUE POSITIVE: zig_allocator_allocImpl without zig_allocator_freeImpl — Zig allocator leak.
-const ZIG_ALLOC_LEAK: &str = r#"
-target triple = "x86_64-unknown-linux-gnu"
-define ptr @zig_leak(i64 %size) {
-entry:
-  %ptr = call ptr @zig_allocator_allocImpl(i64 %size)
-  ret ptr %ptr
-}
-declare ptr @zig_allocator_allocImpl(i64)
-"#;
-
-/// NOISE: zig_allocator_allocImpl + zig_allocator_freeImpl properly paired.
-const ZIG_ALLOC_FREE_CLEAN: &str = r#"
-target triple = "x86_64-unknown-linux-gnu"
-define void @zig_clean(i64 %size) {
-entry:
-  %ptr = call ptr @zig_allocator_allocImpl(i64 %size)
-  call void @zig_allocator_freeImpl(ptr %ptr)
-  ret void
-}
-declare ptr @zig_allocator_allocImpl(i64)
-declare void @zig_allocator_freeImpl(ptr)
-"#;
-
-/// Objective: Verify Zig allocator leak detection.
-/// Invariants: Pipeline reports ConditionalLeak.
-#[test]
-fn test_zig_alloc_leak() {
-    let result = run_pipeline_on_ir(ZIG_ALLOC_LEAK);
-    assert!(result.pass_count() > 0, "Pipeline must execute passes");
-    assert_has_issue_kind(&result, IssueKind::ConditionalLeak, "Zig allocator leak");
-}
-
-/// Objective: Verify Zig allocator alloc+free is clean.
-/// Invariants: No ConditionalLeak.
-#[test]
-fn test_zig_alloc_free_clean() {
-    let result = run_pipeline_on_ir(ZIG_ALLOC_FREE_CLEAN);
-    assert!(result.pass_count() > 0, "Pipeline must execute passes");
-    assert_no_issue_kind(&result, IssueKind::ConditionalLeak, "Zig alloc+free clean");
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // CROSS-LANGUAGE / LIBRARY EDGE CASES
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -1247,37 +1201,6 @@ fn test_fixture_rust_hash_clean() {
         "Pipeline must execute passes on rust_hash.ll"
     );
     assert_zero_issues(&result, "rust_hash.ll (pure FFI pass-through)");
-}
-
-/// Objective: Verify zig_ffi_bridge.ll issue profile.
-/// This file contains clean C functions: c_alloc_buffer (malloc),
-/// c_release_buffer (free), c_process_buffer (memset), c_apply_config
-/// (read-only). When analyzed per-function, alloc-without-free and
-/// free-without-alloc look like leaks — this is expected behavior for
-/// an intra-procedural analyzer.
-/// Invariants: Pipeline completes and reports ConditionalLeak for
-/// standalone alloc/free functions (not cross-function false positive).
-#[test]
-fn test_fixture_zig_ffi_bridge_expected_issues() {
-    let result = run_pipeline_on_fixture("tests/integration/zig_ffi_bridge.ll");
-    assert!(
-        result.pass_count() > 0,
-        "Pipeline must execute passes on zig_ffi_bridge.ll"
-    );
-    // c_alloc_buffer returns malloc'd ptr without freeing → ConditionalLeak expected.
-    // c_release_buffer frees a param without local alloc → may also be flagged.
-    assert!(
-        result.issue_count() > 0,
-        "zig_ffi_bridge.ll: expected ConditionalLeak for standalone alloc/free functions"
-    );
-    // Issues should be ConditionalLeak or DefiniteLeak (improved leak detection).
-    for issue in result.issues() {
-        assert!(
-            issue.kind == IssueKind::ConditionalLeak || issue.kind == IssueKind::DefiniteLeak,
-            "zig_ffi_bridge.ll: unexpected issue kind {:?} — expected ConditionalLeak or DefiniteLeak",
-            issue.kind
-        );
-    }
 }
 
 /// Objective: Verify cpp_hash.ll pipeline execution.
@@ -1883,19 +1806,6 @@ declare ptr @NewGlobalRef(ptr)
 declare void @free(ptr)
 "#;
 
-/// TRUE POSITIVE: Zig allocInternal + C free — cross-language.
-const ZIG_ALLOC_C_FREE_CROSS: &str = r#"
-target triple = "x86_64-unknown-linux-gnu"
-define void @zig_alloc_c_free(i64 %size) {
-entry:
-  %ptr = call ptr @allocInternal(i64 %size)
-  call void @free(ptr %ptr)
-  ret void
-}
-declare ptr @allocInternal(i64)
-declare void @free(ptr)
-"#;
-
 /// NOISE: Rust __rust_alloc + __rust_dealloc — same family, properly paired.
 const RUST_ALLOC_DEALLOC_CLEAN_MATRIX: &str = r#"
 target triple = "x86_64-unknown-linux-gnu"
@@ -2014,27 +1924,6 @@ fn test_jni_globalref_free_cross() {
     assert!(
         has_cross,
         "JNI NewGlobalRef+free: expected CrossFamilyFree/CrossLanguageFree — issues: {:?}",
-        result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
-    );
-}
-
-/// Objective: Verify Zig allocInternal + C free triggers cross-family issue.
-/// allocInternal belongs to ZIG_ALLOCATOR family, free belongs to C_HEAP —
-/// these are different families and the pipeline must detect the mismatch.
-/// Invariants: Pipeline reports CrossFamilyFree or CrossLanguageFree.
-#[test]
-fn test_zig_alloc_c_free_cross() {
-    let result = run_pipeline_on_ir(ZIG_ALLOC_C_FREE_CROSS);
-    assert!(result.pass_count() > 0, "Pipeline must execute passes");
-    let has_cross = result.issues().iter().any(|i| {
-        matches!(
-            i.kind,
-            IssueKind::CrossFamilyFree | IssueKind::CrossLanguageFree
-        )
-    });
-    assert!(
-        has_cross,
-        "Zig allocInternal+C free: expected CrossFamilyFree/CrossLanguageFree — issues: {:?}",
         result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
     );
 }

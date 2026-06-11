@@ -242,8 +242,6 @@ pub enum BoundaryKind {
     RustToC,
     /// C/C++ → Rust FFI (#[no_mangle] export).
     CToRust,
-    /// Zig → C FFI (@cImport).
-    ZigToC,
     /// Go → C FFI (cgo).
     GoToC,
     /// Python → C FFI (C extension / ctypes).

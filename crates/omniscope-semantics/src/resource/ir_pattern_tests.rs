@@ -931,7 +931,7 @@ entry:
 /// - The pattern must capture the global target and parameter register
 #[test]
 fn test_heap_to_global_escape_detection() {
-    // Mirrors FN-14 from zig_ffi_bridge.c: c_register_and_store
+    // Mirrors FN-14: c_register_and_store
     let ir = r#"
         define void @c_register_and_store(ptr %ptr) {
 entry:

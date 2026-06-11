@@ -96,8 +96,6 @@ pub enum Language {
     Java,
     /// C# (via P/Invoke)
     CSharp,
-    /// Zig language
-    Zig,
     /// Unknown language
     #[default]
     Unknown,
@@ -128,7 +126,6 @@ impl std::fmt::Display for Language {
             Language::Python => write!(f, "Python"),
             Language::Java => write!(f, "Java"),
             Language::CSharp => write!(f, "C#"),
-            Language::Zig => write!(f, "Zig"),
             Language::Unknown => write!(f, "Unknown"),
         }
     }

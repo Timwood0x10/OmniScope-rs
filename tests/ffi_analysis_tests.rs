@@ -67,7 +67,6 @@ fn test_analyze_all_ffi_issues() {
     let test_files = vec![
         ("tests/integration/rust_hash.ll", "Rust"),
         ("tests/integration/c_hash_c_bridge.ll", "C"),
-        ("tests/integration/zig_ffi_bridge.ll", "Zig"),
         ("tests/integration/cpp_hash.ll", "C++"),
     ];
 

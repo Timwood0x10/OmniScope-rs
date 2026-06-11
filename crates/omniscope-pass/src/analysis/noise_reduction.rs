@@ -173,7 +173,7 @@ impl NoiseReduction {
     /// For generic C functions (free, malloc, etc.) that produce double_free
     /// or use_after_free issues, the function name alone is too generic to
     /// suppress. However, if the *caller* is a known runtime internal
-    /// (e.g., Zig's mem.Allocator.reallocAdvanced), the issue is a FP.
+    /// (e.g., an allocator's reallocAdvanced), the issue is a FP.
     ///
     /// Returns true if the caller matches a runtime-internal pattern.
     pub fn should_suppress_runtime_caller(&self, caller_name: &str) -> bool {

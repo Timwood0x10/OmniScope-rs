@@ -70,7 +70,7 @@ disable = ["DangerSurface"]
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `language` | string | — | Target language (c, cpp, rust, zig, go, python, java, csharp) |
+| `language` | string | — | Target language (c, cpp, rust, go, python, java, csharp) |
 | `output_format` | string | `rich` | Output format (`rich`, `json`, `sarif`) |
 | `parallel` | bool | `false` | Enable parallel pass execution |
 | `timeout` | integer | `300` | Analysis timeout in seconds |

@@ -226,8 +226,6 @@ fn is_known_allocator_callee(name: &str) -> bool {
     || n.starts_with("_Znam")
     || n.starts_with("_ZdlPv")
     || n.starts_with("_ZdaPv")
-    // Zig allocator
-    || n.starts_with("zig_allocator_")
     // Windows
     || n == "HeapAlloc"
     || n == "HeapFree"
@@ -264,8 +262,6 @@ fn has_strong_allocator_name(name: &str) -> bool {
     || n.starts_with("_Znam")
     || n.starts_with("_ZdlPv")
     || n.starts_with("_ZdaPv")
-    // Zig allocator
-    || n.starts_with("zig_allocator_")
     // Python
     || n.starts_with("pyobject_")
     || n.starts_with("pymem_")
@@ -310,15 +306,6 @@ pub fn is_allocator_thunk(func_name: &str, ir_module: Option<&IRModule>) -> bool
         return true;
     }
 
-    // ── Zig allocator vtable dispatch internals ──
-    // Zig's `mem.Allocator.remap__anon_*` functions are anonymous dispatch
-    // functions in the allocator vtable. They should always be treated as
-    // allocator thunks regardless of body size, since they are runtime-internal
-    // forwarding functions, not user code.
-    if name.contains("mem.allocator.remap") {
-        return true;
-    }
-
     // ── Body-aware checking ──
     // If we have IRModule, check body size and callee context.
     let has_body_info = get_function_body_size(func_name, ir_module).is_some();
@@ -330,7 +317,7 @@ pub fn is_allocator_thunk(func_name: &str, ir_module: Option<&IRModule>) -> bool
                     instr
                         .callee
                         .as_deref()
-                        .is_some_and(|callee| is_known_allocator_callee(callee))
+                        .is_some_and(is_known_allocator_callee)
                 })
             })
         })

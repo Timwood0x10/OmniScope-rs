@@ -23,7 +23,7 @@
 //! - `drop_glue_inference`: R-3 — RAII drop glue/tail dealloc detection.
 //!   Compiler-inserted cleanup is not a user bug.
 //! - `library_alloc_pairs_inference`: R-7 — library-level allocator pair
-//!   detection (mimalloc/zlib/openssl/sqlite/cgo/JNI/Python/Zig).
+//!   detection (mimalloc/zlib/openssl/sqlite/cgo/JNI/Python).
 //!   Complements R-4 POSIX — covers third-party library APIs.
 
 pub mod bridge_inference;

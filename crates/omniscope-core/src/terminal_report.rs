@@ -39,7 +39,6 @@ pub fn language_label(hint: LanguageHint) -> &'static str {
         LanguageHint::Java => "Java",
         LanguageHint::CSharp => "C#",
         LanguageHint::Go => "Go",
-        LanguageHint::Zig => "Zig",
         LanguageHint::Unknown => "?",
     }
 }

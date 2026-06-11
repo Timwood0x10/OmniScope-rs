@@ -28,7 +28,6 @@ const C_FFI_BUGS: &str = include_str!("../tests/integration/c_ffi_bugs.ll");
 const RUST_FFI_BUGS: &str = include_str!("../tests/integration/rust_ffi_bugs.ll");
 const CPP_HASH: &str = include_str!("../tests/integration/cpp_hash.ll");
 const C_HASH_BRIDGE: &str = include_str!("../tests/integration/c_hash_c_bridge.ll");
-const ZIG_FFI_BUGS: &str = include_str!("../tests/integration/zig_ffi_bugs.ll");
 const RUST_MERKLE: &str = include_str!("../tests/integration/rust_merkle.ll");
 
 // ========================================================================
@@ -328,7 +327,6 @@ fn bench_pipeline_e2e(c: &mut Criterion) {
 
     let fixtures = vec![
         ("c_hash_bridge_7KB", C_HASH_BRIDGE),
-        ("zig_ffi_14KB", ZIG_FFI_BUGS),
         ("c_ffi_bugs_17KB", C_FFI_BUGS),
         ("cpp_hash_23KB", CPP_HASH),
         ("rust_ffi_bugs_30KB", RUST_FFI_BUGS),

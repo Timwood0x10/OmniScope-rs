@@ -6,7 +6,7 @@
 //! 3. **Cross-language, no bug** — verify zero false positives at FFI boundary
 //! 4. **Cross-language, has bug** — verify FFI bug detection
 //!
-//! Languages: C, C++, Rust, Zig, Python(C-API), Go
+//! Languages: C, C++, Rust, Python(C-API), Go
 
 use omniscope_core::IssueKind;
 use omniscope_ir::IRModule;

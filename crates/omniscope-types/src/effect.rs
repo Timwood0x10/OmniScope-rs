@@ -218,8 +218,6 @@ pub enum LanguageHint {
     CSharp,
     /// Go language.
     Go,
-    /// Zig language.
-    Zig,
     /// Unknown or ambiguous language.
     Unknown,
 }

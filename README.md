@@ -10,14 +10,13 @@ A production-grade static analyzer built on LLVM IR for **cross-language FFI (Fo
 
 ## Why OmniScope?
 
-FFI boundaries are blind spots for every traditional tool. When C calls into Rust, when Zig calls Go, or when Python embeds C — memory ownership semantics dissolve across ABI boundaries. OmniScope bridges this gap by analyzing LLVM IR directly, making language-barrier memory bugs first-class citizens.
+FFI boundaries are blind spots for every traditional tool. When C calls into Rust, when Go calls Python, or when Python embeds C — memory ownership semantics dissolve across ABI boundaries. OmniScope bridges this gap by analyzing LLVM IR directly, making language-barrier memory bugs first-class citizens.
 
 ### Real Bugs Found
 
 | Project | Status | Notes |
 |---|---|---|
-| ffi-demo (Zig↔C corpus) | 95% precision, 100% recall on `zig_main.ll` | Strongest result. See `docs/release/ffi_demo_validation.md`. |
-| ffi-demo (overall) | 68% precision, 62% recall across 10 IR files | See per-file table in validation report. |
+| ffi-demo (cross-language corpus) | 68% precision, 62% recall across IR files | See per-file table in validation report. |
 | bun `bun_alloc` | Currently 0/19 TP — known regression after single-language gate change (`bd21984`). Tracked for v0.3.0. | See `docs/release/bun_validation.md`. |
 | wasmtime | Earlier scan: 1720 candidates, 1 confirmed CRITICAL (not re-verified for v0.2.0). | Re-validation pending. |
 
@@ -25,7 +24,7 @@ FFI boundaries are blind spots for every traditional tool. When C calls into Rus
 
 ## Supported Languages
 
-C, C++, Rust, Zig, Go, Python, Java, C# — with automatic language detection from IR metadata such as mangled names and calling conventions.
+C, C++, Rust, Go, Python, Java, C# — with automatic language detection from IR metadata such as mangled names and calling conventions.
 
 ## Architecture
 
@@ -132,7 +131,7 @@ re-validation work are tracked in
 
 ### Resource Contract Architecture (v0.2.0)
 
-Unified `ResourceFamily` abstraction covering every known allocator: C heap, C++ `new`, Rust ownership, Zig allocators, Go GC, Python refcount, JNI references, and more.
+Unified `ResourceFamily` abstraction covering every known allocator: C heap, C++ `new`, Rust ownership, Go GC, Python refcount, JNI references, and more.
 
 | Inference | Detects |
 |-----------|---------|
@@ -275,7 +274,6 @@ load_strategy = "auto"  # "auto", "text-parser", "safety-export-pass", "llvm-sys
 declare_boundary = [
     { from = "Rust", to = "C" },
     { from = "C", to = "Rust" },
-    { from = "Zig", to = "C" },
     { from = "Python", to = "C" },
 ]
 
@@ -356,7 +354,7 @@ cargo test --workspace --all-features
 
 | Test Category | Location | Description |
 |---------------|----------|-------------|
-| Integration | `tests/integration_tests.rs` | Cross-language FFI corpus (C/C++/Rust/Zig/Go/Python) |
+| Integration | `tests/integration_tests.rs` | Cross-language FFI corpus (C/C++/Rust/Go/Python) |
 | FFI Analysis | `tests/ffi_analysis_tests.rs` | Real-world FFI bug regression |
 | Corpus | `tests/corpus_tests.rs` | LLVM IR corpus regression |
 | Plan A/C | `tests/plan_a_c_integration.rs` | C++ Pass / llvm-sys integration |

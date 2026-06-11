@@ -15,7 +15,6 @@ OmniScope-rs 的 FFI 边界识别由"语言识别 → 边界种子 → 双证据
 |---|---|
 | Rust | `_R`（v0 mangling）、`__rust_`、`_ZN4core` / `_ZN5alloc` / `_ZN3std` |
 | C++ | `_ZN` / `_ZS` / `_Z` 前缀、`std::` / `::` 包含 |
-| Zig | `zig.` / `zig_allocator_` / `heap.` 等前缀 |
 | Go | `_Cfunc_` / `_cgo_` / `runtime.` 前缀 |
 | Python | `Py` 前缀、`PyObject` 包含 |
 | Java | `Java_` 前缀、`JNI` 包含 |
@@ -99,8 +98,7 @@ pub enum FfiEvidence {
 | 10 | `CSHARP_HGLOBAL` | `Marshal.AllocHGlobal` / `FreeHGlobal` |
 | 11 | `CSHARP_COTASK` | `CoTaskMemAlloc` / `CoTaskMemFree` |
 | 12 | `GO_GC` | `runtime.mallocgc` |
-| 13 | `ZIG_ALLOCATOR` | 通过 allocator-vtable evidence 建模 |
-| 14 | `ZLIB_STREAM` | `inflateInit_/inflateEnd`、`deflateInit_/deflateEnd` |
+| 13 | `ZLIB_STREAM` | `inflateInit_/inflateEnd`、`deflateInit_/deflateEnd` |
 | 15 | `OPENSSL_RESOURCE` | `EVP_CIPHER_CTX_new/_free`、`BIO_new/_free` 等 |
 | 16 | `SQLITE_RESOURCE` | `sqlite3_open/_close`、`sqlite3_prepare_v2/_finalize` |
 | 17 | `GO_CGO` | `_cgo_allocate/_cgo_free`、`_Cfunc_GoMalloc/_Cfunc_GoFree` |

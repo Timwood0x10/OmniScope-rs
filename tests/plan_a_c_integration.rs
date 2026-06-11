@@ -1639,8 +1639,6 @@ fn test_text_parser_loads_all_fixtures() {
         "python_ffi_bugs.ll",
         "rust_ffi_bugs.ll",
         "rust_hash.ll",
-        "zig_ffi_bridge.ll",
-        "zig_ffi_bugs.ll",
     ];
 
     for fixture_name in &fixtures {

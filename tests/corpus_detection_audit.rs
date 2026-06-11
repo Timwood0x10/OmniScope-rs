@@ -287,49 +287,6 @@ fn corpus_detection_audit() {
         ],
     );
 
-    // ─── 3. zig_ffi_bugs.ll ───────────────────────────────────────────
-    audit_fixture(
-        &mut buf,
-        "tests/integration/zig_ffi_bugs.ll",
-        &[
-            ExpectedBug {
-                function: "allocate_and_misroute",
-                description: "c_allocator.alloc + raw free (bypasses allocator)",
-                expected_kinds: &[IssueKind::CrossFamilyFree, IssueKind::CrossLanguageFree],
-            },
-            ExpectedBug {
-                function: "parse_and_leak_config",
-                description: "C buffer from c_parse_config never freed",
-                expected_kinds: &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
-            },
-            ExpectedBug {
-                function: "defer_after_free",
-                description: "explicit free then deferred call to c_validate (UAF)",
-                expected_kinds: &[IssueKind::UseAfterFree, IssueKind::BorrowEscape],
-            },
-            ExpectedBug {
-                function: "register_and_revoke",
-                description: "GPA alloc, C stores pointer, Zig frees (UAF across FFI)",
-                expected_kinds: &[
-                    IssueKind::BorrowEscape,
-                    IssueKind::OwnershipEscapeLeak,
-                    IssueKind::UseAfterFree,
-                    IssueKind::CallbackEscapeIssue,
-                ],
-            },
-        ],
-        &[
-            NoiseFunction {
-                function: "pure_zig_compute",
-                description: "pure Zig, no FFI or alloc/free",
-            },
-            NoiseFunction {
-                function: "safe_ffi_compare",
-                description: "read-only C calls (strlen, strcmp)",
-            },
-        ],
-    );
-
     // ─── 4. python_ffi_bugs.ll ────────────────────────────────────────
     audit_fixture(
         &mut buf,

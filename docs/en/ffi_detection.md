@@ -13,7 +13,7 @@ entry points:
   (`language_detector.rs:24-40`) — pattern-match the mangled function name.
 - `detect_from_module(&str) -> Language`
   (`language_detector.rs:43-70`) — match common module-name suffixes
-  (`.rs`, `.zig`, `.go`, `.py`, `.java`, `.cs`, `.cpp`, `.cc`, `.c`).
+  (`.rs`, `.go`, `.py`, `.java`, `.cs`, `.cpp`, `.cc`, `.c`).
 - `detect_from_functions(&[&str]) -> Language`
   (`language_detector.rs:73-87`) — majority vote over a function list,
   using a `HashMap<Language, usize>` of per-language scores.
@@ -29,8 +29,6 @@ Representative rules (full list in source):
   `$RF$`, `$BP$`, `$u5b$`, `$u5d$`) and the `17h<hex>E` hash suffix that
   C++ Itanium mangling never produces.
 - C++: `_ZN`, `_ZS`, `_Z` prefixes; `std::` and `::` substrings.
-- Zig: `zig.`, `zig_allocator_`, `heap.`, `Io.`, `posix.`, `Thread.`,
-  `main.` prefixes.
 - Go: `_Cfunc_`, `_cgo_`, `runtime.` prefixes.
 - Python: `Py` prefix; `PyObject` substring.
 - Java: `Java_` prefix; `JNI` substring.
@@ -104,8 +102,7 @@ the following built-in constants (`resource_family.rs:18-96`):
 | 10 | `CSHARP_HGLOBAL` | `Marshal.AllocHGlobal` / `FreeHGlobal` |
 | 11 | `CSHARP_COTASK` | `CoTaskMemAlloc` / `CoTaskMemFree` |
 | 12 | `GO_GC` | `runtime.mallocgc` |
-| 13 | `ZIG_ALLOCATOR` | Modeled via allocator-vtable evidence |
-| 14 | `ZLIB_STREAM` | `inflateInit_`/`inflateEnd` etc. |
+| 13 | `ZLIB_STREAM` | `inflateInit_`/`inflateEnd` etc. |
 | 15 | `OPENSSL_RESOURCE` | `EVP_CIPHER_CTX_new`/`_free` etc. |
 | 16 | `SQLITE_RESOURCE` | `sqlite3_open`/`_close` etc. |
 | 17 | `GO_CGO` | `_cgo_allocate`/`_cgo_free` |

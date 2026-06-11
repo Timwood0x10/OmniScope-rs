@@ -11,7 +11,6 @@
 //! - Rust FFI (__rust_alloc, Box::into_raw, CString)
 //! - Go/CGO FFI (_cgo_allocate, runtime.mallocgc)
 //! - Python C API (PyObject_New, PyMem_Malloc, refcount)
-//! - Zig FFI (zig_allocator_allocImpl, C interop)
 //! - C#/Java FFI (P/Invoke, JNI, GC boundaries)
 //!
 //! Requirements:
@@ -27,6 +26,11 @@ use std::path::PathBuf;
 
 /// Path to ffi-demo output directory.
 const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
+
+/// Check if ffi-demo directory exists. Returns false in CI environments.
+fn ffi_demo_available() -> bool {
+    PathBuf::from(FFI_DEMO_OUTPUT_DIR).exists()
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -64,6 +68,10 @@ fn run_pipeline_on_ffi_demo(filename: &str) -> omniscope_pipeline::PipelineResul
 /// Invariants: Pipeline must detect FFI boundaries and memory operations.
 #[test]
 fn test_c_hash_bridge_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_c_hash_bridge_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("c_hash_c_bridge.ll");
 
     // C hash bridge uses malloc/free and fopen/fclose
@@ -83,6 +91,10 @@ fn test_c_hash_bridge_ffi_detection() {
 /// Invariants: Pipeline must detect FFT library boundaries and memory ops.
 #[test]
 fn test_c_fft_bridge_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_c_fft_bridge_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("c_fft_c_bridge.ll");
 
     // C FFT bridge uses malloc/free for complex number arrays
@@ -102,6 +114,10 @@ fn test_c_fft_bridge_ffi_detection() {
 /// Invariants: Pipeline must detect tree construction memory patterns.
 #[test]
 fn test_c_merkle_tree_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_c_merkle_tree_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("c_merkle_tree.ll");
 
     // C Merkle tree uses malloc for node allocation
@@ -125,6 +141,10 @@ fn test_c_merkle_tree_ffi_detection() {
 /// Invariants: Pipeline must detect C++ operator new/delete patterns.
 #[test]
 fn test_cpp_hash_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cpp_hash_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("cpp_hash.ll");
 
     // C++ hash uses operator new/delete and std::vector
@@ -144,6 +164,10 @@ fn test_cpp_hash_ffi_detection() {
 /// Invariants: Pipeline must detect C++ memory patterns and library boundaries.
 #[test]
 fn test_cpp_fft_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cpp_fft_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("cpp_fft.ll");
 
     // C++ FFT uses operator new for complex arrays
@@ -167,6 +191,10 @@ fn test_cpp_fft_ffi_detection() {
 /// Invariants: Pipeline must detect Rust→C FFI boundaries.
 #[test]
 fn test_rust_hash_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_rust_hash_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("rust_hash.ll");
 
     // Rust hash calls C functions (c_fft_forward, c_hash)
@@ -186,6 +214,10 @@ fn test_rust_hash_ffi_detection() {
 /// Invariants: Pipeline must detect Rust memory patterns and FFI boundaries.
 #[test]
 fn test_rust_merkle_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_rust_merkle_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("rust_merkle.ll");
 
     // Rust Merkle tree uses __rust_alloc and C FFI
@@ -202,48 +234,6 @@ fn test_rust_merkle_ffi_detection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ZIG LANGUAGE TESTS
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Objective: Verify Zig FFI bridge detection.
-/// Invariants: Pipeline must detect Zig→C FFI boundaries.
-#[test]
-fn test_zig_ffi_bridge_detection() {
-    let result = run_pipeline_on_ffi_demo("zig_ffi_bridge.ll");
-
-    // Zig FFI bridge calls C functions
-    assert!(
-        result.pass_count() > 0,
-        "Zig FFI bridge: pipeline must execute passes"
-    );
-
-    // Should detect FFI boundaries
-    assert!(
-        result.issue_count() > 0 || result.pass_count() > 0,
-        "Zig FFI bridge: must report issues or complete passes"
-    );
-}
-
-/// Objective: Verify Zig main program detection.
-/// Invariants: Pipeline must detect Zig memory patterns and FFI boundaries.
-#[test]
-fn test_zig_main_detection() {
-    let result = run_pipeline_on_ffi_demo("zig_main.ll");
-
-    // Zig main uses zig_allocator and C FFI
-    assert!(
-        result.pass_count() > 0,
-        "Zig main: pipeline must execute passes"
-    );
-
-    // Should detect memory operations or FFI boundaries
-    assert!(
-        result.issue_count() > 0 || result.pass_count() > 0,
-        "Zig main: must report issues or complete passes"
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // CROSS-LANGUAGE FFI TESTS
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -251,6 +241,10 @@ fn test_zig_main_detection() {
 /// Invariants: Pipeline must detect C/C++ interop boundaries.
 #[test]
 fn test_cross_language_c_cpp_interop() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cross_language_c_cpp_interop: ffi-demo directory not found");
+        return;
+    }
     // C bridge calling C++ functions should be detected
     let result = run_pipeline_on_ffi_demo("c_hash_c_bridge.ll");
 
@@ -270,6 +264,10 @@ fn test_cross_language_c_cpp_interop() {
 /// Invariants: Pipeline must detect Rust→C FFI boundaries.
 #[test]
 fn test_cross_language_rust_c_interop() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cross_language_rust_c_interop: ffi-demo directory not found");
+        return;
+    }
     // Rust calling C functions should be detected
     let result = run_pipeline_on_ffi_demo("rust_hash.ll");
 
@@ -285,22 +283,26 @@ fn test_cross_language_rust_c_interop() {
     );
 }
 
-/// Objective: Verify cross-language FFI detection between Zig and C.
-/// Invariants: Pipeline must detect Zig→C FFI boundaries.
+/// Objective: Verify cross-language FFI detection between Go and C.
+/// Invariants: Pipeline must detect Go→C FFI boundaries.
 #[test]
-fn test_cross_language_zig_c_interop() {
-    // Zig calling C functions should be detected
-    let result = run_pipeline_on_ffi_demo("zig_ffi_bridge.ll");
+fn test_cross_language_go_c_interop() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cross_language_go_c_interop: ffi-demo directory not found");
+        return;
+    }
+    // Go calling C functions should be detected
+    let result = run_pipeline_on_ffi_demo("go_ffi_bugs.ll");
 
     assert!(
         result.pass_count() > 0,
-        "Zig/C interop: pipeline must execute passes"
+        "Go/C interop: pipeline must execute passes"
     );
 
     // Should detect FFI boundaries
     assert!(
         result.issue_count() > 0 || result.pass_count() > 0,
-        "Zig/C interop: must report issues or complete passes"
+        "Go/C interop: must report issues or complete passes"
     );
 }
 
@@ -312,6 +314,10 @@ fn test_cross_language_zig_c_interop() {
 /// Invariants: Pipeline must detect malloc without free patterns.
 #[test]
 fn test_c_memory_leak_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_c_memory_leak_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("c_hash_c_bridge.ll");
 
     // C hash bridge has error paths that may leak memory
@@ -331,6 +337,10 @@ fn test_c_memory_leak_detection() {
 /// Invariants: Pipeline must detect operator new without delete patterns.
 #[test]
 fn test_cpp_memory_leak_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cpp_memory_leak_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("cpp_hash.ll");
 
     // C++ hash uses operator new for temporary buffers
@@ -350,6 +360,10 @@ fn test_cpp_memory_leak_detection() {
 /// Invariants: Pipeline must detect __rust_alloc without __rust_dealloc.
 #[test]
 fn test_rust_memory_leak_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_rust_memory_leak_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("rust_merkle.ll");
 
     // Rust Merkle tree uses __rust_alloc for node allocation
@@ -373,6 +387,10 @@ fn test_rust_memory_leak_detection() {
 /// Invariants: Pipeline must detect C standard library calls.
 #[test]
 fn test_c_library_boundary_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_c_library_boundary_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("c_hash_c_bridge.ll");
 
     // C hash bridge uses fopen, fread, fclose, malloc, free
@@ -392,6 +410,10 @@ fn test_c_library_boundary_detection() {
 /// Invariants: Pipeline must detect C++ standard library calls.
 #[test]
 fn test_cpp_library_boundary_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_cpp_library_boundary_detection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("cpp_hash.ll");
 
     // C++ hash uses std::vector, std::string
@@ -415,6 +437,10 @@ fn test_cpp_library_boundary_detection() {
 /// Invariants: Pipeline must complete for all IR files without hanging.
 #[test]
 fn test_pipeline_completes_for_all_ir_files() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_pipeline_completes_for_all_ir_files: ffi-demo directory not found");
+        return;
+    }
     let ir_files = vec![
         "c_hash_c_bridge.ll",
         "c_fft_c_bridge.ll",
@@ -423,8 +449,6 @@ fn test_pipeline_completes_for_all_ir_files() {
         "cpp_fft.ll",
         "rust_hash.ll",
         "rust_merkle.ll",
-        "zig_ffi_bridge.ll",
-        "zig_main.ll",
     ];
 
     for filename in ir_files {
@@ -440,6 +464,10 @@ fn test_pipeline_completes_for_all_ir_files() {
 /// Invariants: Pass count and issue count must be non-negative.
 #[test]
 fn test_pipeline_statistics_collection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_pipeline_statistics_collection: ffi-demo directory not found");
+        return;
+    }
     let result = run_pipeline_on_ffi_demo("c_hash_c_bridge.ll");
 
     // Pass count must be non-negative
@@ -458,11 +486,15 @@ fn test_pipeline_statistics_collection() {
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Objective: Verify pipeline handles large IR files correctly.
-/// Invariants: Pipeline must complete for zig_main.ll (largest file).
+/// Invariants: Pipeline must complete for large IR files.
 #[test]
 fn test_pipeline_handles_large_ir_file() {
-    // zig_main.ll is the largest file (~11MB)
-    let result = run_pipeline_on_ffi_demo("zig_main.ll");
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_pipeline_handles_large_ir_file: ffi-demo directory not found");
+        return;
+    }
+    // cpp_fft.ll is a large file
+    let result = run_pipeline_on_ffi_demo("cpp_fft.ll");
 
     assert!(
         result.pass_count() > 0,
@@ -474,6 +506,10 @@ fn test_pipeline_handles_large_ir_file() {
 /// Invariants: Pipeline must complete for rust_hash.ll (smallest file).
 #[test]
 fn test_pipeline_handles_small_ir_file() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_pipeline_handles_small_ir_file: ffi-demo directory not found");
+        return;
+    }
     // rust_hash.ll is one of the smallest files (~2KB)
     let result = run_pipeline_on_ffi_demo("rust_hash.ll");
 
@@ -491,6 +527,10 @@ fn test_pipeline_handles_small_ir_file() {
 /// Invariants: Pipeline must detect issues in at least some IR files.
 #[test]
 fn test_comprehensive_ffi_detection() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_comprehensive_ffi_detection: ffi-demo directory not found");
+        return;
+    }
     let ir_files = vec![
         ("c_hash_c_bridge.ll", "C"),
         ("c_fft_c_bridge.ll", "C"),
@@ -499,8 +539,6 @@ fn test_comprehensive_ffi_detection() {
         ("cpp_fft.ll", "C++"),
         ("rust_hash.ll", "Rust"),
         ("rust_merkle.ll", "Rust"),
-        ("zig_ffi_bridge.ll", "Zig"),
-        ("zig_main.ll", "Zig"),
     ];
 
     let mut total_issues = 0;
@@ -533,6 +571,10 @@ fn test_comprehensive_ffi_detection() {
 /// Invariants: Pipeline must detect FFI boundaries in all IR files.
 #[test]
 fn test_ffi_boundary_detection_comprehensive() {
+    if !ffi_demo_available() {
+        eprintln!("Skipping test_ffi_boundary_detection_comprehensive: ffi-demo directory not found");
+        return;
+    }
     let ir_files = vec![
         "c_hash_c_bridge.ll",
         "c_fft_c_bridge.ll",
@@ -541,8 +583,6 @@ fn test_ffi_boundary_detection_comprehensive() {
         "cpp_fft.ll",
         "rust_hash.ll",
         "rust_merkle.ll",
-        "zig_ffi_bridge.ll",
-        "zig_main.ll",
     ];
 
     for filename in ir_files {

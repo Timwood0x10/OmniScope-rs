@@ -30,14 +30,14 @@ const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 /// as TP, correcting precision inflation from diagnostic TP being excluded
 /// from FP denominator but still counted in TP.
 ///
-/// Metrics reflect corrected classification where defensive-programming hints
-/// and correctness issues don't inflate resource safety vulnerability counts.
-const BASELINE_TP: usize = 16;
-const BASELINE_FP: usize = 11; // Non-deterministic range [10,12] due to HashMap iteration order
-const BASELINE_FN: usize = 3;
-const BASELINE_PRECISION: f64 = 0.593; // 59.3% (TP=16, total=27)
-const BASELINE_RECALL: f64 = 0.842; // 84.2% (16/19)
-const BASELINE_F1: f64 = 0.696; // 69.6%
+/// After Zig removal: zig_main.ll and zig_ffi_bridge.ll excluded from corpus
+/// (Zig support completely removed). Baseline reflects non-Zig corpus only.
+const BASELINE_TP: usize = 11;
+const BASELINE_FP: usize = 8;
+const BASELINE_FN: usize = 2;
+const BASELINE_PRECISION: f64 = 0.579; // 57.9% (TP=11, total=19)
+const BASELINE_RECALL: f64 = 0.846; // 84.6% (11/13)
+const BASELINE_F1: f64 = 0.687; // 68.7%
 
 /// Tolerance for non-deterministic pipeline output.
 const METRICS_TOLERANCE: f64 = 0.08;
@@ -140,37 +140,6 @@ struct ExpectedMiss {
 
 /// True positives: real bugs the pipeline currently detects.
 const EXPECTED_BUGS: &[ExpectedBug] = &[
-    // ── zig_main.ll bugs ────────────────────────────────────────────
-    ExpectedBug::simple(
-        "zig_main.ll",
-        "doubleFreeDemo",
-        &[IssueKind::DoubleFree],
-        "Zig main: double-free in doubleFreeDemo [confirmed]",
-    ),
-    ExpectedBug::simple(
-        "zig_main.ll",
-        "crossLanguageFreeDemo",
-        &[IssueKind::CrossLanguageFree],
-        "Zig main: cross-language free in crossLanguageFreeDemo [confirmed]",
-    ),
-    ExpectedBug::simple(
-        "zig_main.ll",
-        "bufferOverflowDemo",
-        &[IssueKind::CrossLanguageFree],
-        "Zig main: cross-language free in bufferOverflowDemo [confirmed]",
-    ),
-    ExpectedBug::simple(
-        "zig_main.ll",
-        "doubleFreeDemo",
-        &[IssueKind::CrossLanguageFree],
-        "Zig main: cross-language free in doubleFreeDemo",
-    ),
-    ExpectedBug::simple(
-        "zig_main.ll",
-        "main.doubleFreeDemo",
-        &[IssueKind::UncheckedReturn],
-        "Zig main: unchecked FFI return in doubleFreeDemo",
-    ),
     // ── c_merkle_tree.ll bugs ────────────────────────────────────────
     // UAF bug — DoubleFree is a wrong classification here, so forbid it.
     ExpectedBug {
@@ -227,12 +196,6 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
         "C hash bridge: FFI boundary C->Cpp",
     ),
     ExpectedBug::simple(
-        "zig_ffi_bridge.ll",
-        "c_alloc_buffer",
-        &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
-        "Zig FFI bridge: conditional leak in c_alloc_buffer",
-    ),
-    ExpectedBug::simple(
         "c_ffi_traps.ll",
         "ffi_make_token",
         &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
@@ -266,18 +229,6 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
         "uaf_through_ffi",
         &[IssueKind::UseAfterFree, IssueKind::BorrowEscape],
         "C FFI traps: free then pass to FFI callback (UAF) [TRAP-C9]",
-    ),
-    ExpectedBug::simple(
-        "zig_ffi_bridge.ll",
-        "c_alloc_mismatch",
-        &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
-        "Zig FFI bridge: conditional leak in c_alloc_mismatch (malloc, no free)",
-    ),
-    ExpectedBug::simple(
-        "zig_ffi_bridge.ll",
-        "c_parse_config",
-        &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
-        "Zig FFI bridge: conditional leak in c_parse_config (malloc, no free)",
     ),
     // ── csharp_ffi_demo.ll bugs (.NET NativeAOT P/Invoke) ─────────────
     // Bug1: malloc freed by Marshal.FreeHGlobal — cross-language free.
@@ -637,23 +588,22 @@ impl CategoryMetrics {
 }
 
 /// Baseline FFI metrics for regression testing.
-const BASELINE_FFI_TP: usize = 3;
-const BASELINE_FFI_FP: usize = 8;
-const BASELINE_FFI_FN: usize = 3; // uaf_through_ffi may still be FN in some runs
-const BASELINE_RESOURCE_TP: usize = 10; // UncheckedReturn TP excluded from resource
-const BASELINE_RESOURCE_FP: usize = 8; // BorrowEscape FP reduced by return-type filter
-const BASELINE_RESOURCE_FN: usize = 6;
+/// After Zig removal: reflects non-Zig corpus only.
+const BASELINE_FFI_TP: usize = 2;
+const BASELINE_FFI_FP: usize = 3;
+const BASELINE_FFI_FN: usize = 0;
+const BASELINE_RESOURCE_TP: usize = 9;
+const BASELINE_RESOURCE_FP: usize = 5;
+const BASELINE_RESOURCE_FN: usize = 7;
 
 /// Baseline leak metrics for regression testing.
-const BASELINE_LEAK_TP: usize = 9;
+const BASELINE_LEAK_TP: usize = 7;
 const BASELINE_LEAK_FP: usize = 4;
-const BASELINE_LEAK_FN: usize = 2;
+const BASELINE_LEAK_FN: usize = 3;
 
 /// Baseline double-free metrics for regression testing.
-/// After P0 metric correction: is_double_free_issue() now only counts
-/// actual DoubleFree kind, not CrossFamilyFree/CrossLanguageFree.
 const BASELINE_DOUBLE_FREE_TP: usize = 0;
-const BASELINE_DOUBLE_FREE_FP: usize = 3;
+const BASELINE_DOUBLE_FREE_FP: usize = 0;
 const BASELINE_DOUBLE_FREE_FN: usize = 1;
 
 mod audit_tests;

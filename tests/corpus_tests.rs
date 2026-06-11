@@ -11,7 +11,6 @@
 //! - `py_hidden_bugs.ll`     — 6 Python bugs + 2 noise
 //! - `jni_hidden_bugs.ll`    — 5 JNI bugs + 2 noise
 //! - `go_hidden_bugs.ll`     — 5 Go/cgo bugs + 2 noise
-//! - `zig_hidden_bugs.ll`    — 5 Zig bugs + 2 noise
 //! - `c_fft_c_bridge.ll`     — FFT FFI bridge: mutually-exclusive free (D3 FP suppression)
 //! - `c_merkle_tree.ll`      — Merkle tree FFI: mutually-exclusive free (D3 FP suppression)
 
@@ -342,41 +341,6 @@ fn test_go_corpus_hidden_bugs() {
             || has_issue(&result, IssueKind::CrossFamilyFree)
             || has_issue(&result, IssueKind::CrossLanguageFree),
         "Go BUG-GO4 double _cgo_free: expected DoubleFree, CrossFamilyFree, or CrossLanguageFree — issues: {:?}",
-        result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// ZIG CORPUS
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Zig corpus: 5 hidden bugs — zig_allocator_allocImpl leak, malloc+Zig free
-/// cross-family, double Zig free, Zig alloc+C free cross-family, Zig+Rust cross-family.
-#[test]
-fn test_zig_corpus_hidden_bugs() {
-    let result = run_corpus("zig_hidden_bugs.ll");
-    assert_min_issues(&result, 1, "Zig corpus");
-
-    // BUG-Z1: Zig allocator allocImpl leak
-    assert_has_issue(
-        &result,
-        IssueKind::ConditionalLeak,
-        "Zig BUG-Z1 allocator leak",
-    );
-
-    // BUG-Z2: C malloc + Zig free — cross-family
-    assert_has_issue(
-        &result,
-        IssueKind::CrossFamilyFree,
-        "Zig BUG-Z2 C malloc+Zig free",
-    );
-
-    // BUG-Z3: Double-free via stale pointer
-    // Pipeline may detect this as CrossFamilyFree (Zig allocator internal double-release
-    // classified as cross-family mismatch) or DoubleFree — both are valid detections.
-    assert!(
-        has_issue(&result, IssueKind::DoubleFree) || has_issue(&result, IssueKind::CrossFamilyFree),
-        "Zig BUG-Z3 double-free: expected DoubleFree or CrossFamilyFree — issues: {:?}",
         result.issues().iter().map(|i| i.kind).collect::<Vec<_>>()
     );
 }

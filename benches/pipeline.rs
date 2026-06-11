@@ -14,7 +14,6 @@ const C_FFI_BUGS: &str = include_str!("../tests/integration/c_ffi_bugs.ll");
 const RUST_FFI_BUGS: &str = include_str!("../tests/integration/rust_ffi_bugs.ll");
 const CPP_HASH: &str = include_str!("../tests/integration/cpp_hash.ll");
 const C_HASH_BRIDGE: &str = include_str!("../tests/integration/c_hash_c_bridge.ll");
-const ZIG_FFI_BUGS: &str = include_str!("../tests/integration/zig_ffi_bugs.ll");
 
 /// Describes a fixture for parameterized benchmarking.
 struct Fixture {
@@ -27,10 +26,6 @@ fn fixtures() -> Vec<Fixture> {
         Fixture {
             name: "c_hash_bridge_7KB",
             ir: C_HASH_BRIDGE,
-        },
-        Fixture {
-            name: "zig_ffi_14KB",
-            ir: ZIG_FFI_BUGS,
         },
         Fixture {
             name: "c_ffi_bugs_17KB",

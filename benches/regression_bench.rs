@@ -105,12 +105,12 @@ const C_FUNCTION_NAMES: &[&str] = &[
     "strcat",
 ];
 
-/// Zig function names
-const ZIG_FUNCTION_NAMES: &[&str] = &[
-    "zig.heap.page_allocator",
-    "zig.heap.FixedBufferAllocator",
-    "zig.mem.Allocator",
-    "zig.math.log2",
+/// Custom allocator function names
+const CUSTOM_ALLOCATOR_FUNCTION_NAMES: &[&str] = &[
+    "heap.page_allocator",
+    "heap.FixedBufferAllocator",
+    "mem.Allocator",
+    "math.log2",
 ];
 
 // ============================================================================
@@ -129,7 +129,7 @@ const MODULE_NAMES: &[&str] = &[
     "handler.py",
     "Service.java",
     "Program.cs",
-    "build.zig",
+    "build.config",
     "unknown.xyz",
 ];
 
@@ -292,10 +292,10 @@ fn bench_language_detection_from_function(c: &mut Criterion) {
         })
     });
 
-    // Benchmark Zig function detection
-    group.bench_function("zig_functions", |b| {
+    // Benchmark custom allocator function detection
+    group.bench_function("custom_allocator_functions", |b| {
         b.iter(|| {
-            for name in ZIG_FUNCTION_NAMES {
+            for name in CUSTOM_ALLOCATOR_FUNCTION_NAMES {
                 let lang = detector.detect_from_function(black_box(name));
                 black_box(lang);
             }

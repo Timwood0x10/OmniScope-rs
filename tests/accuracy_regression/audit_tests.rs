@@ -118,15 +118,8 @@ fn test_category_metrics_fp_and_suppression() {
     );
 
     // Record suppression reasons
-    metrics.record_suppression("Zig runtime allocator");
-    metrics.record_suppression("Zig runtime allocator");
     metrics.record_suppression("Rust _ZN mangling");
 
-    assert_eq!(
-        metrics.suppression_reasons.get("Zig runtime allocator"),
-        Some(&2),
-        "Zig runtime allocator should be suppressed twice"
-    );
     assert_eq!(
         metrics.suppression_reasons.get("Rust _ZN mangling"),
         Some(&1),
@@ -136,10 +129,6 @@ fn test_category_metrics_fp_and_suppression() {
 
 /// Objective: Verify CrossFamilyFree/CrossLanguageFree TP for C/C++ corpus.
 /// Phase 7 acceptance: audit reports cross-family/cross-language free TP for corpus cases.
-///
-/// Note: zig_main.ll cross-family/cross-language detection is non-deterministic.
-/// CrossLanguageFree is more reliably detected than CrossFamilyFree, so we
-/// check for either being present in the corpus.
 #[test]
 fn test_cross_family_free_tp_in_corpus() {
     let ffi_demo_dir = PathBuf::from(FFI_DEMO_OUTPUT_DIR);
@@ -149,7 +138,7 @@ fn test_cross_family_free_tp_in_corpus() {
     }
 
     // Check that at least one cross-family or cross-language free is detected.
-    // CrossFamilyFree detection on zig_main.ll is non-deterministic,
+    // CrossFamilyFree detection may be non-deterministic for some files,
     // so we also accept CrossLanguageFree as a valid cross-boundary TP.
     let mut cross_boundary_tp = 0;
     for bug in EXPECTED_BUGS {

@@ -21,11 +21,8 @@ OmniScope must be used alongside dynamic analysis tools (fuzzing, sanitizers). S
 ### C++ WTI False Positives
 cpp_fft.ll and cpp_hash.ll currently produce ~73 WTI false positives. C++ const semantics are often lost at the LLVM IR level, causing the analyzer to flag legitimate writes as violations.
 
-### Zig Allocator Coverage
-Zig's allocator patterns (allocImpl/freeImpl) may not be fully modeled. Zig code using custom allocators may produce incomplete results.
-
 ### Non-deterministic Output
-Some analysis results (particularly DoubleFree detection on zig_main.ll) are non-deterministic due to HashMap iteration order. This is a known limitation being addressed.
+Some analysis results (particularly DoubleFree detection) are non-deterministic due to HashMap iteration order. This is a known limitation being addressed.
 
 ### Single-File Analysis
 OmniScope currently analyzes one LLVM IR file at a time. Cross-module analysis (e.g., analyzing both sides of an FFI boundary from separate compilation units) is not supported.
@@ -69,11 +66,8 @@ OmniScope 必须与动态分析工具（fuzzing、sanitizer）配合使用。静
 ### C++ WTI 误报
 cpp_fft.ll 和 cpp_hash.ll 目前有约 73 个 WTI 误报。C++ 的 const 语义在 LLVM IR 层面经常丢失，导致分析器将合法的写入标记为违规。
 
-### Zig 分配器覆盖
-Zig 的分配器模式（allocImpl/freeImpl）可能未被完整建模。使用自定义分配器的 Zig 代码可能产生不完整的结果。
-
 ### 非确定性输出
-部分分析结果（特别是 zig_main.ll 的 DoubleFree 检测）由于 HashMap 迭代顺序而具有非确定性。这是一个已知限制，正在解决中。
+部分分析结果（特别是 DoubleFree 检测）由于 HashMap 迭代顺序而具有非确定性。这是一个已知限制，正在解决中。
 
 ### 单文件分析
 OmniScope 目前一次分析一个 LLVM IR 文件。不支持跨模块分析。

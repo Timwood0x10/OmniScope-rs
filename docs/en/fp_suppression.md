@@ -79,7 +79,7 @@ case of runtime allocators calling free on their own allocations.
 
 ### 4. FFI bridge function suppression
 
-When the function name starts with `c_`, `rust_`, `zig_`, `py_`, `java_`,
+When the function name starts with `c_`, `rust_`, `py_`, `java_`,
 or `go_` and the caller is runtime-internal, `DoubleFree` and
 `UseAfterFree` are suppressed. These bridge functions are trusted FFI
 glue code.

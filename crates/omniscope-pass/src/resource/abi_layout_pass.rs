@@ -35,7 +35,7 @@ use crate::pass::{Pass, PassContext, PassKind, PassResult};
 ///
 /// Detects struct padding/alignment issues that cause incorrect field
 /// offsets when structs are accessed across FFI boundaries (e.g., C struct
-/// passed to Zig/Go caller assuming packed layout).
+/// passed to a non-C caller assuming packed layout).
 pub struct AbiLayoutPass;
 
 impl AbiLayoutPass {

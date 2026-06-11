@@ -40,8 +40,6 @@ impl FamilyId {
     pub const CSHARP_COTASK: FamilyId = FamilyId(11);
     /// Go GC-managed: runtime.mallocgc
     pub const GO_GC: FamilyId = FamilyId(12);
-    /// Zig allocator: zig_allocator_allocImpl/zig_allocator_freeImpl.
-    pub const ZIG_ALLOCATOR: FamilyId = FamilyId(13);
 
     // ── Library-managed families (from IR Pattern Atlas §1.4, §4, §7) ──
 
@@ -356,20 +354,6 @@ pub static FAMILY_GO_GC: ResourceFamily = ResourceFamily {
     compatible_releases: &[],
 };
 
-/// Zig allocator family: zig_allocator_allocImpl / zig_allocator_freeImpl.
-///
-/// Zig uses an allocator-vtable pattern where `zig_allocator_allocImpl`
-/// and `zig_allocator_freeImpl` are the vtable dispatch entry points.
-/// Compatible with C_HEAP because Zig's default allocator (page_allocator,
-/// c_allocator) often delegates to C malloc/free under the hood.
-pub static FAMILY_ZIG_ALLOCATOR: ResourceFamily = ResourceFamily {
-    id: FamilyId::ZIG_ALLOCATOR,
-    name: "zig_allocator",
-    kind: FamilyKind::VtableDispatched,
-    lifetime: LifetimeDomain::ExplicitFree,
-    compatible_releases: &[FamilyId::C_HEAP],
-};
-
 // ── Library-managed families (IR Pattern Atlas §1.4, §4, §7) ──
 
 /// zlib stream family: inflateInit_/inflateEnd, deflateInit_/deflateEnd.
@@ -554,7 +538,6 @@ pub static BUILTIN_FAMILIES: &[&ResourceFamily] = &[
     &FAMILY_CSHARP_HGLOBAL,
     &FAMILY_CSHARP_COTASK,
     &FAMILY_GO_GC,
-    &FAMILY_ZIG_ALLOCATOR,
     // Library-managed families (IR Pattern Atlas)
     &FAMILY_ZLIB_STREAM,
     &FAMILY_OPENSSL_RESOURCE,
@@ -580,8 +563,8 @@ mod tests {
     fn test_builtin_families_count() {
         assert_eq!(
             BUILTIN_FAMILIES.len(),
-            24,
-            "Must have exactly 24 built-in families (including ZIG_ALLOCATOR)"
+            23,
+            "Must have exactly 23 built-in families"
         );
     }
 

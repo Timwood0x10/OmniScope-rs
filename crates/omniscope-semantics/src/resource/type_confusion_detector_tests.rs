@@ -499,9 +499,9 @@ fn test_e2e_type_confusion_detection() {
 ///             StructWidthMismatch near an FFI call.
 #[test]
 fn test_struct_width_mismatch_u64_to_u32() {
-    // Simulates FN-8: Zig passes {u64,u64} (16B), C reads {u32,u32} (8B)
+    // Simulates FN-8: caller passes {u64,u64} (16B), callee reads {u32,u32} (8B)
     // Uses typed pointers so the bitcast parses as different source/target types.
-    // The ZigConfig→CConfig cast through void* triggers StructWidthMismatch.
+    // The Config→CConfig cast through void* triggers StructWidthMismatch.
     let ir = r#"
         define void @process_config(ptr %opaque_arg) {
         entry:
@@ -598,11 +598,11 @@ fn test_anonymous_struct_size_parsing() {
 /// Invariants: Config structs default to 16B, C-prefixed to 8B.
 #[test]
 fn test_named_struct_size_estimation() {
-    // Zig-style config → 16 bytes
+    // Config-style struct → 16 bytes
     assert_eq!(
-        estimate_named_struct_size("ZigConfig"),
+        estimate_named_struct_size("AppConfig"),
         Some(16),
-        "ZigConfig must estimate to 16 bytes"
+        "AppConfig must estimate to 16 bytes"
     );
     assert_eq!(
         estimate_named_struct_size("config"),

@@ -59,7 +59,7 @@ flowchart TD
 
 ### 4. FFI 桥接函数抑制
 
-当函数名以 `c_`、`rust_`、`zig_`、`py_`、`java_` 或 `go_` 开头且 caller 是运行时内部时，`DoubleFree` 和 `UseAfterFree` 被抑制。这些桥接函数是受信任的 FFI 胶水代码。
+当函数名以 `c_`、`rust_`、`py_`、`java_` 或 `go_` 开头且 caller 是运行时内部时，`DoubleFree` 和 `UseAfterFree` 被抑制。这些桥接函数是受信任的 FFI 胶水代码。
 
 ## 双证据门控
 

@@ -25,7 +25,7 @@ use tracing_subscriber::EnvFilter;
 /// Cross-language boundary specification parsed from CLI.
 ///
 /// Used with `--cross FROM:TO` to specify FFI boundaries.
-/// Example: `--cross C:Cpp --cross Zig:C`
+/// Example: `--cross C:Cpp --cross Rust:C`
 #[derive(Debug, Clone)]
 struct CrossBoundary {
     /// Source language of the FFI call.

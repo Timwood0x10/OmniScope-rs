@@ -422,7 +422,7 @@ pub(crate) fn estimate_named_struct_size(struct_name: &str) -> Option<u64> {
         return Some(8);
     }
 
-    // Zig-style config structs (often {u64,u64} = 16 bytes)
+    // Config structs (often {u64,u64} = 16 bytes)
     if struct_name.contains("Config") || struct_name.contains("config") {
         return Some(16);
     }

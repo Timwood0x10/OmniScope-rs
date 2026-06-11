@@ -142,15 +142,15 @@ impl WriteToImmutablePass {
     ) {
         // Add semantic resolutions based on IR patterns
 
-        // R-12: Check for Zig runtime internal functions (suppresses false positives)
-        // Zig runtime internal functions (std.*, builtin, compiler_rt, allocator glue)
+        // R-12: Check for runtime internal functions (suppresses false positives)
+        // Runtime internal functions (compiler_rt, allocator glue, etc.)
         // should not be reported as WriteToImmutable violations.
         let trimmed_caller = caller.trim_start_matches('@');
         if runtime_internal_funcs.contains(trimmed_caller) {
             let resolution = SemanticResolution {
                 kind: SemanticKind::RuntimeInternal,
                 confidence: 0.95,
-                evidence: "Function is Zig runtime internal (stdlib/compiler_rt/allocator)"
+                evidence: "Function is runtime internal (stdlib/compiler_rt/allocator)"
                     .to_string(),
                 pattern_id: "R-12",
             };
@@ -399,22 +399,19 @@ impl WriteToImmutablePass {
             || trimmed.contains("__cxa_")
             || trimmed.contains("__gxx_");
 
-        // Any name starting with '_' is assumed C++ unless it's Rust/Zig
+        // Any name starting with '_' is assumed C++ unless it's Rust
         let is_cpp_by_convention = trimmed.starts_with('_');
 
-        // Exclude Rust-mangled names (_R, _ZN) and Zig names (std., zig.)
-        // Note: We check for "std::" (C++) BEFORE checking "std." (Zig) —
-        // a function name starting with "std." is treated as Zig, but
+        // Exclude Rust-mangled names (_R, _ZN)
+        // Note: We check for "std::" (C++) BEFORE checking "std." —
+        // a function name starting with "std." could be ambiguous, but
         // containing "std::" is treated as C++.
-        let is_rust_or_zig = trimmed.starts_with("_R")
-            || trimmed.starts_with("_ZN")
-            || trimmed.starts_with("std.")
-            || trimmed.starts_with("zig.")
-            || trimmed.starts_with("builtin.");
+        let is_rust_only = trimmed.starts_with("_R")
+            || trimmed.starts_with("_ZN");
 
         let is_cpp = is_cpp_mangled || is_cpp_runtime || is_cpp_by_convention;
 
-        (is_plain_c || is_cpp) && !is_rust_or_zig
+        (is_plain_c || is_cpp) && !is_rust_only
     }
 
     /// R-12b: Checks if caller is a C++ runtime/internal function that
@@ -663,7 +660,7 @@ mod tests {
     }
 
     /// Objective: Verify C/C++ callers are suppressed (R-13).
-    /// Invariants: Plain C names and C++ mangled names match; Rust/Zig do not.
+    /// Invariants: Plain C names and C++ mangled names match; Rust does not.
     #[test]
     fn test_is_c_or_cpp_caller() {
         let pass = WriteToImmutablePass::new();
@@ -689,11 +686,6 @@ mod tests {
         assert!(
             !pass.is_c_or_cpp_caller("_ZN5alloc7raw_vec8allocate"),
             "Rust _ZN mangled must NOT be C/C++ caller"
-        );
-        // Zig names must NOT match
-        assert!(
-            !pass.is_c_or_cpp_caller("std.mem.Allocator"),
-            "Zig std.* must NOT be C/C++ caller"
         );
     }
 

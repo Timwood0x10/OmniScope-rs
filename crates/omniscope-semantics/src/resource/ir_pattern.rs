@@ -249,7 +249,7 @@ pub enum BehaviorPattern {
     ///
     /// This is a potential UAF bug: if the original allocation is later freed
     /// while the global still holds it, any access through the global is UAF.
-    /// Evidence: FN-14 in zig_ffi_bridge.c (c_register_and_store).
+    /// Evidence: FN-14 (c_register_and_store).
     HeapToGlobalEscape {
         /// The global variable that receives the heap/parameter pointer.
         global_target: String,

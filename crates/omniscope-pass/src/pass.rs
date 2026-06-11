@@ -450,7 +450,7 @@ impl PassContext {
         // not about runtime-internal noise.
         //
         // UseAfterFree IS suppressed when both the symbol and the caller
-        // are runtime-internal (e.g., Zig's mem.Allocator.remap__anon_*
+        // are runtime-internal (e.g., allocator vtable dispatch
         // UAF in allocator vtable dispatch functions). When the caller is
         // user code, UAF is NOT suppressed — the !caller_is_user_code guard
         // ensures we only suppress UAF in runtime infrastructure code.

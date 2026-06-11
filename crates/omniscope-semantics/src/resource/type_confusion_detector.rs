@@ -102,8 +102,8 @@ pub enum TypeConfusionKind {
     /// Detects when an FFI function takes a `void*` or opaque pointer,
     /// and the caller passes a pointer to a struct of size S1, but inside
     /// the function it is cast to a struct of size S2 where S2 < S1.
-    /// This causes silent truncation of data (e.g., Zig passes `{u64,u64}`
-    /// (16 bytes) but C reads as `{u32,u32}` (8 bytes) through void*).
+    /// This causes silent truncation of data (e.g., caller passes `{u64,u64}`
+    /// (16 bytes) but callee reads as `{u32,u32}` (8 bytes) through void*).
     StructWidthMismatch {
         /// Caller-side struct size in bytes
         caller_struct_size: u64,
@@ -593,8 +593,8 @@ impl TypeConfusionDetector {
     /// 3. Inside the function, the pointer is bitcast to a smaller struct (S2 < S1)
     /// 4. Subsequent GEP/load instructions access fields of the smaller struct
     ///
-    /// This is the FN-8 pattern: Zig passes `ZigConfig{u64, u64}` (16 bytes)
-    /// but C reads as `CConfig{u32, u32}` (8 bytes) through void* cast.
+    /// This is the FN-8 pattern: caller passes `Config{u64, u64}` (16 bytes)
+    /// but callee reads as `CConfig{u32, u32}` (8 bytes) through void* cast.
     fn check_struct_width_mismatch(
         &self,
         inst: &IRInstruction,

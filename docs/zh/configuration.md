@@ -67,7 +67,7 @@ disable = ["DangerSurface"]
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `language` | string | — | 目标语言（c/cpp/rust/zig/go/python/java/csharp） |
+| `language` | string | — | 目标语言（c/cpp/rust/go/python/java/csharp） |
 | `output_format` | string | `rich` | 输出格式（`rich`、`json`、`sarif`） |
 | `parallel` | bool | `false` | 启用并行 Pass 执行 |
 | `timeout` | integer | `300` | 分析超时秒数 |
