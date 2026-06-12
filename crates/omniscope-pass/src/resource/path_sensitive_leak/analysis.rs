@@ -8,9 +8,10 @@
 //! - path_state_label — human-readable label for exit states
 //! - format_exit_state_summary — builds exit state summary string
 //! - determine_leak_type — determines leak type from exit states
+//! - compute_path_evidence — computes path evidence from instructions
 
 use omniscope_semantics::{SemanticKind, SummaryStore};
-use omniscope_types::Evidence;
+use omniscope_types::{Evidence, PathEvidence};
 
 use crate::resource::ownership_solver::PointerStateMap;
 use crate::resource::raw_fact_collector::RawResourceFact;
@@ -316,4 +317,23 @@ pub(super) fn determine_leak_type(
     } else {
         LeakType::NeedsModel
     }
+}
+
+/// Computes path evidence for a resource's lifecycle within a function body.
+///
+/// Scans the instruction sequence for release calls matching the given
+/// callees and produces a `PathEvidence` summary indicating whether
+/// the resource is released on all, some, or no paths.
+pub fn compute_path_evidence(
+    _instructions: &[omniscope_ir::IRInstruction],
+    _release_callees: &[String],
+    _alloc_reg: Option<String>,
+    _branch_limit: usize,
+) -> Option<PathEvidence> {
+    // Disabled: the previous implementation was a naive instruction counter
+    // that set `all_paths_release = release_count > 0`, which incorrectly
+    // suppressed all double-release and UAF candidates. Real path-sensitive
+    // analysis requires CFG traversal with branch-aware path enumeration.
+    // Return None until that is implemented.
+    None
 }

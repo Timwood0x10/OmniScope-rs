@@ -11,7 +11,7 @@
 //! is reset at the start of each pass run so that the arena is reused.
 
 use omniscope_core::Result;
-use omniscope_types::{Effect, FamilyId, FunctionId, Language, OmniScopeConfig};
+use omniscope_types::{Confidence, Effect, FamilyId, FunctionId, Language, OmniScopeConfig};
 
 use crate::analysis::ffi_boundary_detector::is_non_allocator_api;
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
@@ -24,6 +24,23 @@ use omniscope_types::boundary::BoundaryEvidence;
 
 /// FIFO queue entry: (instance_id, optional_alloc_family).
 type AcquireEntry = (u64, Option<FamilyId>);
+
+/// A matched release point in the contract graph.
+///
+/// Returned by `ContractGraph::find_matching_release` to describe
+/// a release edge that matches a given function, family, and optional
+/// resource ID.
+#[derive(Debug, Clone)]
+pub struct ReleaseMatch {
+    /// The function containing the release (caller name).
+    pub function: String,
+    /// The callee name of the release call (e.g. "free", "_ZdlPv").
+    pub callee: String,
+    /// Whether this release covers all paths (unconditional release).
+    pub covers_all_paths: bool,
+    /// Confidence in the match.
+    pub confidence: Confidence,
+}
 
 /// An edge in the resource contract graph.
 #[derive(Debug, Clone)]
@@ -161,6 +178,55 @@ impl ContractGraph {
             }
         }
         sites.into_iter()
+    }
+
+    /// Check if a given function has a matching release for a resource family.
+    ///
+    /// Searches the contract graph for release edges that match the given
+    /// function name, family, and optional resource ID. Returns a list of
+    /// `ReleaseMatch` entries describing the matched release points.
+    ///
+    /// When `resource_id > 0`, matches only edges whose source is that
+    /// specific instance. Otherwise, matches any release edge owned by
+    /// the function.
+    ///
+    /// Confidence is `High` for unconditional releases and `Medium` for
+    /// conditional releases.
+    pub fn find_matching_release(
+        &self,
+        function: &str,
+        family: FamilyId,
+        resource_id: u64,
+    ) -> Vec<ReleaseMatch> {
+        self.edges
+            .iter()
+            .filter(|e| {
+                if !e.effect.is_release() {
+                    return false;
+                }
+                if e.effect.family() != Some(family) {
+                    return false;
+                }
+                if resource_id > 0 {
+                    e.source == resource_id
+                } else {
+                    e.caller_name == function
+                }
+            })
+            .map(|e| {
+                let is_conditional = matches!(e.effect, Effect::ConditionalRelease { .. });
+                ReleaseMatch {
+                    function: e.caller_name.clone(),
+                    callee: e.function_name.clone(),
+                    covers_all_paths: !is_conditional,
+                    confidence: if is_conditional {
+                        Confidence::Medium
+                    } else {
+                        Confidence::High
+                    },
+                }
+            })
+            .collect()
     }
 }
 

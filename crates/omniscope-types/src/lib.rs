@@ -22,7 +22,11 @@ pub mod effect;
 pub mod escape;
 pub mod evidence;
 pub mod lifetime;
+pub mod may_alias;
+pub mod module_summary;
+pub mod path_evidence;
 pub mod pointer_contract;
+pub mod project_index;
 pub mod resource_family;
 
 // Re-exports
@@ -44,14 +48,17 @@ pub use config::{
 pub use effect::{ArgIndex, Effect, FunctionOrigin, LanguageHint, VerifierVerdict};
 pub use escape::EscapeKind;
 pub use evidence::{
-    is_boundary_evidence, is_resource_evidence, BoundaryDetectionMethod, BoundaryEvidenceKind,
-    CrossBoundaryEvidence, Evidence, EvidenceKind, IssueCandidateKind, ResourceEvidenceKind,
+    is_boundary_evidence, is_resource_evidence, AliasEvidence, AliasSource,
+    BoundaryDetectionMethod, BoundaryEvidenceKind, Confidence, CrossBoundaryEvidence, Evidence,
+    EvidenceKind, FreeSite, IssueCandidateKind, ResourceEvidenceKind,
 };
 pub use lifetime::{
     CrossFunctionLifetimeData, LifetimeViolationEntry, ResourceFateEntry, ResourceFateSummary,
     ViolationKind,
 };
+pub use path_evidence::PathEvidence;
 pub use pointer_contract::PointerContract;
+pub use project_index::ProjectIndex;
 pub use resource_family::{
     are_families_compatible, FamilyId, FamilyKind, LifetimeDomain, ResourceFamily,
     BUILTIN_FAMILIES, FAMILY_CPP_NEW_ARRAY, FAMILY_CPP_NEW_SCALAR, FAMILY_CSHARP_COTASK,

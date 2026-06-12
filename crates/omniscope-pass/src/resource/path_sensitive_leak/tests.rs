@@ -2,7 +2,9 @@
 
 use omniscope_core::{IssueCandidate, IssueKind};
 use omniscope_semantics::SummaryStore;
-use omniscope_types::{Effect, FamilyId, IssueCandidateKind, VerifierVerdict};
+use omniscope_types::{
+    call_graph_types::CallGraphEdge, Effect, FamilyId, IssueCandidateKind, VerifierVerdict,
+};
 
 use crate::pass::{Pass, PassContext, PassKind};
 use crate::resource::raw_fact_collector::RawResourceFact;
@@ -531,6 +533,27 @@ fn test_definite_leak_downgraded_when_release_present() {
     );
     ctx.store("contract_graph", graph);
 
+    // Add call graph edges so reachability can find the release sites.
+    ctx.store(
+        "call_graph_edges",
+        vec![
+            CallGraphEdge {
+                caller: "bun_alloc_aligned".to_string(),
+                callee: "bun_free".to_string(),
+                is_cross_lang: false,
+                caller_lang: None,
+                callee_lang: None,
+            },
+            CallGraphEdge {
+                caller: "bun_alloc_aligned".to_string(),
+                callee: "bun_free_aligned".to_string(),
+                is_cross_lang: false,
+                caller_lang: None,
+                callee_lang: None,
+            },
+        ],
+    );
+
     let pass = LeakDetectionPass::new();
     pass.run(&mut ctx).expect("LeakDetection pass must succeed");
 
@@ -619,6 +642,27 @@ fn test_conditional_leak_suppressed_when_all_paired() {
         &[("mi_free", "bun_free"), ("mi_free", "bun_free_aligned")],
     );
     ctx.store("contract_graph", graph);
+
+    // Add call graph edges so reachability can find the release sites.
+    ctx.store(
+        "call_graph_edges",
+        vec![
+            CallGraphEdge {
+                caller: "bun_realloc".to_string(),
+                callee: "bun_free".to_string(),
+                is_cross_lang: false,
+                caller_lang: None,
+                callee_lang: None,
+            },
+            CallGraphEdge {
+                caller: "bun_realloc".to_string(),
+                callee: "bun_free_aligned".to_string(),
+                is_cross_lang: false,
+                caller_lang: None,
+                callee_lang: None,
+            },
+        ],
+    );
 
     let pass = LeakDetectionPass::new();
     pass.run(&mut ctx).expect("LeakDetection pass must succeed");
@@ -1127,4 +1171,378 @@ fn test_collect_exit_states_mixed_released_and_owned() {
         .count();
     assert_eq!(released_count, 1, "exactly 1 Released after dedup");
     assert_eq!(owned_count, 1, "exactly 1 Owned");
+}
+
+// ── Phase 2: ContractGraph release matching + ownership transfer tests ──
+
+/// Builds a minimal ContractGraph with a Release edge for `family` in `caller`.
+fn graph_with_single_release(
+    family: FamilyId,
+    callee: &str,
+    caller: &str,
+) -> crate::resource::contract_graph_builder::ContractGraph {
+    use crate::resource::contract_graph_builder::{ContractEdge, ContractGraph};
+    let mut g = ContractGraph::new();
+    let instance = g.alloc_instance();
+    g.add_edge(ContractEdge {
+        source: instance,
+        target: 0,
+        effect: Effect::Release { family, arg: 0 },
+        function: 100,
+        function_name: callee.to_string(),
+        caller_name: caller.to_string(),
+        family: Some(family),
+        boundary_evidence: None,
+    });
+    g
+}
+
+/// Builds a ContractGraph with ReturnsOwned edge for ownership transfer tests.
+fn graph_with_returns_owned(
+    family: FamilyId,
+    caller: &str,
+) -> crate::resource::contract_graph_builder::ContractGraph {
+    use crate::resource::contract_graph_builder::{ContractEdge, ContractGraph};
+    let mut g = ContractGraph::new();
+    let instance = g.alloc_instance();
+    g.add_edge(ContractEdge {
+        source: 0,
+        target: instance,
+        effect: Effect::ReturnsOwned { family },
+        function: 100,
+        function_name: caller.to_string(),
+        caller_name: caller.to_string(),
+        family: Some(family),
+        boundary_evidence: None,
+    });
+    g
+}
+
+/// Objective: Verify that a factory function which allocates and returns
+/// ownership (ReturnsOwned effect) does NOT produce a leak candidate.
+/// Invariant: No leak candidates emitted when ReturnsOwned matches the
+/// allocation family.
+#[test]
+fn test_factory_return_no_leak() {
+    let mut ctx = PassContext::new();
+
+    // Factory function allocates — ownership transfers to caller.
+    let alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "create_foo".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+    ctx.store("raw_resource_facts", vec![alloc]);
+
+    // ContractGraph with ReturnsOwned for the factory function.
+    let graph = graph_with_returns_owned(FamilyId::C_HEAP, "create_foo");
+    ctx.store("contract_graph", graph);
+
+    let pass = LeakDetectionPass::new();
+    let result = pass.run(&mut ctx).unwrap();
+    let _ = result;
+
+    let candidates: Vec<IssueCandidate> = ctx
+        .get::<Vec<IssueCandidate>>("leak_candidates")
+        .unwrap_or_default();
+    assert_eq!(
+        candidates.len(),
+        0,
+        "Factory function with ReturnsOwned must not produce a leak candidate"
+    );
+}
+
+/// Objective: Verify that partial release in a function (fewer releases than
+/// allocs) produces a ConditionalLeak candidate when no other context
+/// suppresses the leak.
+/// Invariant: At least one ConditionalLeak candidate is produced.
+#[test]
+fn test_partial_release_conditional() {
+    let mut ctx = PassContext::new();
+
+    // 2 allocs + 1 release in same function → partial release.
+    let alloc1 = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "partial_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+    let alloc2 = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "partial_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(1),
+    };
+    let release = RawResourceFact {
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "partial_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: false,
+        contract: omniscope_types::PointerContract::Released,
+        arg_index: Some(0),
+    };
+    ctx.store("raw_resource_facts", vec![alloc1, alloc2, release]);
+
+    // Provide a ContractGraph so the pass runs fully.
+    let graph = graph_with_single_release(FamilyId::C_HEAP, "free", "partial_func");
+    ctx.store("contract_graph", graph);
+
+    let pass = LeakDetectionPass::new();
+    let result = pass.run(&mut ctx).unwrap();
+    let _ = result;
+
+    let candidates: Vec<IssueCandidate> = ctx
+        .get::<Vec<IssueCandidate>>("leak_candidates")
+        .unwrap_or_default();
+    assert!(
+        !candidates.is_empty(),
+        "Partial release must produce at least one candidate"
+    );
+    // All candidates should be ConditionalLeak (not DefiniteLeak).
+    for c in &candidates {
+        assert_eq!(
+            c.kind,
+            IssueCandidateKind::ConditionalLeak,
+            "Partial release must produce ConditionalLeak, got {:?}",
+            c.kind
+        );
+    }
+}
+
+/// Objective: Verify that a matched alloc/free pair in the same function
+/// with adequate release coverage does NOT produce a leak candidate.
+/// Invariant: No leak candidates emitted when alloc count ≤ release count.
+#[test]
+fn test_matched_alloc_free_no_leak() {
+    let mut ctx = PassContext::new();
+
+    // 1 alloc + 1 release in same function → fully matched.
+    let alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "test_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+    let release = RawResourceFact {
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "test_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: false,
+        contract: omniscope_types::PointerContract::Released,
+        arg_index: Some(0),
+    };
+    ctx.store("raw_resource_facts", vec![alloc, release]);
+
+    // Provide a ContractGraph so the pass runs fully.
+    let graph = graph_with_single_release(FamilyId::C_HEAP, "free", "test_func");
+    ctx.store("contract_graph", graph);
+
+    let pass = LeakDetectionPass::new();
+    let result = pass.run(&mut ctx).unwrap();
+    let _ = result;
+
+    let candidates: Vec<IssueCandidate> = ctx
+        .get::<Vec<IssueCandidate>>("leak_candidates")
+        .unwrap_or_default();
+    assert_eq!(
+        candidates.len(),
+        0,
+        "Matched alloc/free pair must not produce a leak candidate"
+    );
+}
+
+/// Objective: Verify that a caller function which receives ownership from a
+/// factory but does not free the resource produces a DefiniteLeak candidate.
+/// The factory itself is not flagged (ownership transferred), but the caller
+/// who drops the owned resource IS flagged.
+/// Invariant: One DefiniteLeak candidate for the caller allocation.
+#[test]
+fn test_factory_caller_drop_leak() {
+    let mut ctx = PassContext::new();
+
+    // Two raw facts:
+    // 1. Factory function allocates (will be suppressed by ReturnsOwned)
+    // 2. Caller calls factory, receives owned resource (no release)
+    let factory_alloc = RawResourceFact {
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "create_foo".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+    let caller_alloc = RawResourceFact {
+        function: 2,
+        function_name: "create_foo".to_string(),
+        caller_name: "user".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+        is_acquire: true,
+        contract: omniscope_types::PointerContract::Owned,
+        arg_index: Some(0),
+    };
+    ctx.store("raw_resource_facts", vec![factory_alloc, caller_alloc]);
+
+    // ContractGraph with ReturnsOwned for create_foo only (not for user).
+    let mut graph = graph_with_returns_owned(FamilyId::C_HEAP, "create_foo");
+    // Also add a release edge in create_foo for cross-check.
+    let instance = graph.alloc_instance();
+    use crate::resource::contract_graph_builder::ContractEdge;
+    graph.add_edge(ContractEdge {
+        source: instance,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 100,
+        function_name: "free".to_string(),
+        caller_name: "create_foo".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+    ctx.store("contract_graph", graph);
+
+    let pass = LeakDetectionPass::new();
+    let result = pass.run(&mut ctx).unwrap();
+    let _ = result;
+
+    let candidates: Vec<IssueCandidate> = ctx
+        .get::<Vec<IssueCandidate>>("leak_candidates")
+        .unwrap_or_default();
+
+    // The "user" caller should have a DefiniteLeak.
+    // The factory (create_foo) is suppressed by ReturnsOwned.
+    let user_candidates: Vec<_> = candidates
+        .iter()
+        .filter(|c| c.alloc_caller.as_deref() == Some("user"))
+        .collect();
+    assert!(
+        !user_candidates.is_empty(),
+        "Caller 'user' who drops owned resource must produce a leak candidate"
+    );
+    for c in &user_candidates {
+        assert_eq!(
+            c.kind,
+            IssueCandidateKind::DefiniteLeak,
+            "Caller 'user' must produce DefiniteLeak, got {:?}",
+            c.kind
+        );
+    }
+}
+
+/// Objective: Directly test `ContractGraph::find_matching_release` to verify
+/// it returns correct ReleaseMatch entries for different scenarios.
+/// Invariant: Returns matches for release edges, empty vec when no match.
+#[test]
+fn test_contract_graph_release_matching() {
+    use crate::resource::contract_graph_builder::{ContractEdge, ContractGraph};
+
+    let mut graph = ContractGraph::new();
+
+    // Add acquire + release edges for test_func with C_HEAP
+    let instance1 = graph.alloc_instance();
+    graph.add_edge(ContractEdge {
+        source: 0,
+        target: instance1,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance1,
+        },
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "test_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+    graph.add_edge(ContractEdge {
+        source: instance1,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "test_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    // Add a conditional release in another_func
+    let instance2 = graph.alloc_instance();
+    graph.add_edge(ContractEdge {
+        source: instance2,
+        target: 0,
+        effect: Effect::ConditionalRelease {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 2,
+        function_name: "maybe_free".to_string(),
+        caller_name: "another_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    // Test 1: Find matching release for test_func, C_HEAP
+    let matches = graph.find_matching_release("test_func", FamilyId::C_HEAP, 0);
+    assert_eq!(matches.len(), 1, "test_func should have 1 matching release");
+    assert_eq!(matches[0].callee, "free");
+    assert_eq!(matches[0].function, "test_func");
+    assert!(
+        matches[0].covers_all_paths,
+        "Release should cover all paths"
+    );
+    assert_eq!(matches[0].confidence, omniscope_types::Confidence::High);
+
+    // Test 2: Find matching release for another_func, C_HEAP
+    let matches = graph.find_matching_release("another_func", FamilyId::C_HEAP, 0);
+    assert_eq!(
+        matches.len(),
+        1,
+        "another_func should have 1 matching release"
+    );
+    assert_eq!(matches[0].callee, "maybe_free");
+    assert!(
+        !matches[0].covers_all_paths,
+        "ConditionalRelease should not cover all paths"
+    );
+    assert_eq!(matches[0].confidence, omniscope_types::Confidence::Medium);
+
+    // Test 3: Find matching release for non-existent function
+    let matches = graph.find_matching_release("no_such_func", FamilyId::C_HEAP, 0);
+    assert_eq!(matches.len(), 0, "No matching release for unknown function");
+
+    // Test 4: Find matching release by specific resource ID
+    let matches = graph.find_matching_release("test_func", FamilyId::C_HEAP, instance1);
+    assert_eq!(matches.len(), 1, "Should find release by resource ID");
+    assert_eq!(matches[0].callee, "free");
+
+    // Test 5: Find matching release with wrong family
+    let matches = graph.find_matching_release("test_func", FamilyId::MIMALLOC, 0);
+    assert_eq!(matches.len(), 0, "No matching release for wrong family");
 }

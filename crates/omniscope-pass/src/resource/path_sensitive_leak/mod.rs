@@ -20,7 +20,9 @@ mod tests;
 
 use omniscope_core::{Confidence, IssueCandidate, IssueKind, Result};
 use omniscope_semantics::SummaryStore;
-use omniscope_types::{Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict};
+use omniscope_types::{
+    Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict,
+};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
 use crate::resource::contract_graph_builder::ContractGraph;
@@ -155,6 +157,19 @@ impl Pass for LeakDetectionPass {
             map
         };
 
+        // Extract ReturnsOwned caller set from the graph for ownership transfer.
+        let returns_owned_callers: std::collections::HashSet<String> = graph
+            .edges
+            .iter()
+            .filter_map(|e| {
+                if matches!(e.effect, Effect::ReturnsOwned { .. }) {
+                    Some(e.caller_name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         // Drop the borrow on `ctx` (held by `graph`).
         let _ = graph;
 
@@ -207,11 +222,6 @@ impl Pass for LeakDetectionPass {
                 reachable_functions(&alloc.caller_name, &call_adj)
             } else {
                 let mut r = std::collections::HashSet::new();
-                if let Some(sites) = release_sites_by_family.get(&family) {
-                    for s in sites {
-                        r.insert(s.clone());
-                    }
-                }
                 r.insert(alloc.caller_name.clone());
                 r
             };
@@ -324,7 +334,8 @@ impl Pass for LeakDetectionPass {
 
             // ── Caller-owned effect downgrade ──
             if (leak_type == LeakType::Definite || leak_type == LeakType::Conditional)
-                && caller_returns_owned_resource(&summary_store, alloc)
+                && (caller_returns_owned_resource(&summary_store, alloc)
+                    || returns_owned_callers.contains(&alloc.caller_name))
             {
                 tracing::info!(
                     target: "omniscope_pass::path_sensitive_leak::run",

@@ -1063,3 +1063,103 @@ fn test_unknown_family_excluded_from_cross_family() {
         conditional_edges.len()
     );
 }
+
+/// Objective: Verify that `find_matching_release` returns correct
+/// ReleaseMatch entries for different scenarios including:
+///
+/// - matching by function name
+/// - matching by resource ID
+/// - handling of ConditionalRelease vs Release
+/// - non-matching functions and families
+///
+/// Invariants: Correct ReleaseMatch structs returned for each query.
+#[test]
+fn test_find_matching_release() {
+    use omniscope_types::Confidence;
+
+    let mut graph = ContractGraph::new();
+
+    // Add an acquire + release pair for test_func with C_HEAP
+    let instance1 = graph.alloc_instance();
+    graph.add_edge(ContractEdge {
+        source: 0,
+        target: instance1,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance1,
+        },
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "test_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+    graph.add_edge(ContractEdge {
+        source: instance1,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "test_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    // Add a conditional release in another function
+    let instance2 = graph.alloc_instance();
+    graph.add_edge(ContractEdge {
+        source: instance2,
+        target: 0,
+        effect: Effect::ConditionalRelease {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 2,
+        function_name: "maybe_free".to_string(),
+        caller_name: "another_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    // Test 1: By function name — should find Release (not ConditionalRelease)
+    let matches = graph.find_matching_release("test_func", FamilyId::C_HEAP, 0);
+    assert_eq!(matches.len(), 1, "Should find 1 match for test_func");
+    assert_eq!(matches[0].callee, "free");
+    assert_eq!(matches[0].function, "test_func");
+    assert!(
+        matches[0].covers_all_paths,
+        "Release should cover all paths"
+    );
+    assert_eq!(matches[0].confidence, Confidence::High);
+
+    // Test 2: By function name — ConditionalRelease
+    let matches = graph.find_matching_release("another_func", FamilyId::C_HEAP, 0);
+    assert_eq!(matches.len(), 1, "Should find 1 match for another_func");
+    assert_eq!(matches[0].callee, "maybe_free");
+    assert!(
+        !matches[0].covers_all_paths,
+        "ConditionalRelease should not cover all paths"
+    );
+    assert_eq!(matches[0].confidence, Confidence::Medium);
+
+    // Test 3: By specific resource ID
+    let matches = graph.find_matching_release("test_func", FamilyId::C_HEAP, instance1);
+    assert_eq!(matches.len(), 1, "Should find 1 match by resource ID");
+    assert_eq!(matches[0].callee, "free");
+
+    // Test 4: Non-existent function — empty result
+    let matches = graph.find_matching_release("no_such_func", FamilyId::C_HEAP, 0);
+    assert!(matches.is_empty(), "No match for non-existent function");
+
+    // Test 5: Wrong family — empty result
+    let matches = graph.find_matching_release("test_func", FamilyId::MIMALLOC, 0);
+    assert!(matches.is_empty(), "No match for wrong family");
+
+    // Test 6: No release edges at all
+    let empty_graph = ContractGraph::new();
+    let matches = empty_graph.find_matching_release("test_func", FamilyId::C_HEAP, 0);
+    assert!(matches.is_empty(), "Empty graph should return no matches");
+}

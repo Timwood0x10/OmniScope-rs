@@ -488,7 +488,7 @@ impl Pass for IssueCandidateBuilderPass {
                         // the verdict to ConfirmedIssue.
                         let site_a = build_free_site_for_edge(graph, release_indices[0], ir_module);
                         let site_b = build_free_site_for_edge(graph, ri, ir_module);
-                        let alias_result = may_alias(&site_a, &site_b, ir_module);
+                        let (alias_result, alias_evidence) = may_alias(&site_a, &site_b, ir_module);
 
                         let family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
                         let id = next_id;
@@ -502,7 +502,9 @@ impl Pass for IssueCandidateBuilderPass {
                         )
                         .with_resource_id(*instance_id)
                         .with_alloc_caller(&graph.edges[release_indices[0]].caller_name)
-                        .with_release_caller(&graph.edges[ri].caller_name);
+                        .with_release_caller(&graph.edges[ri].caller_name)
+                        .with_free_site(site_a.clone())
+                        .with_free_site(site_b.clone());
 
                         // Add MultipleRelease evidence
                         candidate.add_evidence(
@@ -532,7 +534,7 @@ impl Pass for IssueCandidateBuilderPass {
                                 Evidence::new(
                                     EvidenceKind::Insufficient,
                                     format!(
-                                        "may_alias=NotAlias: site_a=({}, {}, {:?}) site_b=({}, {}, {:?})",
+                                        "may_alias=NotAlias: site_a=({:?}, {}, {:?}) site_b=({:?}, {}, {:?})",
                                         site_a.caller,
                                         site_a.callee,
                                         site_a.arg_register,
@@ -570,6 +572,11 @@ impl Pass for IssueCandidateBuilderPass {
                                 )
                                 .with_confidence(0.8),
                             );
+                        }
+
+                        // Attach AliasEvidence if the may_alias gate found an alias
+                        if let Some(ev) = alias_evidence {
+                            candidate = candidate.with_alias_evidence(ev);
                         }
 
                         candidates.push(candidate);

@@ -13,7 +13,7 @@ use omniscope_types::{
 };
 
 use crate::resource::contract_graph_builder::{ContractEdge, ContractGraph};
-use crate::resource::may_alias::FreeSite;
+use omniscope_types::FreeSite;
 
 /// Converts a SemanticFact into an Evidence attachment for issue candidates.
 ///

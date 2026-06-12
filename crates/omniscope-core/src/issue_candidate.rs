@@ -11,7 +11,8 @@
 //! verified.
 
 use omniscope_types::{
-    CrossBoundaryEvidence, Evidence, FamilyId, IssueCandidateKind, PointerContract, VerifierVerdict,
+    AliasEvidence, CrossBoundaryEvidence, Evidence, FamilyId, FreeSite, IssueCandidateKind,
+    PointerContract, VerifierVerdict,
 };
 use serde::{Deserialize, Serialize};
 
@@ -97,6 +98,16 @@ pub struct IssueCandidate {
     /// FFI evidence supporting this candidate. None = no FFI signal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ffi_evidence: Option<FfiEvidence>,
+    /// Free/deallocation sites involved in this candidate (e.g., both free
+    /// calls in a DoubleRelease). Populated by the candidate builder when
+    /// the may-alias gate runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub free_sites: Vec<FreeSite>,
+    /// Alias evidence linking free sites (produced by may_alias analysis).
+    /// Each entry records why two free sites are believed to alias the
+    /// same underlying allocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alias_evidence: Vec<AliasEvidence>,
 }
 
 /// Unique identifier for issue candidates.
@@ -129,6 +140,8 @@ impl IssueCandidate {
             release_caller: None,
             boundary: None,
             ffi_evidence: None,
+            free_sites: Vec::new(),
+            alias_evidence: Vec::new(),
         }
     }
 
@@ -200,6 +213,33 @@ impl IssueCandidate {
     /// Sets FFI evidence for this candidate.
     pub fn with_ffi_evidence(mut self, evidence: FfiEvidence) -> Self {
         self.ffi_evidence = Some(evidence);
+        self
+    }
+
+    /// Adds a free site to this candidate.
+    pub fn with_free_site(mut self, site: FreeSite) -> Self {
+        self.free_sites.push(site);
+        self
+    }
+
+    /// Adds alias evidence to this candidate.
+    pub fn with_alias_evidence(mut self, evidence: AliasEvidence) -> Self {
+        self.alias_evidence.push(evidence);
+        self
+    }
+
+    /// Extends free sites from an iterator.
+    pub fn extend_free_sites(mut self, sites: impl IntoIterator<Item = FreeSite>) -> Self {
+        self.free_sites.extend(sites);
+        self
+    }
+
+    /// Extends alias evidence from an iterator.
+    pub fn extend_alias_evidence(
+        mut self,
+        evidence: impl IntoIterator<Item = AliasEvidence>,
+    ) -> Self {
+        self.alias_evidence.extend(evidence);
         self
     }
 

@@ -368,6 +368,125 @@ pub enum BoundaryDetectionMethod {
     AutoInferred,
 }
 
+/// A free/deallocation site with its context.
+///
+/// Tracks where a free/release call occurs, the resource being freed,
+/// and whether the site is confirmed as a release. Used by the may-alias
+/// gate to determine if two free sites refer to the same underlying
+/// allocation, and by issue candidates to record participating free calls.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FreeSite {
+    /// Function name where the free occurs.
+    pub function_name: String,
+    /// Instruction index or IR line of the free call.
+    pub location: usize,
+    /// The resource ID being freed (if determinable).
+    pub resource_id: Option<u64>,
+    /// The callee being called (e.g., "free", "c_free").
+    pub callee: String,
+    /// Whether this is a confirmed free site vs. a potential one.
+    pub is_confirmed: bool,
+    /// SSA register / global of the pointer argument, if recoverable.
+    /// Used by the may-alias gate for SSA root tracing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arg_register: Option<String>,
+    /// Enclosing caller function name (the caller that contains this free call).
+    /// Distinct from `function_name` when the free is indirect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
+}
+
+impl FreeSite {
+    /// Creates a new FreeSite with the given function name, callee, and
+    /// optional SSA argument register. Other fields default to sensible
+    /// values (location=0, is_confirmed=true).
+    pub fn new(
+        function_name: impl Into<String>,
+        callee: impl Into<String>,
+        arg_register: Option<String>,
+    ) -> Self {
+        Self {
+            function_name: function_name.into(),
+            location: 0,
+            resource_id: None,
+            callee: callee.into(),
+            is_confirmed: true,
+            arg_register,
+            caller: None,
+        }
+    }
+
+    /// Sets the instruction location for this free site.
+    pub fn with_location(mut self, location: usize) -> Self {
+        self.location = location;
+        self
+    }
+
+    /// Sets the resource ID for this free site.
+    pub fn with_resource_id(mut self, resource_id: u64) -> Self {
+        self.resource_id = Some(resource_id);
+        self
+    }
+
+    /// Sets whether this is a confirmed free site.
+    pub fn with_confirmed(mut self, is_confirmed: bool) -> Self {
+        self.is_confirmed = is_confirmed;
+        self
+    }
+
+    /// Sets the enclosing caller function name.
+    pub fn with_caller(mut self, caller: impl Into<String>) -> Self {
+        self.caller = Some(caller.into());
+        self
+    }
+}
+
+/// Source of alias determination.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AliasSource {
+    /// Same pointer value (identical SSA value or direct pointer match).
+    SamePointer,
+    /// Store-load chain: `store p` then `load` produces value aliasing p.
+    StoreLoadChain,
+    /// Memory graph analysis found alias relationship.
+    MemoryGraph,
+    /// IR pattern matched alias-producing code sequence.
+    IRPattern,
+    /// Conservative alias (assume alias when uncertain).
+    Conservative,
+}
+
+/// Confidence level for evidence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
+/// Structured alias evidence produced by may_alias analysis.
+///
+/// This links two free sites when they are determined to alias the same
+/// underlying resource, enabling the verifier to distinguish confirmed
+/// double-free from independent frees.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliasEvidence {
+    /// Unique identifier for this evidence instance.
+    pub id: u64,
+    /// The resource ID that is being aliased (if known).
+    pub resource_id: Option<u64>,
+    /// The first free site involved in the alias.
+    pub free_site_a: FreeSite,
+    /// The second free site involved in the alias.
+    pub free_site_b: FreeSite,
+    /// Source of the alias determination.
+    pub source: AliasSource,
+    /// Confidence level.
+    pub confidence: Confidence,
+    /// Human-readable description of the alias reasoning.
+    pub description: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

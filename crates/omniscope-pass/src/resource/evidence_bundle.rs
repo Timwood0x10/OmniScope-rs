@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use omniscope_core::IssueCandidate;
 use omniscope_semantics::resource::memory_graph::{MemoryGraph, ResourceState};
 use omniscope_semantics::{FactConfidence, SemanticFact, SemanticKind};
-use omniscope_types::{is_boundary_evidence, EvidenceKind, FamilyId};
+use omniscope_types::{is_boundary_evidence, EvidenceKind, FamilyId, PathEvidence};
 
 /// Joined evidence for one resource issue candidate.
 ///
@@ -38,6 +38,8 @@ pub(crate) struct EvidenceBundle {
     pub has_same_resource_evidence: bool,
     pub has_reachable_release: bool,
     pub has_alias_rejection: bool,
+    #[allow(dead_code)] // reserved for future path-sensitive analysis
+    pub path_evidence: Option<PathEvidence>,
 }
 
 impl EvidenceBundle {
@@ -88,7 +90,15 @@ impl EvidenceBundle {
             has_reachable_release: has_reachable_release(candidate, &evidence_kinds),
             has_alias_rejection: has_alias_rejection(candidate),
             evidence_kinds,
+            path_evidence: None,
         }
+    }
+
+    /// Attaches path evidence to this bundle.
+    #[allow(dead_code)] // reserved for future path-sensitive analysis
+    pub(crate) fn with_path_evidence(mut self, pe: PathEvidence) -> Self {
+        self.path_evidence = Some(pe);
+        self
     }
 
     /// Returns true when semantic evidence explains safe ownership transfer.

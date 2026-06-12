@@ -37,32 +37,48 @@
 use std::collections::{HashMap, HashSet};
 
 use omniscope_ir::{IRInstructionKind, IRModule};
+use omniscope_types::{AliasEvidence, AliasSource, Confidence, FreeSite};
 
-/// Describes a single free/release call site relevant to alias gating.
+/// Gate-level free site for may-alias analysis.
 ///
-/// `arg_register` is the SSA pointer argument passed to the release
-/// callee (e.g. `%buf`, `@gptr`). When the original IR was not parsed
+/// Thin wrapper around `omniscope_types::FreeSite` used internally
+/// by the alias gate's SSA root tracing. The `arg_register` field
+/// is the SSA pointer argument passed to the release callee
+/// (e.g. `%buf`, `@gptr`). When the original IR was not parsed
 /// with raw text, it may be `None`; the gate is permissive in that
 /// case and reports `MayAlias` to avoid downgrading purely on missing
 /// metadata.
+///
+/// Convert from `FreeSite` via `From`/`Into`.
 #[derive(Debug, Clone)]
-pub struct FreeSite {
-    /// Enclosing function name (the caller that contains this free call).
+pub struct GateFreeSite {
     pub caller: String,
-    /// Release callee symbol (e.g. `free`, `_ZdlPv`).
     pub callee: String,
-    /// SSA register / global of the pointer argument, if recoverable.
     pub arg_register: Option<String>,
 }
 
-impl FreeSite {
-    /// Convenience constructor for tests and the candidate-time path.
-    pub fn new(caller: impl Into<String>, callee: impl Into<String>, arg: Option<String>) -> Self {
+impl From<&FreeSite> for GateFreeSite {
+    fn from(site: &FreeSite) -> Self {
         Self {
-            caller: caller.into(),
-            callee: callee.into(),
-            arg_register: arg,
+            caller: site
+                .caller
+                .clone()
+                .unwrap_or_else(|| site.function_name.clone()),
+            callee: site.callee.clone(),
+            arg_register: site.arg_register.clone(),
         }
+    }
+}
+
+impl From<GateFreeSite> for FreeSite {
+    fn from(g: GateFreeSite) -> Self {
+        FreeSite::new(g.caller, g.callee, g.arg_register)
+    }
+}
+
+impl From<&GateFreeSite> for FreeSite {
+    fn from(g: &GateFreeSite) -> Self {
+        FreeSite::new(&g.caller, &g.callee, g.arg_register.clone())
     }
 }
 
@@ -92,7 +108,52 @@ impl MayAliasResult {
 /// test candidates that lack a real module) still get a sensible answer:
 /// when no module is available, we conservatively trust same-caller +
 /// same-callee + same-arg matches but reject everything else.
-pub fn may_alias(a: &FreeSite, b: &FreeSite, ir_module: Option<&IRModule>) -> MayAliasResult {
+///
+/// Additionally returns structured `AliasEvidence` when the sites are
+/// determined to alias, enabling downstream verifiers to distinguish
+/// confirmed double-free from independent frees.
+pub fn may_alias(
+    a: &FreeSite,
+    b: &FreeSite,
+    ir_module: Option<&IRModule>,
+) -> (MayAliasResult, Option<AliasEvidence>) {
+    // Convert to gate-internal representation for SSA root tracing.
+    let ga = GateFreeSite::from(a);
+    let gb = GateFreeSite::from(b);
+    let result = may_alias_inner(&ga, &gb, ir_module);
+    let evidence = if result == MayAliasResult::MayAlias {
+        let source = compute_alias_source(&ga, &gb, ir_module);
+        let confidence = match source {
+            AliasSource::SamePointer => Confidence::High,
+            AliasSource::StoreLoadChain => Confidence::High,
+            AliasSource::MemoryGraph => Confidence::Medium,
+            AliasSource::IRPattern => Confidence::Medium,
+            AliasSource::Conservative => Confidence::Low,
+        };
+        Some(AliasEvidence {
+            id: 0,
+            resource_id: None,
+            free_site_a: a.clone(),
+            free_site_b: b.clone(),
+            source,
+            confidence,
+            description: format!(
+                "may_alias={:?}: a=({}, {}) b=({}, {})",
+                result, a.function_name, a.callee, b.function_name, b.callee
+            ),
+        })
+    } else {
+        None
+    };
+    (result, evidence)
+}
+
+/// Internal alias check operating on the gate-level representation.
+fn may_alias_inner(
+    a: &GateFreeSite,
+    b: &GateFreeSite,
+    ir_module: Option<&IRModule>,
+) -> MayAliasResult {
     // Rule (cheap): different callers and no shared SSA root => not alias.
     // Cross-function aliasing would require inter-procedural reasoning
     // we do not perform here.
@@ -469,6 +530,107 @@ pub fn collect_free_sites(
     sites
 }
 
+/// MayAlias gate that wraps the alias analysis with state for
+/// producing structured `AliasEvidence`.
+///
+/// Tracks an auto-incrementing ID to assign unique identifiers
+/// to each `AliasEvidence` instance produced.
+#[derive(Debug, Default)]
+pub struct MayAlias {
+    next_evidence_id: u64,
+}
+
+impl MayAlias {
+    /// Creates a new `MayAlias` gate.
+    pub fn new() -> Self {
+        Self {
+            next_evidence_id: 1,
+        }
+    }
+
+    /// Returns structured alias evidence for a pair of free sites.
+    ///
+    /// If the two frees are determined to alias the same resource,
+    /// returns `Some(AliasEvidence)` with the reasoning. Otherwise
+    /// returns `None`.
+    pub fn get_alias_evidence(
+        &mut self,
+        free_a: &FreeSite,
+        free_b: &FreeSite,
+        ir_module: Option<&IRModule>,
+    ) -> Option<AliasEvidence> {
+        let (result, _) = may_alias(free_a, free_b, ir_module);
+        if result == MayAliasResult::MayAlias {
+            let ga = GateFreeSite::from(free_a);
+            let gb = GateFreeSite::from(free_b);
+            let id = self.next_evidence_id;
+            self.next_evidence_id += 1;
+            let source = compute_alias_source(&ga, &gb, ir_module);
+            let confidence = match source {
+                AliasSource::SamePointer => Confidence::High,
+                AliasSource::StoreLoadChain => Confidence::High,
+                AliasSource::MemoryGraph => Confidence::Medium,
+                AliasSource::IRPattern => Confidence::Medium,
+                AliasSource::Conservative => Confidence::Low,
+            };
+            Some(AliasEvidence {
+                id,
+                resource_id: None,
+                free_site_a: free_a.clone(),
+                free_site_b: free_b.clone(),
+                source,
+                confidence,
+                description: format!(
+                    "may_alias=MayAlias: a=({}, {}) b=({}, {})",
+                    free_a.function_name, free_a.callee, free_b.function_name, free_b.callee
+                ),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Determine the source/mechanism of an alias relationship between
+/// two gate-level free sites. This inspects the sites and available
+/// IR to classify how the alias was established.
+fn compute_alias_source(
+    a: &GateFreeSite,
+    b: &GateFreeSite,
+    ir_module: Option<&IRModule>,
+) -> AliasSource {
+    // Same caller + same register = SamePointer
+    if a.caller == b.caller {
+        if let (Some(ar), Some(br)) = (a.arg_register.as_deref(), b.arg_register.as_deref()) {
+            if ar == br {
+                return AliasSource::SamePointer;
+            }
+        }
+    }
+    // Cross-function globals with same name = SamePointer
+    if a.caller != b.caller {
+        if let (Some(ar), Some(br)) = (a.arg_register.as_deref(), b.arg_register.as_deref()) {
+            if ar == br && ar.starts_with('@') {
+                return AliasSource::SamePointer;
+            }
+        }
+    }
+    // Check if store→load pattern is present
+    if let Some(body) = ir_module.and_then(|m| m.function_bodies.get(&a.caller)) {
+        let store_map = build_store_map(body);
+        if let (Some(ar), Some(br)) = (a.arg_register.as_deref(), b.arg_register.as_deref()) {
+            // Check if one arg is stored to a location loaded by the other
+            if store_map.values().any(|vals| vals.iter().any(|v| v == ar))
+                || store_map.values().any(|vals| vals.iter().any(|v| v == br))
+            {
+                return AliasSource::StoreLoadChain;
+            }
+        }
+    }
+    // Fall back to conservative
+    AliasSource::Conservative
+}
+
 /// Pull the first register/global argument out of a call's raw text.
 /// Mirrors the parsing in `contract_graph_builder::extract_call_arg_registers`
 /// but returns only the first arg, which is sufficient for free-family
@@ -535,7 +697,6 @@ mod tests {
 
     #[test]
     fn test_extract_first_register_simple() {
-        // Objective: extract the first SSA register from a free call.
         let raw = "call void @free(ptr %buf)";
         assert_eq!(
             first_call_arg_register(raw),
@@ -546,7 +707,6 @@ mod tests {
 
     #[test]
     fn test_extract_first_register_with_attrs() {
-        // Objective: register extraction must skip type/attribute tokens.
         let raw = "tail call void @free(ptr nonnull %p)";
         assert_eq!(
             first_call_arg_register(raw),
@@ -557,49 +717,60 @@ mod tests {
 
     #[test]
     fn test_may_alias_different_callers_no_global() {
-        // Objective: two free sites in different functions cannot must-alias
-        // unless they share a global, so the gate must reject.
         let a = FreeSite::new("Z::free", "free", Some("%p".into()));
         let b = FreeSite::new("fallback::free_without_size", "free", Some("%q".into()));
+        let (result, evidence) = may_alias(&a, &b, None);
         assert_eq!(
-            may_alias(&a, &b, None),
+            result,
             MayAliasResult::NotAlias,
             "different callers with no global root must NOT alias"
+        );
+        assert!(
+            evidence.is_none(),
+            "non-aliasing sites must NOT produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_may_alias_different_callers_same_global() {
-        // Objective: globals with the same name span functions and DO alias.
         let a = FreeSite::new("f1", "free", Some("@g".into()));
         let b = FreeSite::new("f2", "free", Some("@g".into()));
+        let (result, evidence) = may_alias(&a, &b, None);
         assert_eq!(
-            may_alias(&a, &b, None),
+            result,
             MayAliasResult::MayAlias,
             "two frees of the same global must alias even across functions"
+        );
+        assert!(
+            evidence.is_some(),
+            "aliasing sites must produce AliasEvidence"
+        );
+        let ev = evidence.unwrap();
+        assert_eq!(
+            ev.source,
+            AliasSource::SamePointer,
+            "same global must be SamePointer alias"
         );
     }
 
     #[test]
     fn test_may_alias_same_caller_same_register() {
-        // Objective: same caller, identical SSA register — trivial may-alias.
         let a = FreeSite::new("foo", "free", Some("%p".into()));
         let b = FreeSite::new("foo", "free", Some("%p".into()));
+        let (result, evidence) = may_alias(&a, &b, None);
         assert_eq!(
-            may_alias(&a, &b, None),
+            result,
             MayAliasResult::MayAlias,
             "same caller + same register must alias"
+        );
+        assert!(
+            evidence.is_some(),
+            "aliasing sites must produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_may_alias_same_caller_via_bitcast_chain() {
-        // Objective: tracing through a bitcast must collapse to the same root.
-        // foo:
-        //   %1 = call ptr @malloc(i64 8)
-        //   %2 = bitcast ptr %1 to ptr
-        //   call void @free(ptr %1)
-        //   call void @free(ptr %2)
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "foo".to_string(),
@@ -620,18 +791,20 @@ mod tests {
 
         let a = FreeSite::new("foo", "free", Some("%1".into()));
         let b = FreeSite::new("foo", "free", Some("%2".into()));
+        let (result, evidence) = may_alias(&a, &b, Some(&module));
         assert_eq!(
-            may_alias(&a, &b, Some(&module)),
+            result,
             MayAliasResult::MayAlias,
             "bitcast chain must resolve to the same allocator root"
+        );
+        assert!(
+            evidence.is_some(),
+            "aliasing sites via bitcast must produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_may_alias_independent_allocations_same_caller_reject() {
-        // Objective: two distinct allocator calls in the same function must
-        // NOT alias even though both are in `foo` — they are independent
-        // pointers (the bun_alloc/c_fft pattern).
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "foo".to_string(),
@@ -652,23 +825,20 @@ mod tests {
 
         let a = FreeSite::new("foo", "free", Some("%a".into()));
         let b = FreeSite::new("foo", "free", Some("%b".into()));
+        let (result, evidence) = may_alias(&a, &b, Some(&module));
         assert_eq!(
-            may_alias(&a, &b, Some(&module)),
+            result,
             MayAliasResult::NotAlias,
             "independent allocator results must NOT be reported as aliasing"
+        );
+        assert!(
+            evidence.is_none(),
+            "non-aliasing independent allocations must NOT produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_may_alias_phi_merged_alloc_roots() {
-        // Objective: a phi whose inputs are themselves alloc returns must
-        // be recognised as may-alias when both arguments root to the same
-        // phi instruction.
-        // foo:
-        //   %p1 = call ptr @malloc(i64 8)
-        //   %p2 = phi ptr [ %p1, %bb0 ], [ %p1, %bb1 ]
-        //   call void @free(ptr %p2)
-        //   call void @free(ptr %p2)  ; second free of same phi
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "foo".to_string(),
@@ -689,17 +859,20 @@ mod tests {
 
         let a = FreeSite::new("foo", "free", Some("%p2".into()));
         let b = FreeSite::new("foo", "free", Some("%p2".into()));
+        let (result, evidence) = may_alias(&a, &b, Some(&module));
         assert_eq!(
-            may_alias(&a, &b, Some(&module)),
+            result,
             MayAliasResult::MayAlias,
             "two frees of the same phi must alias"
+        );
+        assert!(
+            evidence.is_some(),
+            "phi-merged alloc roots must produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_collect_free_sites_extracts_args() {
-        // Objective: collect_free_sites returns one FreeSite per free call
-        // in the body and recovers the first-arg register.
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "caller".to_string(),
@@ -728,14 +901,6 @@ mod tests {
 
     #[test]
     fn test_may_alias_store_load_same_slot() {
-        // Objective: store→load alias — two frees where one argument
-        // comes from a load and the other is the stored value.
-        // foo:
-        //   %1 = call ptr @malloc(i64 8)
-        //   store ptr %1, ptr %slot
-        //   %2 = load ptr, ptr %slot
-        //   call void @free(ptr %1)
-        //   call void @free(ptr %2)  ; %2 loaded from slot where %1 was stored
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "foo".to_string(),
@@ -757,24 +922,20 @@ mod tests {
 
         let a = FreeSite::new("foo", "free", Some("%1".into()));
         let b = FreeSite::new("foo", "free", Some("%2".into()));
+        let (result, evidence) = may_alias(&a, &b, Some(&module));
         assert_eq!(
-            may_alias(&a, &b, Some(&module)),
+            result,
             MayAliasResult::MayAlias,
             "store→load alias: %2 was loaded from %slot where %1 was stored"
+        );
+        assert!(
+            evidence.is_some(),
+            "store→load aliasing must produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_may_alias_store_load_independent_stores_not_alias() {
-        // Objective: two loads from DIFFERENT slots that were written
-        // with independent values must NOT alias.
-        // foo:
-        //   %a = call ptr @malloc(i64 8)
-        //   %b = call ptr @malloc(i64 8)
-        //   store ptr %a, ptr %slot1
-        //   store ptr %b, ptr %slot2
-        //   %p = load ptr, ptr %slot1
-        //   %q = load ptr, ptr %slot2
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "foo".to_string(),
@@ -807,23 +968,20 @@ mod tests {
 
         let a = FreeSite::new("foo", "free", Some("%p".into()));
         let b = FreeSite::new("foo", "free", Some("%q".into()));
+        let (result, evidence) = may_alias(&a, &b, Some(&module));
         assert_eq!(
-            may_alias(&a, &b, Some(&module)),
+            result,
             MayAliasResult::NotAlias,
             "independent stores to different slots must NOT alias"
+        );
+        assert!(
+            evidence.is_none(),
+            "non-aliasing independent stores must NOT produce AliasEvidence"
         );
     }
 
     #[test]
     fn test_may_alias_not_alias_without_shared_store() {
-        // Objective: two arguments with no shared SSA root and no
-        // store→load connection must NOT alias.
-        // foo:
-        //   %1 = call ptr @malloc(i64 8)
-        //   %2 = call ptr @malloc(i64 8)
-        //   store ptr %1, ptr %slot
-        //   %3 = load ptr, ptr %slot
-        //   ; free(%2) and free(%3) — %2 is independent of %1 stored in slot
         let mut module = IRModule::new();
         let body = FunctionBody {
             name: "foo".to_string(),
@@ -850,10 +1008,222 @@ mod tests {
 
         let a = FreeSite::new("foo", "free", Some("%2".into()));
         let b = FreeSite::new("foo", "free", Some("%3".into()));
+        let (result, evidence) = may_alias(&a, &b, Some(&module));
         assert_eq!(
-            may_alias(&a, &b, Some(&module)),
+            result,
             MayAliasResult::NotAlias,
             "%2 is independent allocation, %3 comes from store of %1 — NOT alias"
+        );
+        assert!(
+            evidence.is_none(),
+            "non-aliasing sites must NOT produce AliasEvidence"
+        );
+    }
+
+    // ── Task 1D: Tests for AliasEvidence, FreeSite, and MayAlias ──
+
+    #[test]
+    fn test_alias_evidence_same_pointer() {
+        let a = FreeSite::new("foo", "free", Some("%p".into()));
+        let b = FreeSite::new("foo", "free", Some("%p".into()));
+        let (result, evidence) = may_alias(&a, &b, None);
+        assert_eq!(
+            result,
+            MayAliasResult::MayAlias,
+            "same pointer freed twice must be may-alias"
+        );
+        assert!(
+            evidence.is_some(),
+            "same-pointer double free must produce AliasEvidence"
+        );
+        let ev = evidence.unwrap();
+        assert_eq!(
+            ev.free_site_a.function_name, "foo",
+            "evidence must carry correct function_name for site a"
+        );
+        assert_eq!(
+            ev.free_site_b.function_name, "foo",
+            "evidence must carry correct function_name for site b"
+        );
+    }
+
+    #[test]
+    fn test_alias_evidence_independent_frees() {
+        let a = FreeSite::new("foo", "free", Some("%a".into()));
+        let b = FreeSite::new("foo", "free", Some("%b".into()));
+        let (result, evidence) = may_alias(&a, &b, None);
+        assert_eq!(
+            result,
+            MayAliasResult::NotAlias,
+            "independent frees must NOT be may-alias"
+        );
+        assert!(
+            evidence.is_none(),
+            "independent frees must NOT produce AliasEvidence"
+        );
+    }
+
+    #[test]
+    fn test_free_site_creation() {
+        let site = FreeSite::new("my_func", "c_free", Some("%ptr".into()))
+            .with_location(42)
+            .with_resource_id(7)
+            .with_confirmed(true)
+            .with_caller("enclosing_fn");
+
+        assert_eq!(
+            site.function_name, "my_func",
+            "FreeSite function_name should be my_func"
+        );
+        assert_eq!(site.callee, "c_free", "FreeSite callee should be c_free");
+        assert_eq!(site.location, 42, "FreeSite location should be 42");
+        assert_eq!(
+            site.resource_id,
+            Some(7),
+            "FreeSite resource_id should be Some(7)"
+        );
+        assert!(site.is_confirmed, "FreeSite is_confirmed should be true");
+        assert_eq!(
+            site.arg_register.as_deref(),
+            Some("%ptr"),
+            "FreeSite arg_register should be Some(%ptr)"
+        );
+        assert_eq!(
+            site.caller.as_deref(),
+            Some("enclosing_fn"),
+            "FreeSite caller should be Some(enclosing_fn)"
+        );
+    }
+
+    #[test]
+    fn test_alias_evidence_confidence_levels() {
+        // SamePointer -> High
+        let a = FreeSite::new("foo", "free", Some("%p".into()));
+        let b = FreeSite::new("foo", "free", Some("%p".into()));
+        let (_, evidence) = may_alias(&a, &b, None);
+        let ev = evidence.expect("SamePointer alias must produce AliasEvidence");
+        assert_eq!(
+            ev.confidence,
+            Confidence::High,
+            "SamePointer alias should have High confidence"
+        );
+        assert_eq!(
+            ev.source,
+            AliasSource::SamePointer,
+            "SamePointer alias source should be SamePointer"
+        );
+
+        // Different callers with global -> SamePointer -> High
+        let c = FreeSite::new("f1", "free", Some("@g".into()));
+        let d = FreeSite::new("f2", "free", Some("@g".into()));
+        let (_, evidence2) = may_alias(&c, &d, None);
+        let ev2 = evidence2.expect("Global same-pointer alias must produce AliasEvidence");
+        assert_eq!(
+            ev2.confidence,
+            Confidence::High,
+            "Global same-pointer alias should have High confidence"
+        );
+    }
+
+    #[test]
+    fn test_get_alias_evidence() {
+        let mut gate = MayAlias::new();
+        let a = FreeSite::new("foo", "free", Some("%p".into()));
+        let b = FreeSite::new("foo", "free", Some("%p".into()));
+
+        let evidence = gate.get_alias_evidence(&a, &b, None);
+        assert!(
+            evidence.is_some(),
+            "get_alias_evidence must return Some for aliasing sites"
+        );
+        let ev = evidence.unwrap();
+        assert!(ev.id > 0, "AliasEvidence id must be positive");
+        assert_eq!(
+            ev.free_site_a.function_name, "foo",
+            "evidence must carry free_site_a info"
+        );
+
+        // Non-aliasing sites -> None
+        let c = FreeSite::new("foo", "free", Some("%a".into()));
+        let d = FreeSite::new("foo", "free", Some("%b".into()));
+        let no_evidence = gate.get_alias_evidence(&c, &d, None);
+        assert!(
+            no_evidence.is_none(),
+            "get_alias_evidence must return None for non-aliasing sites"
+        );
+    }
+
+    #[test]
+    fn test_get_alias_evidence_increments_id() {
+        let mut gate = MayAlias::new();
+        let a = FreeSite::new("foo", "free", Some("%p".into()));
+        let b = FreeSite::new("foo", "free", Some("%p".into()));
+
+        let ev1 = gate.get_alias_evidence(&a, &b, None).unwrap();
+        let ev2 = gate.get_alias_evidence(&a, &b, None).unwrap();
+        assert!(
+            ev2.id > ev1.id,
+            "AliasEvidence IDs must increment: {} > {}",
+            ev2.id,
+            ev1.id
+        );
+    }
+
+    #[test]
+    fn test_free_site_default_new() {
+        let site = FreeSite::new("test", "free", None);
+        assert_eq!(
+            site.function_name, "test",
+            "default FreeSite function_name must be set"
+        );
+        assert_eq!(site.callee, "free", "default FreeSite callee must be set");
+        assert_eq!(site.location, 0, "default FreeSite location must be 0");
+        assert!(
+            site.is_confirmed,
+            "default FreeSite is_confirmed must be true"
+        );
+        assert!(
+            site.resource_id.is_none(),
+            "default FreeSite resource_id must be None"
+        );
+        assert!(
+            site.arg_register.is_none(),
+            "default FreeSite arg_register must be None"
+        );
+    }
+
+    #[test]
+    fn test_alias_source_display() {
+        let sources = [
+            AliasSource::SamePointer,
+            AliasSource::StoreLoadChain,
+            AliasSource::MemoryGraph,
+            AliasSource::IRPattern,
+            AliasSource::Conservative,
+        ];
+        for i in 0..sources.len() {
+            for j in (i + 1)..sources.len() {
+                assert_ne!(
+                    sources[i], sources[j],
+                    "AliasSource variants must be distinct"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_confidence_ordering() {
+        assert!(
+            Confidence::High > Confidence::Medium,
+            "High confidence must be greater than Medium"
+        );
+        assert!(
+            Confidence::Medium > Confidence::Low,
+            "Medium confidence must be greater than Low"
+        );
+        assert!(
+            Confidence::High > Confidence::Low,
+            "High confidence must be greater than Low"
         );
     }
 }

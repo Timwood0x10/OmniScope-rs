@@ -8,8 +8,10 @@
 //! - Pass scheduling and dependency resolution
 
 pub mod pipeline;
+pub mod project_pipeline;
 pub mod result;
 
 // Re-exports
 pub use pipeline::Pipeline;
+pub use project_pipeline::{ProjectPipeline, ProjectReport};
 pub use result::{PipelineResult, PipelineStats};

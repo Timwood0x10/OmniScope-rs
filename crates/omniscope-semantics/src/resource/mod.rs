@@ -37,6 +37,7 @@ pub mod length_truncation_detector;
 pub mod memory_graph;
 pub mod ownership_state;
 pub mod python_adapter;
+pub mod rust_adapter;
 pub mod rust_stdlib_whitelist;
 pub mod semantic_engine;
 pub mod semantic_tree;
