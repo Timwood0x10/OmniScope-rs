@@ -97,22 +97,6 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
         }
     }
 
-    // ── Path evidence: mutual exclusion ──
-    // When path evidence shows all paths release the resource exactly once
-    // (all_paths_release=true, release_path_count>=2, no duplicate releases),
-    // this is a mutual exclusion pattern (if/else branches), not a real
-    // double-free. The releases happen on different paths.
-    if let Some(ref pe) = bundle.path_evidence {
-        if pe.all_paths_release && pe.release_path_count >= 2 && !pe.duplicate_release_paths {
-            tracing::debug!(
-                candidate_id = bundle.candidate_id,
-                release_path_count = pe.release_path_count,
-                "DoubleFree path evidence: mutually exclusive release paths — explained safe"
-            );
-            return VerifierVerdict::ExplainedSafe;
-        }
-    }
-
     // ── Same resource instance gate ──
     let has_same_instance = bundle.has_same_resource_evidence
         || bundle

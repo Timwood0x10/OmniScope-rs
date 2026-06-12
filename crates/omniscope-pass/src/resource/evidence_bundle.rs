@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use omniscope_core::IssueCandidate;
 use omniscope_semantics::resource::memory_graph::{MemoryGraph, ResourceState};
 use omniscope_semantics::{FactConfidence, SemanticFact, SemanticKind};
-use omniscope_types::{is_boundary_evidence, EvidenceKind, FamilyId, PathEvidence};
+use omniscope_types::{is_boundary_evidence, EvidenceKind, FamilyId};
 
 /// Joined evidence for one resource issue candidate.
 ///
@@ -21,14 +21,11 @@ pub(crate) struct EvidenceBundle {
     pub resource_id: Option<u64>,
     pub alloc_family: FamilyId,
     pub release_family: Option<FamilyId>,
-    #[allow(dead_code)] // diagnostic: used in tests and debug output
     pub alloc_function: String,
-    #[allow(dead_code)] // diagnostic: used in tests and debug output
-    pub release_function: Option<String>,
+    pub _release_function: Option<String>,
     pub alloc_caller: Option<String>,
     pub release_caller: Option<String>,
-    #[allow(dead_code)] // diagnostic: used in tests, may be read by future path-sensitive checks
-    pub memory_state: Option<ResourceState>,
+    pub _memory_state: Option<ResourceState>,
     pub semantic_kinds: Vec<SemanticKind>,
     /// Semantic facts with full provenance (source, confidence, evidence).
     /// Populated from `srt_facts` when available; empty otherwise.
@@ -38,8 +35,6 @@ pub(crate) struct EvidenceBundle {
     pub has_same_resource_evidence: bool,
     pub has_reachable_release: bool,
     pub has_alias_rejection: bool,
-    #[allow(dead_code)] // reserved for future path-sensitive analysis
-    pub path_evidence: Option<PathEvidence>,
 }
 
 impl EvidenceBundle {
@@ -79,10 +74,10 @@ impl EvidenceBundle {
             alloc_family: candidate.alloc_family,
             release_family: candidate.release_family,
             alloc_function: candidate.alloc_function.clone(),
-            release_function: candidate.release_function.clone(),
+            _release_function: candidate.release_function.clone(),
             alloc_caller: candidate.alloc_caller.clone(),
             release_caller: candidate.release_caller.clone(),
-            memory_state,
+            _memory_state: memory_state,
             semantic_kinds,
             semantic_facts,
             has_boundary_evidence: has_boundary_evidence(candidate, &evidence_kinds),
@@ -90,15 +85,7 @@ impl EvidenceBundle {
             has_reachable_release: has_reachable_release(candidate, &evidence_kinds),
             has_alias_rejection: has_alias_rejection(candidate),
             evidence_kinds,
-            path_evidence: None,
         }
-    }
-
-    /// Attaches path evidence to this bundle.
-    #[allow(dead_code)] // reserved for future path-sensitive analysis
-    pub(crate) fn with_path_evidence(mut self, pe: PathEvidence) -> Self {
-        self.path_evidence = Some(pe);
-        self
     }
 
     /// Returns true when semantic evidence explains safe ownership transfer.
@@ -528,7 +515,7 @@ mod tests {
         let bundle = EvidenceBundle::from_candidate(&candidate, Some(&graph), None, None);
 
         assert_eq!(
-            bundle.memory_state,
+            bundle._memory_state,
             Some(ResourceState::Owned),
             "Bundle must resolve MemoryGraph state for resource_id"
         );
@@ -558,7 +545,7 @@ mod tests {
             "Candidate without resource_id must keep resource_id absent"
         );
         assert_eq!(
-            bundle.memory_state, None,
+            bundle._memory_state, None,
             "Bundle must not invent a MemoryGraph state"
         );
         assert!(

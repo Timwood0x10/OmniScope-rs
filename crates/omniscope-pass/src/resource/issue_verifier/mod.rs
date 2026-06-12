@@ -186,29 +186,6 @@ impl Pass for IssueVerifierPass {
             );
             let has_semantic_suppression = evidence_bundle.has_semantic_suppression();
 
-            // ── Compute path evidence for candidates that need it ──
-            // For DoubleRelease and UseAfterFree candidates, compute lightweight
-            // path evidence from IR instructions if available.
-            let evidence_bundle = if matches!(
-                candidate.kind,
-                IssueCandidateKind::DoubleRelease
-                    | IssueCandidateKind::UseAfterFree
-                    | IssueCandidateKind::ConditionalLeak
-                    | IssueCandidateKind::DefiniteLeak
-            ) {
-                if let Some(_module) = ctx.get_ir_module() {
-                    // TODO: path evidence computation disabled — compute_path_evidence
-                    // was a naive instruction counter that incorrectly suppressed all
-                    // double-release and UAF candidates. Re-enable when real CFG path
-                    // analysis is implemented.
-                    evidence_bundle
-                } else {
-                    evidence_bundle
-                }
-            } else {
-                evidence_bundle
-            };
-
             tracing::trace!(
                 candidate_id = evidence_bundle.candidate_id,
                 resource_id = ?evidence_bundle.resource_id,
@@ -782,9 +759,6 @@ fn verify_candidate_inner(
             } else {
                 verify_double_release(candidate)
             }
-            // TODO: path evidence gating disabled — compute_path_evidence is a
-            // naive instruction counter that incorrectly suppresses all double-
-            // releases. Re-enable when real CFG path analysis is implemented.
         }
         IssueCandidateKind::ConditionalLeak => {
             if let Some(b) = bundle {
@@ -805,30 +779,7 @@ fn verify_candidate_inner(
         IssueCandidateKind::NeedsModel => VerifierVerdict::Diagnostic,
         IssueCandidateKind::DoubleReclaim => VerifierVerdict::ConfirmedIssue,
         IssueCandidateKind::OwnershipEscapeLeak => VerifierVerdict::ProbableIssue,
-        IssueCandidateKind::UseAfterFree => {
-            // Check path evidence for downgrade/confirmation decisions.
-            if let Some(pe) = bundle.and_then(|b| b.path_evidence.as_ref()) {
-                if pe.release_before_use_paths {
-                    // Release happens before use on all paths — this means the
-                    // resource is always used only after it has been freed, which
-                    // is a diagnostic (informational) rather than a real UAF.
-                    VerifierVerdict::Diagnostic
-                } else if pe.budget_exhausted {
-                    // Path budget was exhausted during analysis — the analyzer
-                    // could not cover all paths, so downgrade to probable.
-                    VerifierVerdict::ProbableIssue
-                } else if pe.uaf_path_count > 0 {
-                    // Path evidence confirms actual use-after-free pattern.
-                    VerifierVerdict::ConfirmedIssue
-                } else {
-                    // Path evidence present but no confirming data.
-                    VerifierVerdict::ConfirmedIssue
-                }
-            } else {
-                // Default: no path evidence, treat as confirmed.
-                VerifierVerdict::ConfirmedIssue
-            }
-        }
+        IssueCandidateKind::UseAfterFree => VerifierVerdict::ConfirmedIssue,
         IssueCandidateKind::InvalidBorrowedFree => VerifierVerdict::ConfirmedIssue,
         IssueCandidateKind::UncheckedFfiReturn => VerifierVerdict::ProbableIssue,
         IssueCandidateKind::NullDereference => VerifierVerdict::ConfirmedIssue,

@@ -307,11 +307,11 @@ fn test_determine_leak_type_all_owned() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
 
@@ -331,11 +331,11 @@ fn test_determine_leak_type_mixed_states() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::Released,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
 
@@ -355,11 +355,11 @@ fn test_determine_leak_type_all_released_or_escaped() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::Released,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::EscapedToCaller,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
 
@@ -515,9 +515,9 @@ fn graph_with_releases(
 
 /// Objective: when the contract graph has at least one same-family
 /// release site, an otherwise-`DefiniteLeak` allocation should be
-/// downgraded to `ConditionalLeak` (Blocker #3 fix).
-/// Invariant: emitted candidate kind is `ConditionalLeak`, and the
-/// description mentions "downgraded" with the release site list.
+/// suppressed when the contract graph has a paired release site reachable
+/// via the call graph (Blocker #3 fix).
+/// Invariant: no leak candidates emitted when paired deallocator is reachable.
 #[test]
 fn test_definite_leak_downgraded_when_release_present() {
     let mut ctx = PassContext::new();
@@ -562,23 +562,8 @@ fn test_definite_leak_downgraded_when_release_present() {
         .unwrap_or_default();
     assert_eq!(
         candidates.len(),
-        1,
-        "exactly one candidate expected for the single alloc site"
-    );
-    let c = &candidates[0];
-    assert_eq!(
-        c.kind,
-        IssueCandidateKind::ConditionalLeak,
-        "DefiniteLeak must be downgraded to ConditionalLeak when family has release sites"
-    );
-    let desc = c.description.as_deref().unwrap_or("");
-    assert!(
-        desc.contains("downgraded"),
-        "description must explain the downgrade, got: {desc}"
-    );
-    assert!(
-        desc.contains("bun_free") || desc.contains("bun_free_aligned"),
-        "description must list paired release call sites, got: {desc}"
+        0,
+        "leak must be suppressed when paired deallocator is reachable via call graph"
     );
 }
 
@@ -693,11 +678,11 @@ fn test_determine_leak_type_conditional_owned_and_released() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::Released,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
     let leak_type = determine_leak_type(&exit_states, 2, 1);
@@ -717,11 +702,11 @@ fn test_determine_leak_type_abort_or_unreachable_is_safe() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::AbortOrUnreachable,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::AbortOrUnreachable,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
     let leak_type = determine_leak_type(&exit_states, 2, 0);
@@ -739,7 +724,7 @@ fn test_determine_leak_type_abort_or_unreachable_is_safe() {
 fn test_determine_leak_type_runtime_managed_is_safe() {
     let exit_states = vec![PathExitState {
         resource_state: ResourcePathState::RuntimeManaged,
-        evidence: Vec::new(),
+        _evidence: Vec::new(),
     }];
     let leak_type = determine_leak_type(&exit_states, 1, 0);
     assert_eq!(
@@ -756,7 +741,7 @@ fn test_determine_leak_type_runtime_managed_is_safe() {
 fn test_determine_leak_type_static_lifetime_is_safe() {
     let exit_states = vec![PathExitState {
         resource_state: ResourcePathState::StaticLifetime,
-        evidence: Vec::new(),
+        _evidence: Vec::new(),
     }];
     let leak_type = determine_leak_type(&exit_states, 1, 0);
     assert_eq!(
@@ -773,7 +758,7 @@ fn test_determine_leak_type_static_lifetime_is_safe() {
 fn test_determine_leak_type_escaped_to_caller_is_safe() {
     let exit_states = vec![PathExitState {
         resource_state: ResourcePathState::EscapedToCaller,
-        evidence: Vec::new(),
+        _evidence: Vec::new(),
     }];
     let leak_type = determine_leak_type(&exit_states, 1, 0);
     assert_eq!(
@@ -790,7 +775,7 @@ fn test_determine_leak_type_escaped_to_caller_is_safe() {
 fn test_determine_leak_type_stored_to_owner_is_safe() {
     let exit_states = vec![PathExitState {
         resource_state: ResourcePathState::StoredToOwner,
-        evidence: Vec::new(),
+        _evidence: Vec::new(),
     }];
     let leak_type = determine_leak_type(&exit_states, 1, 0);
     assert_eq!(
@@ -808,11 +793,11 @@ fn test_determine_leak_type_owned_with_abort_is_conditional() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::AbortOrUnreachable,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
     let leak_type = determine_leak_type(&exit_states, 2, 0);
@@ -830,7 +815,7 @@ fn test_determine_leak_type_owned_with_abort_is_conditional() {
 fn test_determine_leak_type_null_is_safe() {
     let exit_states = vec![PathExitState {
         resource_state: ResourcePathState::Null,
-        evidence: Vec::new(),
+        _evidence: Vec::new(),
     }];
     let leak_type = determine_leak_type(&exit_states, 1, 0);
     assert_eq!(leak_type, LeakType::Safe, "Null exit should be Safe");
@@ -843,15 +828,15 @@ fn test_format_exit_state_summary() {
     let exit_states = vec![
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::Owned,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
         PathExitState {
             resource_state: ResourcePathState::Released,
-            evidence: Vec::new(),
+            _evidence: Vec::new(),
         },
     ];
     let summary = format_exit_state_summary(&exit_states);

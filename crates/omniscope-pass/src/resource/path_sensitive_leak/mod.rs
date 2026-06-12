@@ -18,7 +18,7 @@ pub mod helpers;
 #[cfg(test)]
 mod tests;
 
-use omniscope_core::{Confidence, IssueCandidate, IssueKind, Result};
+use omniscope_core::{IssueCandidate, Result};
 use omniscope_semantics::SummaryStore;
 use omniscope_types::{
     Effect, Evidence, EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict,
@@ -372,30 +372,17 @@ impl Pass for LeakDetectionPass {
                         })
                         .unwrap_or_default();
 
-                    let (candidate_kind, downgrade_with_sites): (
-                        IssueCandidateKind,
-                        Option<Vec<String>>,
-                    ) = if !reachable_release_sites.is_empty() {
+                    if !reachable_release_sites.is_empty() {
                         tracing::info!(
                             target: "omniscope_pass::path_sensitive_leak::run",
-                            "downgraded leak on family {:?}: {} reachable release sites (of {} total)",
+                            "suppressed leak on family {:?}: {} reachable release sites — paired deallocator exists",
                             family,
-                            reachable_release_sites.len(),
-                            release_sites_by_family.get(&family).map(|s| s.len()).unwrap_or(0)
+                            reachable_release_sites.len()
                         );
-                        (
-                            IssueCandidateKind::ConditionalLeak,
-                            Some(reachable_release_sites),
-                        )
-                    } else {
-                        (IssueCandidateKind::DefiniteLeak, None)
-                    };
-                    let _issue_kind = IssueKind::DefiniteLeak;
-                    let _confidence = if alloc_count > 1 {
-                        Confidence::High
-                    } else {
-                        Confidence::Medium
-                    };
+                        continue;
+                    }
+
+                    let candidate_kind = IssueCandidateKind::DefiniteLeak;
 
                     let mut candidate = IssueCandidate::new(
                         candidate_id,
@@ -407,43 +394,21 @@ impl Pass for LeakDetectionPass {
                     if !alloc.caller_name.is_empty() {
                         candidate = candidate.with_alloc_caller(&alloc.caller_name);
                     }
-                    if let Some(sites) = downgrade_with_sites {
-                        candidate = candidate.with_description(format!(
-                            "allocation in '{}' of family {} initially flagged as definite leak; downgraded: family has {} release sites at functions [{}]",
-                            alloc.function_name,
-                            family.display_name(),
-                            sites.len(),
-                            sites.join(", ")
-                        ));
-                        candidate.add_evidence(
-                            Evidence::new(
-                                EvidenceKind::PathStateRefinement,
-                                format!(
-                                    "downgraded DefiniteLeak → ConditionalLeak on family {}: {} paired release site(s) at [{}]",
-                                    family.display_name(),
-                                    sites.len(),
-                                    sites.join(", ")
-                                ),
-                            )
-                            .with_family(family),
-                        );
-                    } else {
-                        candidate = candidate.with_description(format!(
-                            "allocation in '{}' of family {} has no same-family release on any analyzed path (definite leak)",
-                            alloc.function_name, family.display_name()
-                        ));
-                        candidate.add_evidence(
-                            Evidence::new(
-                                EvidenceKind::PathStateRefinement,
-                                format!(
-                                    "no {}-family release found for allocation in '{}' (definite)",
-                                    family.display_name(),
-                                    alloc.function_name
-                                ),
-                            )
-                            .with_family(family),
-                        );
-                    }
+                    candidate = candidate.with_description(format!(
+                        "allocation in '{}' of family {} has no same-family release on any analyzed path (definite leak)",
+                        alloc.function_name, family.display_name()
+                    ));
+                    candidate.add_evidence(
+                        Evidence::new(
+                            EvidenceKind::PathStateRefinement,
+                            format!(
+                                "no {}-family release found for allocation in '{}' (definite)",
+                                family.display_name(),
+                                alloc.function_name
+                            ),
+                        )
+                        .with_family(family),
+                    );
 
                     let exit_summary = format_exit_state_summary(&exit_states);
                     if !exit_summary.is_empty() {
