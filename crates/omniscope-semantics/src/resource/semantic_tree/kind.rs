@@ -208,6 +208,26 @@ pub enum SemanticKind {
     /// when accessed across FFI boundaries (e.g., C struct {u32, u8, ptr}
     /// has 3 bytes padding that packed-layout callers miss).
     AbiLayoutPadding,
+
+    // ── WASM/JS: WebAssembly and JavaScript FFI patterns ──
+    /// WASM linear memory allocation (malloc/free in WASM heap).
+    /// Memory allocated from the WASM linear memory region.
+    WasmMemoryAlloc,
+    /// WASM linear memory deallocation.
+    /// Memory being returned to the WASM linear memory pool.
+    WasmMemoryFree,
+    /// JS import wrapper function (WebAssembly.import).
+    /// Function imported from JavaScript into the WASM module.
+    JsImportWrapper,
+    /// JS export wrapper function (WebAssembly.export).
+    /// Function exported from WASM to be callable from JavaScript.
+    JsExportWrapper,
+    /// Emscripten runtime operation (emscripten_*).
+    /// Runtime management function from the Emscripten toolchain.
+    EmScriptenRuntimeOp,
+    /// emval resource handle (emscripten_val_*).
+    /// Handle for managing JavaScript values from WASM via emval.
+    EmvalHandle,
 }
 
 /// Semantic key for querying the semantic tree.
@@ -482,6 +502,8 @@ impl SemanticKind {
                 | SemanticKind::StoredToOwner
                 | SemanticKind::StoredToRuntime
                 | SemanticKind::RuntimeManagedResource
+                | SemanticKind::EmScriptenRuntimeOp
+                | SemanticKind::JsExportWrapper
         )
     }
 
@@ -534,6 +556,10 @@ impl SemanticKind {
                 | SemanticKind::StoredToRuntime
                 | SemanticKind::ReleaseOnAllExitPaths
                 | SemanticKind::AliasOfReleased
+                | SemanticKind::WasmMemoryAlloc
+                | SemanticKind::WasmMemoryFree
+                | SemanticKind::EmScriptenRuntimeOp
+                | SemanticKind::EmvalHandle
         )
     }
 
@@ -657,6 +683,30 @@ impl SemanticKind {
             return SemanticKind::RefcountTransfer;
         }
 
+        // ── WASM/JS patterns ──
+        // Linear memory allocation
+        if func_name.contains("malloc") && func_name.contains("wasm") {
+            return SemanticKind::WasmMemoryAlloc;
+        }
+        if func_name.contains("free") && func_name.contains("wasm") {
+            return SemanticKind::WasmMemoryFree;
+        }
+        // Emscripten runtime operations
+        if func_name.starts_with("emscripten_") && !func_name.starts_with("emscripten_val_") {
+            return SemanticKind::EmScriptenRuntimeOp;
+        }
+        // emval handle operations
+        if func_name.starts_with("emscripten_val_") {
+            return SemanticKind::EmvalHandle;
+        }
+        // JS import/export wrappers
+        if func_name.starts_with("__import_") {
+            return SemanticKind::JsImportWrapper;
+        }
+        if func_name.starts_with("__export_") {
+            return SemanticKind::JsExportWrapper;
+        }
+
         // ── Default: no pattern matched ──
         SemanticKind::Unknown
     }
@@ -738,6 +788,14 @@ impl SemanticKind {
             SemanticKind::StaticLifetimeSink => 0.9, // Process lifetime, safe
             SemanticKind::DestructorRelease => 1.0, // Compiler-managed cleanup
 
+            // ── WASM/JS patterns (0.5-0.8) ──
+            SemanticKind::WasmMemoryAlloc => 0.7, // WASM linear memory, bounded
+            SemanticKind::WasmMemoryFree => 0.7,  // WASM linear memory free
+            SemanticKind::JsImportWrapper => 0.6, // JS import boundary
+            SemanticKind::JsExportWrapper => 0.6, // JS export boundary
+            SemanticKind::EmScriptenRuntimeOp => 0.8, // Emscripten managed
+            SemanticKind::EmvalHandle => 0.5,     // emval handle, leak risk
+
             // ── Default ──
             SemanticKind::Unknown => 0.5,
             // ── Phase 6: ABI layout detection ──
@@ -764,6 +822,9 @@ impl SemanticKind {
             // Java patterns
             SemanticKind::JavaGlobalRef => true,
             SemanticKind::JavaWeakRef => true,
+            // WASM/JS patterns
+            SemanticKind::WasmMemoryAlloc => true,
+            SemanticKind::EmvalHandle => true,
             // Existing patterns
             SemanticKind::HeapProvenance => true,
             SemanticKind::IntoRawTransfer => true,

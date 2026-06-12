@@ -4,298 +4,331 @@
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![LLVM](https://img.shields.io/badge/LLVM-17%2B-green.svg)](https://llvm.org)
 
-A static analyzer for **cross-language FFI security auditing**, built on LLVM IR.
+OmniScope-rs is a Rust rewrite and extension of the original OmniScope project:
 
-OmniScope-rs detects memory safety bugs at language boundary crossings — use-after-free, double-free, leaks, ownership violations, and type confusion — where traditional per-language tools lose visibility.
+Original project: <https://github.com/Timwood0x10/OmniScope>
 
-> **This is a Rust rewrite of [OmniScope](https://github.com/Timwood0x10/OmniScope) (Zig).** See [Comparison with Original](#comparison-with-original-omniscope) for what changed.
+This repository builds an LLVM IR based static analyzer for cross-language FFI security review. Its main goal is to find and explain memory/resource ownership bugs around language boundaries: mismatched allocator/free pairs, ownership escape, leaks, unsafe FFI calls, unchecked returns, and related resource-contract violations.
+
+This project is useful today as an experimental auditor-assist tool and research prototype. It is not yet a stable production scanner, and the current binary still reports version `0.1.0`.
+
+## Status
+
+**Current release recommendation:** open-source the project, but do not tag `1.0.0` yet.
+
+The project is in a credible state for public development because it has an Apache-2.0 license, a Rust workspace split into focused crates, a CLI, CI configuration, tests, benchmarks, SARIF/JSON output, release-readiness notes, and documented limitations.
+
+It is not ready for `1.0.0` because recent validation found accuracy and reporting blockers:
+
+| Validation target | Result | Notes |
+|---|---:|---|
+| `ffi-demo` corpus, 10 IR files | 68% precision, 62% recall | Results are carried heavily by one strong historical validation fixture. |
+| `ffi-demo` without `zig_main.ll` | about 43% precision | Signal is much weaker outside the best case. |
+| `bun_alloc.ll` | 0/19 true positives | Known regression after the single-language gate change. |
+| `llhttp.ll` | 0 findings | Correctly quiet on this clean vendored parser sample. |
+
+See:
+
+- [`docs/release/release_readiness_v0.2.0.md`](docs/release/release_readiness_v0.2.0.md)
+- [`docs/release/ffi_demo_validation.md`](docs/release/ffi_demo_validation.md)
+- [`docs/release/bun_validation.md`](docs/release/bun_validation.md)
+- [`LIMITATIONS.md`](LIMITATIONS.md)
+
+## What Works
+
+- Loads LLVM IR through multiple strategies, including direct C++ extraction, `llvm-sys`, C++ pass JSON, text parsing, and MessagePack.
+- Runs a 21-pass analysis pipeline over call graphs, FFI boundaries, resource facts, semantic summaries, contract graphs, ownership solving, issue candidate building, verification, and leak detection.
+- Emits `rich`, `json`, and `sarif` output.
+- Supports explicit boundary declarations through `--cross FROM:TO` and `omniscope.toml`.
+- Has a growing semantic model for C, C++, Rust, Go, Python, Java, and C# through LLVM IR patterns.
+- Zig (historical validation only): the `zig_main.ll` fixture achieved 95% precision and 100% recall in the June 2026 validation report.
+
+## Known Limits
+
+- This is not a formal verification tool.
+- It should not be used as the only security gate for production code.
+- It analyzes one IR file at a time; full cross-module analysis is not implemented.
+- Double-free detection is currently too flow-insensitive in some cases.
+- Leak reporting can ignore deallocator pairing data that is already available in the contract graph.
+- Single-language module gating can suppress FFI evidence when C extern declarations are present.
+- Pure C/C++ memory safety auditing is not the main target and can produce noisy results.
+- Some language adapters are pattern/semantic helpers, not complete language frontends.
+
+The safest current use is non-blocking CI, security-review triage, and FFI surface mapping.
+
+## Comparison With The Original OmniScope
+
+The original OmniScope project at <https://github.com/Timwood0x10/OmniScope> is the upstream inspiration and should be credited as the base idea. OmniScope-rs is not a drop-in replacement; it is a Rust implementation that experiments with a broader analysis architecture.
+
+| Area | Original OmniScope | OmniScope-rs |
+|---|---|---|
+| Implementation language | Zig project | Rust workspace |
+| Core input | LLVM IR | LLVM IR |
+| Main focus | Multi-language unsafe/FFI analysis | Cross-language FFI ownership/resource analysis |
+| Architecture | Original analyzer implementation | Crate-based pipeline with explicit passes and shared types |
+| Output | Upstream tool outputs | Rich terminal, JSON, SARIF |
+| Loading strategy | Upstream IR loading path | 8 `LoadStrategy` variants, including direct C++ extraction, `llvm-sys`, C++ pass JSON, text parser, and MessagePack |
+| Extensibility | Upstream design | Separate crates for IR, passes, semantics, pipeline, core, dataflow, CLI, and shared types |
+| Current maturity | Existing upstream release line | Experimental Rust rewrite, not ready for `1.0.0` |
+
+Main Rust-version improvements:
+
+- More explicit modular architecture: `omniscope-ir`, `omniscope-pass`, `omniscope-semantics`, `omniscope-pipeline`, `omniscope-core`, `omniscope-dataflow`, `omniscope-types`, and `omniscope-cli`.
+- Stronger typed issue model with 28 issue kinds and CWE mapping.
+- Resource-family and contract-graph model for allocator/deallocator relationships.
+- SARIF output for GitHub Code Scanning style workflows.
+- Parallel pass execution support through Rayon.
+- CI, benchmarks, validation reports, and documented release blockers.
+
+Main tradeoff:
+
+OmniScope-rs has more architecture and more planned semantic depth, but the current validation does not justify stable-release claims. Accuracy must improve before this should be marketed as production-grade.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[".ll / .bc IR Files"] --> B{"Load Strategy"}
-    B -->|"Text Parser"| C["IRModule"]
-    B -->|"llvm-sys (optional)"| C
-    C --> D["Pipeline"]
-    D --> E["Call Graph"]
-    E --> F["FFI Boundary Detection"]
-    F --> G["Raw Fact Collection"]
-    G --> H["IR Behavior Summary"]
-    H --> I["Structural Inference"]
-    I --> J["Contract Graph"]
-    J --> K["Ownership Solver"]
-    K --> L["Issue Candidates"]
-    L --> M["Issue Verifier + SRT Gate"]
-    M --> N["Report (rich / json / sarif)"]
+    User["User / CI / Auditor"] --> CLI["omniscope CLI"]
+    CLI --> Loader["omniscope-ir loader"]
 
-    style A fill:#e1f5fe
-    style N fill:#e8f5e9
+    Loader --> Strategy{"LoadStrategy"}
+    Strategy --> DirectCppFfi["direct-cpp-ffi"]
+    Strategy --> DirectCpp["direct-cpp"]
+    Strategy --> LlvmSys["llvm-sys"]
+    Strategy --> CppPass["cpp-pass / SafetyExportPass"]
+    Strategy --> TextParser["text-parser"]
+    Strategy --> MsgPack["msgpack"]
+    Strategy --> Auto["auto / auto-fast"]
+
+    DirectCppFfi --> IR["IRModule"]
+    DirectCpp --> IR
+    LlvmSys --> IR
+    CppPass --> IR
+    TextParser --> IR
+    MsgPack --> IR
+    Auto --> IR
+
+    IR --> Pipeline["omniscope-pipeline"]
+    Pipeline --> Passes["omniscope-pass"]
+    Passes --> Semantics["omniscope-semantics"]
+    Passes --> Dataflow["omniscope-dataflow"]
+    Passes --> Core["omniscope-core"]
+    Semantics --> Types["omniscope-types"]
+    Core --> Report["Findings"]
+    Report --> Rich["rich"]
+    Report --> Json["json"]
+    Report --> Sarif["sarif"]
 ```
 
-## Data Flow
+## Analysis Data Flow
 
 ```mermaid
 flowchart LR
-    subgraph Input
-        IR[".ll text / .bc binary"]
-    end
-
-    subgraph Analysis
-        CG["Call Graph"] --> FFI["FFI Boundary"]
-        FFI --> RF["Raw Facts"]
-        RF --> BS["Behavior Summary"]
-        BS --> SI["Structural Inference"]
-        SI --> CG2["Contract Graph"]
-        CG2 --> OS["Ownership Solver"]
-        OS --> IC["Issue Candidates"]
-    end
-
-    subgraph Suppression
-        IC --> IV["Issue Verifier"]
-        IV --> R0["R-0: Write-to-immutable"]
-        IV --> R1["R-1: Heap provenance"]
-        IV --> R2["R-2: Interior mutability"]
-        IV --> R3["R-3: RAII drop glue"]
-        IV --> R4["R-4: POSIX syscalls"]
-        IV --> R6["R-6: into_raw transfer"]
-    end
-
-    subgraph Output
-        IV --> SRT["SRT Gate"]
-        SRT --> RPT["Report"]
-    end
-
-    style Input fill:#e1f5fe
-    style Output fill:#e8f5e9
+    IR["LLVM IR module"] --> CG["Call graph"]
+    CG --> Boundary["FFI boundary detection"]
+    IR --> Facts["Raw fact collection"]
+    Facts --> Summary["IR behavior summary"]
+    Summary --> LangFacts["Language adapter facts"]
+    LangFacts --> Struct["Structural inference"]
+    Struct --> Contract["Contract graph"]
+    Contract --> Solver["Ownership solver"]
+    Solver --> Candidates["Issue candidates"]
+    Candidates --> Verify["Issue verifier"]
+    Verify --> Leaks["Leak detection"]
+    Leaks --> Output["User-visible report"]
 ```
 
-## Crates
+## Workspace Layout
 
-| Crate | Role | Lines |
-|-------|------|-------|
-| `omniscope-cli` | CLI (`analyze`, `audit`, `info`) | ~1.2K |
-| `omniscope-pipeline` | Pipeline orchestration, pass scheduling | ~1.5K |
-| `omniscope-pass` | 22 analysis passes (FFI boundary, RAII, borrow escape, contract graph, ownership solver) | ~18K |
-| `omniscope-semantics` | Semantic derivation, structural inference, language detection | ~12K |
-| `omniscope-ir` | LLVM IR loader, parser, IR model | ~10K |
-| `omniscope-dataflow` | Forward/backward dataflow framework | ~3K |
-| `omniscope-core` | Issue model (28 kinds), diagnostics, profiler | ~8K |
-| `omniscope-types` | Shared types, ResourceFamily, ABI definitions | ~5K |
+| Crate | Role |
+|---|---|
+| `omniscope-cli` | CLI commands: `analyze`, `audit`, `info`, `init`, `validate` |
+| `omniscope-pipeline` | Pipeline orchestration and pass registration |
+| `omniscope-pass` | Analysis passes and resource issue construction |
+| `omniscope-semantics` | Language/resource semantics and structural inference |
+| `omniscope-ir` | LLVM IR loading, parsing, cache, and IR model |
+| `omniscope-dataflow` | Generic dataflow framework |
+| `omniscope-core` | Issues, diagnostics, reports, scoring, profiler, memory pool |
+| `omniscope-types` | Shared config, ABI, evidence, resource-family, and boundary types |
 
-**Total: ~105K lines of Rust across 8 crates.**
+The default pipeline currently registers 21 passes:
 
-## Supported Languages
+`CallGraph`, `FFIBoundary`, `SurfaceClassifier`, `DangerSurface`, `RawFactCollector`, `IRBehaviorSummary`, `LanguageAdapterFact`, `AbiLayout`, `SummaryBuilder`, `StructuralInference`, `ContractGraphBuilder`, `OwnershipSolver`, `IssueCandidateBuilder`, `IssueVerifier`, `LeakDetection`, `RaiiDrop`, `InteriorMutability`, `HeapProvenance`, `BorrowEscape`, `WriteToImmutable`, and `FfiReturnCheck`.
 
-C, C++, Rust, Go, Python (C API), Java (JNI), C# (P/Invoke) — with automatic language detection from IR metadata.
+## Build
 
-## 28 Issue Kinds
+### Requirements
 
-| Category | Issues |
-|----------|--------|
-| **FFI Boundary** (90% priority) | `CrossLanguageFree`, `OwnershipViolation`, `FfiTypeMismatch`, `AbiMismatch`, `UncheckedReturn`, `FfiUnsafeCall`, `CallbackEscape` |
-| **Resource Contract** | `CrossFamilyFree`, `ConditionalLeak`, `DefiniteLeak`, `BorrowEscape`, `CallbackEscapeIssue`, `NeedsModel`, `OwnershipEscapeLeak` |
-| **Memory Safety** | `DoubleFree`, `UseAfterFree`, `InvalidFree`, `MemoryLeak`, `BufferOverflow`, `NullDereference`, `IntegerOverflow` |
-| **ABI / Type** | `LengthTruncation`, `TypeConfusion`, `WriteToImmutable`, `AbiLayoutMismatch` |
+- Rust 1.75+
+- LLVM development libraries for the optional LLVM-backed paths
+- `make`, CMake, and a C++ compiler for the SafetyExportPass / extractor path
+- Optional: `cargo-nextest`, `cargo-audit`, Miri, Criterion benchmark tooling
 
-## Default Passes (22)
-
-```text
-CallGraphPass → FFIBoundaryPass → SurfaceClassifierPass → DangerSurfacePass
-→ RawFactCollectorPass → IRBehaviorSummaryPass → LanguageAdapterFactPass
-→ AbiLayoutPass → SummaryBuilderPass → StructuralInferencePass
-→ ContractGraphBuilderPass → OwnershipSolverPass → IssueCandidateBuilderPass
-→ IssueVerifierPass → LeakDetectionPass
-→ RaiiDropPass → InteriorMutabilityPass → HeapProvenancePass
-→ BorrowEscapePass → WriteToImmutablePass → FfiReturnCheckPass
-```
-
-Passes within each dependency level run in parallel via Rayon.
-
-## Quick Start
+### Commands
 
 ```bash
-# Build (no LLVM required — text parser is the default)
-cargo build --release
+# Rust workspace build
+cargo build --workspace
 
-# Analyze an IR file
-./target/release/omniscope analyze -i input.ll
+# Release build copied to ./build/omniscope
+make build
 
-# JSON output for CI
-./target/release/omniscope analyze -i input.ll --format json -o report.json
+# Full test target used by the Makefile
+make test
 
-# SARIF for GitHub Code Scanning
-./target/release/omniscope analyze -i input.ll --format sarif -o results.sarif
-
-# FFI-focused audit
-./target/release/omniscope analyze -i input.ll --boundary-only
+# Formatting and lint checks
+make fmt-check
+make check
 ```
 
-## Comparison with Original OmniScope
+The Makefile test target uses `cargo nextest run --workspace --all-features`, so install `cargo-nextest` if you use `make test`.
 
-[OmniScope](https://github.com/Timwood0x10/OmniScope) was originally written in Zig (~125K lines, 319 files). This Rust rewrite redesigns the core analysis architecture while preserving the same goal: cross-language FFI security auditing via LLVM IR.
-
-| Dimension | Original (Zig) | OmniScope-rs |
-|-----------|----------------|--------------|
-| **Language** | Zig | Rust (8 crates) |
-| **IR Parsing** | LLVM C++ bridge (`llvm_cpp_bridge.cpp`) | Structured text parser + optional `llvm-sys` |
-| **Pass Count** | ~33 passes | 22 passes |
-| **IssueKinds** | ~23 | 28 |
-| **Parallelism** | Custom parallel pipeline | Rayon work-stealing across dependency levels |
-| **Memory Management** | Zig allocator | Arena allocator (bumpalo), zero-copy Arc |
-| **Resource Model** | FFI contract DB (predefined pairs) | ResourceFamily + Contract Graph + Ownership Solver |
-| **FP Suppression** | Whitelists + rule filters | 6 suppression rules (R-0 to R-6) + SRT Gate |
-| **Output Formats** | Text, JSON, SARIF | rich (terminal), JSON, SARIF |
-| **CI Integration** | GitHub Actions | GitHub Actions (3 OS, stable/beta, clippy, miri, audit) |
-
-**Key architectural changes in the Rust version:**
-- **ResourceFamily abstraction**: Unifies allocator semantics (C heap, C++ new, Rust alloc, Go GC, Python refcount, JNI, C#) into one model, replacing the hardcoded FFI contract DB
-- **Contract Graph + Ownership Solver**: Tracks pointer ownership through alloc/release pairs with cycle detection, replacing the Zig memory graph approach
-- **SRT Gate**: Every issue passes through Suppress/Review/Track gate with a precision threshold before emission
-- **Structured text parser**: Zero-dependency LLVM IR parsing via tokenizer, no need for LLVM C++ bridge at build time
-- **Crate-based architecture**: 8 independent crates with clear dependency boundaries, vs Zig's monolithic module tree
-
-## Test Suite
+## Usage
 
 ```bash
-cargo test --workspace                # ~1750 tests
-cargo bench --no-run                  # compile all benchmarks
+# Analyze one LLVM IR file
+omniscope analyze file.ll
+
+# Write JSON output
+omniscope analyze file.ll --format json --output report.json
+
+# Generate SARIF
+omniscope analyze file.bc --format sarif --output results.sarif
+
+# Restrict to boundary issues
+omniscope analyze file.ll --boundary-only
+
+# Declare cross-language boundaries explicitly
+omniscope analyze file.ll --cross Rust:C --cross C:Rust
+
+# Select a loading strategy
+omniscope analyze file.ll --strategy text-parser
+
+# Audit mode requires a target language
+omniscope audit file.ll --language rust
+
+# Inspect registered passes
+omniscope info --passes
+
+# Create and validate configuration
+omniscope init
+omniscope validate --config omniscope.toml
 ```
 
-| Category | Count | Description |
-|----------|-------|-------------|
-| Unit tests | ~1600 | Per-crate inline tests |
-| Integration tests | ~80 | Cross-language FFI corpus |
-| Accuracy regression | ~20 | Precision/recall baselines |
-| Corpus regression | 5 | Per-language hidden-bug detection |
-| Benchmarks | 8 | Pipeline, parsing, accuracy, scaling |
+Supported output formats:
 
-## Benchmarks
+- `rich`: colored terminal output
+- `json`: machine-readable output
+- `sarif`: static-analysis interchange format for code scanning systems
 
-```bash
-cargo bench
-```
+Supported loading strategy names:
 
-| Benchmark | Focus |
-|-----------|-------|
-| `pipeline` | End-to-end latency across 4 fixture sizes |
-| `ir_parsing` | Text parser throughput (7 fixtures) |
-| `bugfix_regression` | Post-fix correctness + individual pass throughput |
-| `cpp_rust_accuracy` | C++/Rust cross-language accuracy |
-| `resource_analysis` | Resource contract inference |
-| `context_clone` | Parallel context clone overhead |
-| `memory_pool` | Arena allocator performance |
-| `regression_bench` | Language detection + surface classification |
+- `auto-fast`
+- `auto`
+- `direct-cpp-ffi`
+- `direct-cpp`
+- `llvm-sys`
+- `cpp-pass`
+- `text-parser`
 
-## CI/CD
-
-GitHub Actions runs on every push and PR:
-
-- **fmt** — `cargo fmt --check`
-- **clippy** — `cargo clippy -- -D warnings`
-- **test** — `cargo test --workspace` on Ubuntu/macOS/Windows × stable/beta
-- **bench** — `cargo bench --no-run` (compile check)
-- **docs** — `cargo doc --no-deps`
-- **audit** — `cargo audit`
-- **miri** — unsafe code verification
-- **FFI boundary check** — informational SARIF report (non-blocking)
-- **Benchmark suite** — full benchmark run (non-blocking)
+`LoadStrategy::MsgPack` exists in code for `.msgpack` input, but it is not currently listed in the CLI help string.
 
 ## Configuration
 
+The CLI searches `./omniscope.toml` and `~/.config/omniscope/config.toml` when `--config` is omitted. A starter file is included at [`omniscope.toml`](omniscope.toml).
+
+Example:
+
 ```toml
+[project]
+name = "example"
+description = "Example project configuration"
+
+[[ffi_boundary]]
+from = "rust"
+to = "c"
+functions = ["rust_callback_handler"]
+description = "Rust -> C callback bridge"
+
+[[resource_family]]
+name = "custom_allocator"
+kind = "ManualHeap"
+acquire = ["my_alloc", "my_calloc"]
+release = ["my_free"]
+compatible_releases = []
+
 [analysis]
-boundary_only = false
-load_strategy = "auto"   # "auto", "text-parser", "llvm-sys"
-
-[boundary]
-declare_boundary = [
-    { from = "Rust", to = "C" },
-    { from = "C", to = "Rust" },
-]
-
-[suppression]
-enable_r0 = true   # Write-to-immutable
-enable_r1 = true   # Heap provenance
-enable_r2 = true   # Interior mutability
-enable_r3 = true   # RAII drop glue
-enable_r4 = true   # POSIX syscalls
-enable_r6 = true   # Box::into_raw transfer
-
-[output]
-format = "rich"    # "rich", "json", "sarif"
+cross_language = true
+cross_family = true
+leak_detection = true
+use_after_free = true
 ```
 
-## Current Limitations
+## Tests And Validation
 
-We believe in being transparent about what this tool can and cannot do.
+```bash
+cargo test --workspace
+cargo test --workspace --all-features
+make test
+cargo bench
+```
 
-**What it does well:**
-- FFI boundary memory bug detection (cross-language free, ownership violations)
-- Resource leak detection with path-sensitive analysis
-- False positive suppression via 6 rule layers + SRT gate
-- CI/CD integration with SARIF output
+Important test and validation areas:
 
-**What it does NOT do:**
-- **Not a formal verifier** — it uses heuristics, not proofs
-- **Not a general-purpose C/C++ memory checker** — focused on FFI boundaries
-- **SSA-level data flow is limited** — same-value double-free and load-after-free are known gaps
-- **Single-file analysis only** — no cross-function lifetime tracking yet
-- **No incremental analysis** — full re-run on every invocation
-- **No IDE/LSP integration** — CLI only
+| Area | Location |
+|---|---|
+| Integration tests | `tests/*.rs` |
+| Corpus IR fixtures | `tests/corpus/*.ll` |
+| Accuracy regression tests | `tests/accuracy_regression/` |
+| Crate-level unit tests | `crates/**/src/**/*tests*.rs` |
+| Release validation reports | `docs/release/` |
+| Benchmarks | `benches/` |
 
-**Known regressions (as of v0.2.0-rc):**
-- `bun_alloc` precision dropped after single-language gate change (tracked for v0.3.0)
-- Some cross-family patterns may produce false positives in complex control flow
+## Open Source And 1.0.0 Assessment
 
-See [LIMITATIONS.md](LIMITATIONS.md) for the full list.
+Open-sourcing is reasonable if the repository is presented honestly:
 
-## Project Status
+- Keep Apache-2.0 licensing.
+- Credit the original OmniScope project clearly.
+- Mark the project as experimental or pre-1.0.
+- Publish validation reports and known blockers.
+- Avoid claims such as "production-grade" until the release criteria are met.
 
-**Current version: v0.2.0-rc (release candidate)**
+Do not publish `1.0.0` yet. A realistic next milestone is `v0.2.0-rc.1` or a `v0.1.x` development release.
 
-This project is under active development. The API is not yet stable, and the issue model may change between releases. We are working toward a v1.0.0 release that will include:
-- Stabilized issue model and API
-- Cross-function lifetime tracking
-- Incremental analysis cache
-- Expanded test corpus with real-world projects
+Suggested minimum bar before `1.0.0`:
+
+- Fix the known double-free, leak-pairing, and single-language gate blockers.
+- Re-run `ffi-demo`, `bun_alloc`, and at least one additional real-world FFI target.
+- Reach at least 80% precision and 75% recall on the full `ffi-demo` corpus, not only the strongest historical validation fixture.
+- Produce at least one reproducible true positive on `bun_alloc` or remove it from release claims.
+- Make output deterministic enough for CI diffs.
+- Ensure all README examples match the shipped CLI.
+- Tag a pre-release first and collect external feedback.
 
 ## Roadmap
 
-- [x] LLVM IR parser (text & binary)
-- [x] Call graph construction
-- [x] FFI boundary detection
-- [x] Dataflow analysis framework
-- [x] Semantic derivation engine
-- [x] Resource contract architecture (Phases 0-4)
-- [x] Ownership solver with cycle detection
-- [x] False positive suppression (R-0 to R-6)
-- [x] SARIF output
-- [x] Cross-language corpus (C/C++/Rust/Go/Python/Java/C#)
-- [x] Benchmarks & CI/CD
-- [ ] v1.0 stable release
-- [ ] Incremental analysis cache
-- [ ] Cross-function lifetime tracking
-- [ ] IDE / LSP integration
-- [ ] WASM/JS FFI support
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow.
-
-```bash
-make dev        # fmt + check + test
-make test       # run all tests
-make bench      # run benchmarks
-```
-
-Branch naming: `feature/description` or `bugfix/description`
+- [x] Rust workspace and CLI
+- [x] LLVM IR loader and text parser
+- [x] Direct C++ / C++ pass / `llvm-sys` loading paths
+- [x] Call graph and FFI boundary detection
+- [x] Resource-family and contract-graph architecture
+- [x] SARIF and JSON output
+- [x] CI, benchmarks, and release validation notes
+- [ ] Fix release blockers documented in `docs/release/release_readiness_v0.2.0.md`
+- [ ] Improve cross-module analysis
+- [ ] Improve path-sensitive double-free/leak verification
+- [ ] Stabilize language adapter coverage
+- [ ] Publish a defensible `v0.2.0`
+- [ ] Publish `1.0.0` only after repeated external validation
 
 ## Acknowledgements
 
-Special thanks to **[@icehawk-hyb](https://github.com/icehawk-hyb)** for serving as technical advisor and providing critical guidance on cross-language security analysis.
+This Rust version exists because of the original OmniScope project:
 
-This project builds on the original [OmniScope](https://github.com/Timwood0x10/OmniScope) by @Timwood0x10, which established the core concept of cross-language FFI auditing via LLVM IR analysis.
+- Original OmniScope: <https://github.com/Timwood0x10/OmniScope>
+
+Special thanks to @icehawk-hyb for serving as technical advisor and providing critical guidance on cross-language security analysis.
 
 ## License
 

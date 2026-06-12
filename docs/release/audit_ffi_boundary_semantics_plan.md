@@ -1,5 +1,7 @@
 # Audit: docs/ffi_boundary_ir_semantics_plan.md vs current code
 
+> **Historical reference.** Zig support has been withdrawn from the product scope. References to Zig adapter modules in this audit should be read as historical — Zig is no longer planned as a target language.
+
 - Date: 2026-06-07
 - Repo SHA: `17bea02ea919fd4682eab2a6f76fd55c9f6a0907` (master, plus four
   uncommitted edits in `module_index.rs`, `noise_reduction.rs`,
@@ -13,7 +15,7 @@
   several phases are wired but produce wrong answers on the bun and
   ffi-demo corpora. Two language adapters promised in §7 (Rust, Zig)
   do not exist as adapter modules; their semantics live only in the
-  family registry/structural inference path.
+  family registry/structural inference path. (Zig adapter: withdrawn.)
 
 ---
 
@@ -25,7 +27,7 @@
 | §2.5 Multi-language IR loading perf contract (41–109) | `LoadStrategy::AutoFast` is default for `.ll`, `DirectCppFfi` slice, `IrCache` with strategy keys, per-language adapter timings | `crates/omniscope-ir/src/loader_v2.rs:120-167` defines `DirectCppFfi`, `AutoFast`, etc.; `IrCache` exists in `ir_cache.rs`. Per-language adapter timings: `language_adapter_fact_pass.rs:204-211` adds `cpp_facts/python_facts/...` stats. | **Done (infrastructure), partial (instrumentation)** — `LoadedIr.load_ms / backend_ms / deserialize_ms / cache_hit` exist but doc admits they sometimes return None; the language adapter pass does emit per-language counts. |
 | §4.1 Replace boolean boundary with `BoundaryEvidence` (159–182) | New struct with kind/caller_lang/callee_lang/confidence/reason; stored in `CachedCallMeta`, `RawResourceFact`, `ContractEdge`, `IssueCandidate` | `omniscope-types/src/boundary.rs:355-408` defines `BoundaryEvidence`; `module_index.rs:80` stores `boundary_evidence: Option<Vec<BoundaryEvidence>>`; `raw_fact_collector.rs:125` propagates; `contract_graph_builder.rs:351,502` propagates to `ContractEdge`. | **Done** |
 | §4.2 Boundary seed rules (185–209) | Strong/Weak/Suppression seed rules with 7 strong + 3 weak + 4 suppression categories | `analysis/boundary_seeds.rs:83-351` implements all rules — LLVM intrinsics, runtime intrinsic, libc, internal same-lang are suppression; cross-language, configured, non-C→unknown extern, C→C++ Itanium (excluding Rust `_ZN`), exported wrapper, function pointer, callback registration are strong; same-lang FFI contract, dangerous libc in wrapper, runtime bridge connected are weak. | **Done** |
-| §4.2.1 Multi-language boundary matrix (211–230) | 12-row matrix for Rust↔C, C↔C++, JNI↔native, Zig↔C, Python↔C, Go↔C | `boundary_seeds.rs` generates generic `BoundaryEvidence` per row; language-specific shapes consumed by `language_adapter_fact_pass.rs`. No Zig/Rust explicit adapter classes exist — relies on `family_registry` + symbol patterns. | **Partial (Rust/Zig not adapter-shaped)** |
+| §4.2.1 Multi-language boundary matrix (211–230) | 12-row matrix for Rust↔C, C↔C++, JNI↔native, Zig↔C, Python↔C, Go↔C | `boundary_seeds.rs` generates generic `BoundaryEvidence` per row; language-specific shapes consumed by `language_adapter_fact_pass.rs`. No Zig/Rust explicit adapter classes exist — relies on `family_registry` + symbol patterns. (Zig adapter: withdrawn.) | **Partial (Rust not adapter-shaped)** |
 | §4.3 Boundary slice (232–258) | `FfiSliceInfo` with `ffi_slice_depth`, `ffi_relevance`, `ffi_reason`; 2-hop expansion + resource-pair + callback closure | `omniscope-types/src/boundary.rs:410-460` defines exactly this struct; `boundary_seeds.rs:415-499` (`FfiSlice::expand_from_seeds`) does the 2-hop expansion and resource-pair closure; `module_index.rs:581-617` wires it. | **Done** |
 | §4.4 Two-class candidate gate (260–289) | `Boundary evidence` (6 variants) + `Resource evidence` (5 variants); reporting requires boundary AND resource | `omniscope-types/src/evidence.rs:124-172` defines `BoundaryEvidenceKind` (7 variants — extra `RuntimeBridge`) and `ResourceEvidenceKind` (5 variants exactly). `issue_candidate_builder/mod.rs:332-345, 432-440` enforces dual-evidence gating with `edge_has_boundary_evidence()`. `tests_dual_evidence.rs` covers it. | **Done** |
 | §5.1 Unified `SemanticFact` layer (297–313) | Shape `{key, kind, confidence, source, evidence}` | `omniscope-semantics/src/resource/semantic_tree/kind.rs:870-911` defines `SemanticFact` exactly as specified, with `FactSource` enum including `IRPattern`, `ContractDB`, `BehaviorSummary`, `BoundaryDetector`, `LanguageAdapter`, `MemoryGraph`. | **Done** |
@@ -91,11 +93,11 @@
 | §6.1 Cross-family matching with controlled fallback | "Single unmatched acquire OR nearest unmatched acquire within small distance" gate is absent. Current code coarsely flags any `acquire_family != release_family`. Drives bun_alloc 0% precision (`docs/release/bun_validation.md` items 14–16, 19). | **High** |
 | §6.3 Callback unregister/revoke pair | `unregister`/`revoke` linkage not modeled. | Medium |
 | §7 Rust adapter as a distinct module | No `rust_adapter/` — Rust semantics rely on `family_registry.rs` + `rust_drop_tracker.rs` + `rust_stdlib_whitelist`. Drives the "rust_hash.ll/rust_merkle.ll → 0 issues" recall miss in `docs/release/ffi_demo_validation.md` blocker #3. | **High** |
-| §7 Zig adapter as a distinct module | No `zig_adapter/`. Drives "allocator-shaped FP" cluster on `zig_ffi_bridge.ll` and the bun_alloc allocator factory FPs. | **High** |
+| §7 Zig adapter as a distinct module | No `zig_adapter/`. **(Withdrawn — Zig removed from product scope.)** The `zig_ffi_bridge.ll` allocator-shaped FP cluster and bun_alloc FPs are now historical observations. | **N/A (withdrawn)** |
 | §7 `LanguageAdapterResult` shape | Adapters emit `Vec<SemanticFact>`, not the full struct `{ boundary_facts, semantic_facts, resource_facts, suppressions, confidence }`. Cosmetic for now since downstream consumes facts directly. | Low |
 | §9 Phase 5 cross-function ownership propagation within FFI slice | Not implemented. Drives `ffi_make_token`/allocator-factory FPs in `docs/release/ffi_demo_validation.md`. | **High** |
 | §9 Phase 6 fallible out-param semantics + real post-dominator | `FallibleOutParamInit` is not in `SemanticKind`. Post-dominator analysis would fix the bun_alloc DoubleFree FP and the `c_merkle_tree` UAF/DF FPs. | **High** |
-| §9 Phase 7 adapter timing/per-language counts for Zig/Rust | No Zig/Rust adapter, so no counters; doc cannot be evaluated. | Medium |
+| §9 Phase 7 adapter timing/per-language counts for Rust | No Rust adapter, so no counters; doc cannot be evaluated. (Zig withdrawn.) | Medium |
 | §8 No-large-whitelists discipline | `noise_reduction.rs` retains a string-pattern list as Layer 1 fast filter. Doc says "Allowed", but the list keeps growing per commit `b0e00b6` and the new `17bea02`. | Medium |
 | §2.5 Per-language adapter timing isolated from load time | `LoadedIr.backend_ms`/`deserialize_ms` sometimes return `None`; doc itself warns this is not sufficient for perf work. | Low |
 | Plan's "Recommended Immediate Next Steps" item 6 (loader perf instrumentation tests) | No counted-backend-seam regression test; the spec at §2.5 lines 108–109 is aspirational. | Low |
@@ -116,12 +118,13 @@
    evidence catalogs**; the code has only C++/Python/Java/Go/C# adapter
    modules. Rust and Zig semantics are scattered across
    `family_registry.rs`, `rust_stdlib_whitelist/`,
-   `rust_drop_tracker.rs`, `language_detector.rs`. The result is the
+   `rust_drop_tracker.rs`, `language_detector.rs`. **(Zig adapter:
+   withdrawn — no longer planned.)** The result is the
    "single-language Rust modules report 0 issues / suppress 13 ffi-gate
    candidates" symptom in `docs/release/ffi_demo_validation.md` blocker
    #3 and `docs/release/bun_validation.md` blocker #3. A new contributor
    reading §7 will hunt for `crates/omniscope-semantics/src/resource/rust_adapter/`
-   and find nothing.
+   and find nothing except the Rust adapter gap.
 
 3. **Plan §4.4 / §7.5.3 say "do not let a single signal report an FFI
    bug by itself"; behavior on the bun_alloc and ffi-demo corpora shows
@@ -154,9 +157,10 @@
 ### Edits to the plan (read-only doc fixes)
 
 - **§7 (line 469 onward)**: add a "Status" column to the per-language
-  table. Mark Rust and Zig as "no adapter module yet; semantics live
+  table. Mark Rust as "no adapter module yet; semantics live
   in `family_registry.rs` + `rust_stdlib_whitelist/` +
-  `rust_drop_tracker.rs`". A new contributor will otherwise expect
+  `rust_drop_tracker.rs`". Mark Zig as "withdrawn — not planned."
+  A new contributor will otherwise expect
   symmetric `rust_adapter/` and `zig_adapter/` directories.
 - **§7 LanguageAdapterResult shape (475–484)**: clarify that
   adapters today return `Vec<SemanticFact>` via `to_semantic_facts()`
@@ -178,9 +182,9 @@
 
 - Implement controlled cross-family fallback (§6.1) — gate on
   "single unmatched acquire in same function" before flagging.
-- Add `crates/omniscope-semantics/src/resource/rust_adapter/` and
-  `zig_adapter/` to match §7 and unblock the rust_*.ll / zig_*.ll
-  validation gaps.
+- Add `crates/omniscope-semantics/src/resource/rust_adapter/` to
+  match §7 and unblock the rust_*.ll validation gaps.
+  (Zig adapter: withdrawn — NOT PLANNED.)
 - Emit `SemanticFact { kind: AliasOfReleased, ... }` from `may_alias.rs`
   hits so the SRT can record the evidence.
 - Add `FallibleOutParamInit` to `SemanticKind` and wire from path

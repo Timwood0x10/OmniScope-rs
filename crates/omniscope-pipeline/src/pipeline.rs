@@ -6,11 +6,12 @@ use crate::result::PipelineResult;
 use omniscope_core::Result;
 use omniscope_ir::IRModule;
 use omniscope_pass::{
-    AbiLayoutPass, BorrowEscapePass, CallGraphPass, ContractGraphBuilderPass, DangerSurfacePass,
-    FFIBoundaryPass, FfiReturnCheckPass, HeapProvenancePass, IRBehaviorSummaryPass,
-    InteriorMutabilityPass, IssueCandidateBuilderPass, IssueVerifierPass, LanguageAdapterFactPass,
-    LeakDetectionPass, OwnershipSolverPass, PassManager, RaiiDropPass, RawFactCollectorPass,
-    StructuralInferencePass, SummaryBuilderPass, SurfaceClassifierPass, WriteToImmutablePass,
+    AbiLayoutPass, BorrowEscapePass, CallGraphPass, ContractGraphBuilderPass,
+    CrossFunctionLifetimePass, DangerSurfacePass, FFIBoundaryPass, FfiReturnCheckPass,
+    HeapProvenancePass, IRBehaviorSummaryPass, InteriorMutabilityPass, IssueCandidateBuilderPass,
+    IssueVerifierPass, LanguageAdapterFactPass, LeakDetectionPass, OwnershipSolverPass,
+    PassManager, RaiiDropPass, RawFactCollectorPass, StructuralInferencePass, SummaryBuilderPass,
+    SurfaceClassifierPass, WriteToImmutablePass,
 };
 use omniscope_types::{AnalysisConfig, OmniScopeConfig};
 use std::time::Instant;
@@ -106,6 +107,7 @@ impl Pipeline {
             self.pass_manager.register(ContractGraphBuilderPass::new());
         }
         self.pass_manager.register(OwnershipSolverPass::new());
+        self.pass_manager.register(CrossFunctionLifetimePass::new());
         self.pass_manager.register(IssueCandidateBuilderPass::new());
         self.pass_manager.register(IssueVerifierPass::new());
         self.pass_manager.register(LeakDetectionPass::new());
@@ -202,8 +204,8 @@ mod tests {
 
         assert_eq!(
             pipeline.pass_count(),
-            21,
-            "Pipeline must have 21 default passes registered"
+            22,
+            "Pipeline must have 22 default passes registered"
         );
     }
 

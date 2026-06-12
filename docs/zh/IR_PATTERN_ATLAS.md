@@ -220,7 +220,9 @@
 
 ---
 
-## 7. Zig IR 规律
+## 7. Zig IR 规律 (historical)
+
+> Zig support has been withdrawn from product scope. The IR patterns below are retained as a historical reference — they document observed patterns in the `zig_main.ll` and `boundary_test.ll` fixtures that remain in the test corpus.
 
 ### 7.1 Zig allocator vtable
 - **来源**: `boundary_test.ll`, `zig_main.ll`

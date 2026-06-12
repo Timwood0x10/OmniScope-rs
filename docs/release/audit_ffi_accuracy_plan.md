@@ -1,5 +1,7 @@
 # Audit: docs/ffi_accuracy_development_plan.md vs current code
 
+> **Historical reference.** Zig references in this audit (e.g. `BoundaryKind::ZigToC`, `is_zig_runtime_internal`, `zig_main.ll`) document features that existed when the audit was performed. Zig support has since been withdrawn from the product scope.
+
 - Date: 2026-06-07
 - Repo HEAD: `17bea02` (master) — `feat: add FP suppression rules for runtime-internal and single-language noise`
 - Plan file: `docs/ffi_accuracy_development_plan.md` (350 lines)

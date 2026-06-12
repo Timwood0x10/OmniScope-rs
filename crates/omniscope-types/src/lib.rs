@@ -21,6 +21,7 @@ pub mod config;
 pub mod effect;
 pub mod escape;
 pub mod evidence;
+pub mod lifetime;
 pub mod pointer_contract;
 pub mod resource_family;
 
@@ -45,6 +46,10 @@ pub use escape::EscapeKind;
 pub use evidence::{
     is_boundary_evidence, is_resource_evidence, BoundaryDetectionMethod, BoundaryEvidenceKind,
     CrossBoundaryEvidence, Evidence, EvidenceKind, IssueCandidateKind, ResourceEvidenceKind,
+};
+pub use lifetime::{
+    CrossFunctionLifetimeData, LifetimeViolationEntry, ResourceFateEntry, ResourceFateSummary,
+    ViolationKind,
 };
 pub use pointer_contract::PointerContract;
 pub use resource_family::{

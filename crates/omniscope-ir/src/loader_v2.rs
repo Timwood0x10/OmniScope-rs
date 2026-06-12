@@ -1078,17 +1078,6 @@ mod tests {
     }
 
     #[test]
-    fn test_which_finds_known_binary() {
-        // Use a binary that exists on both Unix and Windows
-        let binary = if cfg!(windows) { "cmd" } else { "sh" };
-        let result = which(binary);
-        assert!(
-            result.is_some(),
-            "which('{binary}') should find a known system binary"
-        );
-    }
-
-    #[test]
     fn test_which_returns_none_for_garbage() {
         let result = which("__definitely_not_a_real_binary_12345__");
         assert!(

@@ -17,8 +17,10 @@
 
 pub mod abi_layout_pass;
 pub mod contract_graph_builder;
+pub mod cross_function_lifetime_pass;
 pub(crate) mod evidence_bundle;
 pub mod ffi_return_check;
+pub mod incremental_cache;
 pub mod ir_behavior_summary_pass;
 #[cfg(test)]
 mod ir_behavior_summary_pass_tests;

@@ -1,5 +1,7 @@
 # FFI-Demo Validation Report (vs OmniScope v0.1.0 binary)
 
+> **Historical reference.** Zig validation results in this report document the performance of an earlier product scope that included Zig support. Zig has since been withdrawn from the product scope; the `zig_main.ll` fixture is retained as a historical validation sample only.
+
 Date: 2026-06-07
 Binary: `target/release/omniscope` built from working tree at branch `master`
 (commit `f533a4d` + uncommitted analysis pass changes). Corpus:

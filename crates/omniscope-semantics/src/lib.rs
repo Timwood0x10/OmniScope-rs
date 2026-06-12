@@ -77,6 +77,9 @@ pub use resource::type_confusion_detector::{
     type_confusion_cwe_id, ConfusionConfidence, TypeConfusionAnalysis, TypeConfusionDetector,
     TypeConfusionKind, TypeConfusionPattern,
 };
+pub use resource::wasm_adapter::{
+    WasAdapter, WasFFISafety, WasFunctionAnalysis, WasSemanticPattern,
+};
 
 #[cfg(test)]
 mod tests {

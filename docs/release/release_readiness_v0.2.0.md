@@ -16,6 +16,8 @@ Each issue was cross-checked against the actual source. Full per-file details:
 
 Both validations independently surface the **same three root-cause bugs**. The user's gut feeling ("我心里还是没底") was correct.
 
+**Note:** Zig validation results throughout this document are retained as historical reference. Zig support has been withdrawn from the product scope; the `zig_main.ll` fixture remains in the corpus as a historical validation sample only.
+
 ### Headline numbers
 
 | Corpus | Issues reported | TP | FP | FN | Precision | Recall |
@@ -92,7 +94,7 @@ When those numbers hit, ship as `v0.2.0`. Until then, the realistic options are:
 - **`v0.2.0-rc.1`** — pre-release, README claims softened, validation reports linked, "known limitations" section added.
 - **`v0.1.x` patch line** — keep iterating without committing to a "stable" tag yet.
 
-The current state is closer to "interesting prototype on Zig↔C" than to "production-grade FFI analyzer for 8 languages".
+The current state is closer to "interesting prototype on Zig↔C (historical)" than to "production-grade FFI analyzer for 8 languages".
 
 ---
 
@@ -100,7 +102,7 @@ The current state is closer to "interesting prototype on Zig↔C" than to "produ
 
 To be fair to the project:
 
-- **Zig↔C analysis is genuinely good** — 95 % precision, 100 % recall on `zig_main.ll`.
+- **Zig↔C (historical) analysis was genuinely good** — 95 % precision, 100 % recall on `zig_main.ll`.
 - **`llhttp.ll` correctly produced zero issues** — no false alarms on a clean vendored parser.
 - **The IR loader survives all 13 test files** without crashing — no OOMs, no panics, no hangs.
 - **CI infrastructure** is now functional (sccache removed, mold/LLVM 22 wired in, release.yml builds 4 targets).

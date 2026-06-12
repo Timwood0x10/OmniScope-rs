@@ -45,6 +45,7 @@ pub mod summary;
 pub mod summary_inference;
 pub mod type_confusion_detector;
 pub(crate) mod type_confusion_detector_helpers;
+pub mod wasm_adapter;
 
 #[cfg(test)]
 mod length_truncation_detector_tests;

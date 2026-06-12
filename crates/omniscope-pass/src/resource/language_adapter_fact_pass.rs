@@ -25,7 +25,7 @@
 
 use omniscope_core::Result;
 use omniscope_semantics::{
-    CSharpAdapter, CppAdapter, GoAdapter, JavaAdapter, PythonAdapter, SemanticFact,
+    CSharpAdapter, CppAdapter, GoAdapter, JavaAdapter, PythonAdapter, SemanticFact, WasAdapter,
 };
 use omniscope_types::config::Language;
 
@@ -75,28 +75,6 @@ impl Pass for LanguageAdapterFactPass {
             return Ok(result);
         };
 
-        // Short-circuit: if the module is single-language, there are no
-        // cross-language FFI boundaries, so language adapters are not needed.
-        if index.is_single_language {
-            return Ok(PassResult::new(self.name())
-                .with_nodes(0)
-                .with_duration(start.elapsed().as_millis() as u64));
-        }
-
-        // Initialize language adapters
-        let cpp_adapter = CppAdapter::new();
-        let python_adapter = PythonAdapter::new();
-        let java_adapter = JavaAdapter::new();
-        let go_adapter = GoAdapter::new();
-        let csharp_adapter = CSharpAdapter::new();
-
-        let mut adapter_facts: Vec<SemanticFact> = Vec::new();
-        let mut cpp_count: usize = 0;
-        let mut python_count: usize = 0;
-        let mut java_count: usize = 0;
-        let mut go_count: usize = 0;
-        let mut csharp_count: usize = 0;
-
         // Build language map from ModuleIndex metadata (priority source).
         // Maps function_name → Language, preferring FFI boundary call info
         // over function-level detection.
@@ -134,6 +112,57 @@ impl Pass for LanguageAdapterFactPass {
             func_names.insert(name.clone());
         }
 
+        // Short-circuit: if the module is single-language, there are no
+        // cross-language FFI boundaries, so most language adapters are not needed.
+        // However, WASM/JS modules may still have FFI patterns detectable via
+        // name/body heuristics, so we still run the WASM adapter even in
+        // single-language mode.
+        if index.is_single_language {
+            let ir_module = ctx.get_ir_module();
+            let wasm_adapter = WasAdapter::new();
+            let mut wasm_count: usize = 0;
+            let mut adapter_facts: Vec<SemanticFact> = Vec::new();
+
+            for func_name in &func_names {
+                if looks_like_wasm(func_name) {
+                    let body = ir_module.and_then(|m| m.function_bodies.get(func_name));
+                    let analysis = wasm_adapter.analyze_function(func_name, body);
+                    let facts = analysis.to_semantic_facts();
+                    wasm_count += facts.len();
+                    adapter_facts.extend(facts);
+                }
+            }
+
+            // Store WASM facts into context for downstream consumption
+            let mut existing_facts: Vec<SemanticFact> =
+                ctx.get("semantic_facts").unwrap_or_default();
+            existing_facts.extend(adapter_facts);
+            ctx.store("semantic_facts", existing_facts);
+
+            let mut result = PassResult::new(self.name())
+                .with_nodes(func_names.len())
+                .with_duration(start.elapsed().as_millis() as u64);
+            result.add_stat("adapter_facts_emitted", wasm_count);
+            result.add_stat("wasm_facts", wasm_count);
+            return Ok(result);
+        }
+
+        // Initialize language adapters
+        let cpp_adapter = CppAdapter::new();
+        let python_adapter = PythonAdapter::new();
+        let java_adapter = JavaAdapter::new();
+        let go_adapter = GoAdapter::new();
+        let csharp_adapter = CSharpAdapter::new();
+        let wasm_adapter = WasAdapter::new();
+
+        let mut adapter_facts: Vec<SemanticFact> = Vec::new();
+        let mut cpp_count: usize = 0;
+        let mut python_count: usize = 0;
+        let mut java_count: usize = 0;
+        let mut go_count: usize = 0;
+        let mut csharp_count: usize = 0;
+        let mut wasm_count: usize = 0;
+
         for func_name in &func_names {
             // Determine language: ModuleIndex first, heuristic fallback
             let lang = lang_map
@@ -154,6 +183,7 @@ impl Pass for LanguageAdapterFactPass {
                 lang == Language::Go || (lang == Language::Unknown && looks_like_go(func_name));
             let run_csharp = lang == Language::CSharp
                 || (lang == Language::Unknown && looks_like_csharp(func_name));
+            let run_wasm = lang == Language::Unknown && looks_like_wasm(func_name);
 
             if run_cpp {
                 let analysis = cpp_adapter.analyze_function(func_name, None);
@@ -189,6 +219,16 @@ impl Pass for LanguageAdapterFactPass {
                 csharp_count += facts.len();
                 adapter_facts.extend(facts);
             }
+
+            if run_wasm {
+                let body = ctx
+                    .get_ir_module()
+                    .and_then(|m| m.function_bodies.get(func_name));
+                let analysis = wasm_adapter.analyze_function(func_name, body);
+                let facts = analysis.to_semantic_facts();
+                wasm_count += facts.len();
+                adapter_facts.extend(facts);
+            }
         }
 
         let adapter_fact_count = adapter_facts.len();
@@ -209,6 +249,7 @@ impl Pass for LanguageAdapterFactPass {
         result.add_stat("java_facts", java_count);
         result.add_stat("go_facts", go_count);
         result.add_stat("csharp_facts", csharp_count);
+        result.add_stat("wasm_facts", wasm_count);
 
         Ok(result)
     }
@@ -283,4 +324,22 @@ fn looks_like_go(name: &str) -> bool {
 /// use ModuleIndex language detection for those instead.
 fn looks_like_csharp(name: &str) -> bool {
     name.contains("Marshal") || name.contains("SafeHandle") || name.contains("GCHandle")
+}
+
+/// Check if a function name looks like WASM/JS FFI.
+///
+/// **Fallback only** — WASM is a compilation target and has no dedicated
+/// Language variant; we rely entirely on name heuristics.
+fn looks_like_wasm(name: &str) -> bool {
+    name.starts_with("emscripten_")
+        || name.starts_with("emnapi_")
+        || name.starts_with("wasm_")
+        || name.starts_with("__wasm_call_ctors")
+        || name.starts_with("__import_")
+        || name.starts_with("__export_")
+        || name.starts_with("__asyncify")
+        || name.contains("EM_JS_")
+        || name.contains("EM_ASM_")
+        || name.contains("memory.grow")
+        || name.contains("__memory_grow")
 }

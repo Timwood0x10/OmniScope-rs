@@ -126,7 +126,7 @@ omniscope analyze ./mylib.bc --format sarif --output results.sarif
 omniscope analyze ./mylib.bc --boundary-only
 
 # Two explicit boundaries
-omniscope analyze ./mylib.bc --cross C:Cpp --cross Zig:C
+omniscope analyze ./mylib.bc --cross C:Cpp --cross Zig:C (historical)
 
 # Force the text parser
 omniscope analyze ./mylib.ll --strategy text-parser

@@ -14,10 +14,10 @@ functions = ["c_fft_forward", "c_hash", "c_matrix_multiply"]
 description = "C -> C++ bridge functions"
 
 [[ffi_boundary]]
-from = "zig"
+from = "go"
 to = "c"
 functions = ["c_alloc_buffer", "c_free_buffer"]
-description = "Zig -> C bridge functions"
+description = "Go -> C bridge functions"
 
 [[ffi_boundary]]
 from = "rust"

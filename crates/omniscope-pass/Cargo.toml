@@ -18,7 +18,9 @@ omniscope-semantics = { path = "../omniscope-semantics" }
 
 rayon = { workspace = true }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 indexmap = { workspace = true }
 
@@ -29,6 +31,7 @@ criterion = { workspace = true }
 omniscope-ir = { path = "../omniscope-ir" }
 omniscope-pipeline = { path = "../omniscope-pipeline" }
 tracing-subscriber = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "analysis_passes"

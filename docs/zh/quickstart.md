@@ -94,8 +94,8 @@ omniscope validate   # 校验 omniscope.toml
 | `INPUT` | 位置参数 | `.ll` / `.bc` / `.msgpack` 文件路径 |
 | `-o, --output PATH` | stdout | 输出文件路径 |
 | `-f, --format FMT` | `rich` | `rich` / `json` / `sarif` |
-| `-l, --language LANG` | — | 目标语言提示（c/cpp/rust/zig/go/python/java） |
-| `--cross FROM:TO` | — | FFI 边界，可重复（例：`--cross C:Cpp --cross Zig:C`） |
+| `-l, --language LANG` | — | 目标语言提示（c/cpp/rust/zig(historical)/go/python/java） |
+| `--cross FROM:TO` | — | FFI 边界，可重复（例：`--cross C:Cpp --cross Zig:C`(historical)） |
 | `--config PATH` | 自动搜索 | 指定 `omniscope.toml` 路径 |
 | `-v, --verbose` | false | 打印 pipeline 指标 |
 | `--timing` | false | 详细时间报告（每 Pass 拆分） |
@@ -205,7 +205,7 @@ SARIF 版本固定 v2.1.0（`crates/omniscope-cli/src/output/sarif.rs:1-6`），
 ```bash
 omniscope analyze libfoo.bc \
     --cross C:Cpp \
-    --cross Zig:C \
+    --cross Zig:C (historical) \
     --cross Rust:C
 ```
 
