@@ -22,6 +22,9 @@ impl LanguageDetector {
 
     /// Detects the source language from function name patterns
     pub fn detect_from_function(&self, function_name: &str) -> Language {
+        // Strip LLVM IR quotes that may surround names with special characters
+        let function_name = function_name.trim_matches('"');
+
         // Pre-check: Rust Itanium (_ZN) mangling has distinctive features
         // that distinguish it from C++ Itanium mangling. Rust _ZN names
         // use special dollar-sign encodings ($LT$, $u20$, $RF$, etc.)
@@ -180,6 +183,8 @@ impl LanguagePattern {
 /// C++ Itanium mangling uses St for std::, N for nested names, and
 /// never uses dollar-sign encodings or hash suffixes.
 pub fn is_rust_zn_mangling(name: &str) -> bool {
+    // Strip LLVM IR quotes that may surround names with special characters
+    let name = name.trim_matches('"');
     // Rust-specific dollar-sign encodings (never appear in C++ mangling)
     if name.contains("$LT$")
         || name.contains("$GT$")
@@ -208,6 +213,21 @@ pub fn is_rust_zn_mangling(name: &str) -> bool {
                 }
             }
         }
+    }
+
+    // Known Rust stdlib prefixes (Itanium mangling)
+    if name.starts_with("_ZN4core")
+        || name.starts_with("_ZN5alloc")
+        || name.starts_with("_ZN3std")
+        || name.starts_with("_ZN7cstring")
+        || name.starts_with("_ZN12alloc")
+    {
+        return true;
+    }
+
+    // Rust v0 mangling: _R prefix is exclusively Rust
+    if name.starts_with("_R") {
+        return true;
     }
 
     false

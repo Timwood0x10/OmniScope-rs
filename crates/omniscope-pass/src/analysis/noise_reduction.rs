@@ -242,12 +242,17 @@ impl NoiseReduction {
             "borrow_escape" => kinds.iter().any(|k| {
                 matches!(
                     k,
-                    SemanticKind::HeapProvenance | SemanticKind::GlobalProvenance
+                    SemanticKind::HeapProvenance
+                        | SemanticKind::GlobalProvenance
+                        | SemanticKind::LibraryRelease
                 )
             }),
-            "use_after_free" | "double_free" => kinds
-                .iter()
-                .any(|k| matches!(k, SemanticKind::RaiiDropRelease)),
+            "use_after_free" | "double_free" | "invalid_free" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    SemanticKind::RaiiDropRelease | SemanticKind::LibraryRelease
+                )
+            }),
             "cross_language_free" | "cross_family_free" => kinds.iter().any(|k| {
                 matches!(
                     k,

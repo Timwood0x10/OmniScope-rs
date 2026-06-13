@@ -231,7 +231,9 @@ impl Pass for FFIBoundaryPass {
                         && caller_lang != omniscope_types::config::Language::Unknown;
 
                     // Check for C++ mangled name called from C
-                    let is_cpp_ffi = callee_name.starts_with("_Z")
+                    let callee_unquoted = callee_name.trim_matches('"');
+                    let is_cpp_ffi = callee_unquoted.starts_with("_Z")
+                        && !omniscope_semantics::is_rust_zn_mangling(callee_name)
                         && caller_lang == omniscope_types::config::Language::C;
 
                     // Check for non-C calling external unknown function
@@ -283,7 +285,9 @@ impl Pass for FFIBoundaryPass {
                             for &nested_callee in nested_callees {
                                 let nested_lang =
                                     detect_cached(&mut lang_cache, &detector, nested_callee);
-                                let is_nested_cpp_ffi = nested_callee.starts_with("_Z");
+                                let nested_unquoted = nested_callee.trim_matches('"');
+                                let is_nested_cpp_ffi = nested_unquoted.starts_with("_Z")
+                                    && !omniscope_semantics::is_rust_zn_mangling(nested_callee);
                                 let is_nested_cross_lang = nested_lang
                                     != omniscope_types::config::Language::Unknown
                                     && nested_lang != caller_lang;
@@ -412,7 +416,9 @@ impl FFIBoundaryPass {
         // Skip FFI boundaries that are semantically safe (derived from IR patterns).
         // Exception: never suppress C++ cross-language FFI boundaries with Unknown
         // verdict — we can't verify their safety, so flag them as potentially unsafe.
-        let is_cpp_ffi_unknown = boundary.callee_name.starts_with("_Z")
+        let callee_unquoted = boundary.callee_name.trim_matches('"');
+        let is_cpp_ffi_unknown = callee_unquoted.starts_with("_Z")
+            && !omniscope_semantics::is_rust_zn_mangling(&boundary.callee_name)
             && boundary.caller_lang == omniscope_types::config::Language::C
             && assessment.verdict == omniscope_semantics::FFIVerdict::Unknown;
         if assessment.should_suppress_issue() && !is_cpp_ffi_unknown {

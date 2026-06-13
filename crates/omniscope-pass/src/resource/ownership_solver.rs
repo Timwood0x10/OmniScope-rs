@@ -591,6 +591,20 @@ fn apply_transition_at(
                 // The issue candidate builder will pick this up from the
                 // ownership states and release edges.
             }
+            omniscope_semantics::OwnershipError::InvalidTransition {
+                from_state: omniscope_semantics::OwnershipState::Borrowed,
+                event: "Escape",
+                ..
+            } => {
+                // C library pattern: borrowed pointer escapes (e.g. sqlite3Malloc
+                // returns a pointer that was borrowed from an allocator pool).
+                // This is expected behavior, not a bug.
+                tracing::debug!(
+                    "Borrowed->Escape ignored: instance {} in {} — C library pattern",
+                    instances[idx].id,
+                    function_name
+                );
+            }
             _ => {
                 tracing::warn!(
                     "Transition error for instance {} in {}: {:?}",

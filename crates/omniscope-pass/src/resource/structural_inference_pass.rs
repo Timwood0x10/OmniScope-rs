@@ -348,6 +348,15 @@ impl Pass for StructuralInferencePass {
                 kinds.push(SemanticKind::RuntimeInternal);
             }
 
+            // R-7: LibraryRelease — C library internal functions that are part of
+            // a known library's internal implementation (not the public API).
+            // These are recognized by their naming conventions (e.g. sqlite3_*,
+            // uv_*, curl_*). Functions already in the registry are handled by
+            // the SymbolPattern evidence path above.
+            if !kinds.contains(&SemanticKind::LibraryRelease) && is_c_library_internal(symbol) {
+                kinds.push(SemanticKind::LibraryRelease);
+            }
+
             if !kinds.is_empty() {
                 srt_resolutions.insert(symbol.clone(), kinds.clone());
 
@@ -689,6 +698,85 @@ fn is_ffi_boundary_function(name: &str) -> bool {
     false
 }
 
+/// Checks whether a function name is a C library internal function.
+///
+/// These are internal implementation functions of known C libraries
+/// (e.g. `sqlite3Malloc`, `pcache1Free`, `btreeInitPage`) that are not
+/// part of the public API but are still library-managed code. They should
+/// be annotated with `SemanticKind::LibraryRelease` to suppress FFI noise.
+fn is_c_library_internal(name: &str) -> bool {
+    // Must not be Rust/C++ mangled
+    if name.starts_with("_R") || name.starts_with("_Z") || name.contains("::") {
+        return false;
+    }
+    // Match known C library prefixes (broader than is_ffi_boundary_function
+    // because we want to catch internals like sqlite3Malloc, not just sqlite3_exec)
+    let prefixes = [
+        // SQLite
+        "sqlite3",
+        "sqlite",
+        "pcache",
+        "btree",
+        "vdbe",
+        "pager",
+        "wal",
+        "json",
+        "memjrnl",
+        "yy",
+        "tokenize",
+        "pthreadMutex",
+        "pthread",
+        "code",
+        "expr",
+        "where",
+        "select",
+        "trigger",
+        "attach",
+        "window",
+        "column",
+        "index",
+        "table",
+        "view",
+        "blob",
+        "memdb",
+        "unix",
+        "stat",
+        "group",
+        "concat",
+        "char",
+        "unhex",
+        "rename",
+        "fk",
+        "pragma",
+        "vacuum",
+        // zlib
+        "inflate",
+        "deflate",
+        "zlib_",
+        // OpenSSL
+        "ssl_",
+        "openssl_",
+        "EVP_",
+        "SSL_",
+        "BIO_",
+        "X509_",
+        "CRYPTO_",
+        // libuv
+        "uv_",
+        // curl
+        "curl_",
+        // PNG/JPEG
+        "png_",
+        "jpeg_",
+        // mimalloc
+        "mi_",
+        // GLib
+        "g_",
+        "glib_",
+    ];
+    prefixes.iter().any(|p| name.starts_with(p))
+}
+
 /// Checks whether a function name indicates a runtime-internal function.
 ///
 /// Runtime-internal functions are compiler/runtime-generated code that
@@ -725,6 +813,15 @@ pub fn is_runtime_internal(name: &str) -> bool {
     }
     // Rust v0 mangled alloc/core internals: _ZN5alloc..., _ZN4core...
     if name.starts_with("_ZN5alloc") || name.starts_with("_ZN4core") {
+        return true;
+    }
+    // Rust v0 mangling (modern compiler): _R prefix with crate path segments
+    // core:: functions: _RNvC<hash>4core... or _RINv...4core...
+    // alloc:: functions: _RNvC<hash>5alloc... or _RINv...5alloc...
+    // std:: functions:   _RNvC<hash>3std... or _RINv...3std...
+    if name.starts_with("_R")
+        && (name.contains("4core") || name.contains("5alloc") || name.contains("3std"))
+    {
         return true;
     }
     // Panic infrastructure (mirrors NoiseReduction safe_patterns)

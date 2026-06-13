@@ -454,7 +454,9 @@ impl ModuleIndex {
             };
 
             let is_llvm_intrinsic = callee_name.starts_with("llvm.");
-            let is_cpp_mangled = callee_name.starts_with("_Z");
+            let callee_unquoted = callee_name.trim_matches('"');
+            let is_cpp_mangled = callee_unquoted.starts_with("_Z")
+                && !omniscope_semantics::is_rust_zn_mangling(&callee_name);
 
             let lookup = registry.lookup(&callee_name);
             let symbol_effect = lookup.map(|e| e.effect);

@@ -200,10 +200,21 @@ fn build_summary_from_entry(
 
     summary.add_effect(effect);
     summary.confidence = 0.95;
-    summary.add_evidence(Evidence::new(
-        EvidenceKind::SymbolPattern,
-        format!("symbol '{symbol}' registered in family registry"),
-    ));
+    // Include "library" in description for library-managed families so the
+    // SRT loop assigns SemanticKind::LibraryRelease (R-7).
+    let is_library = matches!(
+        entry.family_id,
+        FamilyId::SQLITE_RESOURCE
+            | FamilyId::ZLIB_STREAM
+            | FamilyId::OPENSSL_RESOURCE
+            | FamilyId::MIMALLOC
+    );
+    let desc = if is_library {
+        format!("library symbol '{symbol}' registered in family registry")
+    } else {
+        format!("symbol '{symbol}' registered in family registry")
+    };
+    summary.add_evidence(Evidence::new(EvidenceKind::SymbolPattern, desc));
 
     summary
 }

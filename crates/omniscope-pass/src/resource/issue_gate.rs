@@ -127,7 +127,7 @@ where
     let key = &issue.symbol;
 
     match issue.kind {
-        // ── BorrowEscape: R-1 heap/global provenance + R-8 from_parameter ──
+        // ── BorrowEscape: R-1 heap/global provenance + R-7 library + R-8 from_parameter ──
         omniscope_core::IssueKind::BorrowEscape => {
             if has_kind(key, SemanticKind::HeapProvenance) {
                 return GateVerdict::SuppressHeapOrigin;
@@ -138,11 +138,20 @@ where
             if has_kind(key, SemanticKind::FromParameter) {
                 return GateVerdict::SuppressFromParameter;
             }
+            // R-7: C library internal pointer-passing patterns
+            if has_kind(key, SemanticKind::LibraryRelease) {
+                return GateVerdict::SuppressLibraryRelease;
+            }
         }
 
-        // ── UseAfterFree: R-3 RAII drop ──
-        omniscope_core::IssueKind::UseAfterFree if has_kind(key, SemanticKind::RaiiDropRelease) => {
-            return GateVerdict::SuppressRaii;
+        // ── UseAfterFree: R-3 RAII drop + R-7 library release ──
+        omniscope_core::IssueKind::UseAfterFree => {
+            if has_kind(key, SemanticKind::RaiiDropRelease) {
+                return GateVerdict::SuppressRaii;
+            }
+            if has_kind(key, SemanticKind::LibraryRelease) {
+                return GateVerdict::SuppressLibraryRelease;
+            }
         }
 
         // ── WriteToImmutable: R-0 MutableParam + R-2 InteriorMutability ──
@@ -200,9 +209,21 @@ where
             }
         }
 
-        // ── DoubleFree: R-3 RAII drop ──
-        omniscope_core::IssueKind::DoubleFree if has_kind(key, SemanticKind::RaiiDropRelease) => {
-            return GateVerdict::SuppressRaii;
+        // ── DoubleFree: R-3 RAII drop + R-7 library release ──
+        omniscope_core::IssueKind::DoubleFree => {
+            if has_kind(key, SemanticKind::RaiiDropRelease) {
+                return GateVerdict::SuppressRaii;
+            }
+            if has_kind(key, SemanticKind::LibraryRelease) {
+                return GateVerdict::SuppressLibraryRelease;
+            }
+        }
+
+        // ── InvalidFree: R-7 library release (library-internal cleanup) ──
+        omniscope_core::IssueKind::InvalidFree => {
+            if has_kind(key, SemanticKind::LibraryRelease) {
+                return GateVerdict::SuppressLibraryRelease;
+            }
         }
 
         // ── UncheckedReturn: R-9 allocator provenance ──

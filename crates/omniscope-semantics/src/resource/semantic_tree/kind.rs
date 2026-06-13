@@ -487,6 +487,7 @@ impl SemanticKind {
             SemanticKind::HeapProvenance
                 | SemanticKind::GlobalProvenance
                 | SemanticKind::FromParameter
+                | SemanticKind::LibraryRelease
                 | SemanticKind::PythonBorrowedRef
                 | SemanticKind::PythonGilProtected
                 | SemanticKind::GoDeferCleanup
@@ -512,6 +513,7 @@ impl SemanticKind {
         matches!(
             self,
             SemanticKind::RaiiDropRelease
+                | SemanticKind::LibraryRelease
                 | SemanticKind::PythonRefcountInc
                 | SemanticKind::PythonOwnedRef
                 | SemanticKind::GoDeferCleanup

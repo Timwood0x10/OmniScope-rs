@@ -1134,6 +1134,10 @@ fn is_alloc_callee(name: &str) -> bool {
 }
 
 /// Check if a callee is a release/dealloc function (for NULL-guarded release detection).
+///
+/// Only matches known C/C++ standard library deallocators. Library-internal
+/// cleanup functions (e.g. `pthreadMutexFree`, `sqlite3VdbeFree`) are NOT
+/// matched — they have different semantics than C `free()`.
 pub fn is_release_callee(name: &str) -> bool {
     matches!(
         name,
@@ -1147,11 +1151,6 @@ pub fn is_release_callee(name: &str) -> bool {
         | "GlobalFree"
     ) || name.starts_with("_Zdl") // operator delete
       || name.starts_with("_Zda") // operator delete[]
-      || name.contains("free")
-        || name.contains("dealloc")
-        || name.contains("release")
-        || name.contains("destroy")
-        || name.contains("delete")
 }
 
 // ──────────────────────────────────────────────────────────────────────────
