@@ -493,3 +493,109 @@ pub(crate) fn should_suppress_leak_for_allocator_escape(
 
     false
 }
+
+/// Check if a function is a thin wrapper that delegates to a single callee.
+///
+/// A thin wrapper function:
+/// - Has a small body (<= 12 instructions)
+/// - Calls exactly one unique function (single delegation target)
+/// - Does not contain any free/dealloc/release calls itself
+///
+/// This pattern is common in FFI bridge layers (e.g., rustls-ffi) where
+/// a public API function delegates to an internal implementation function.
+/// Double-free reports originating from the callee's internal memory
+/// management are false positives when attributed to the wrapper.
+///
+/// # Arguments
+/// * `func_name` - The function to check.
+/// * `ir_module` - Optional IR module for body analysis.
+///
+/// Check if a callee is a known release/dealloc function.
+///
+/// These are C/C++ standard library deallocators. If the single callee
+/// of a function is a release function, the function is NOT a thin
+/// wrapper — it's a function that directly calls free, which could be
+/// a real double free pattern.
+fn is_release_function(name: &str) -> bool {
+    matches!(
+        name,
+        "free"
+            | "cfree"
+            | "__rust_dealloc"
+            | "munmap"
+            | "VirtualFree"
+            | "HeapFree"
+            | "LocalFree"
+            | "GlobalFree"
+    ) || name.starts_with("_Zdl")
+        || name.starts_with("_Zda")
+}
+
+/// # Returns
+/// `true` if the function is a thin wrapper, `false` otherwise.
+pub fn is_thin_wrapper_function(
+    func_name: &str,
+    ir_module: Option<&omniscope_ir::IRModule>,
+) -> bool {
+    let mod_ref = match ir_module {
+        Some(m) => m,
+        None => return false,
+    };
+
+    let name_no_at = func_name.trim_start_matches('@');
+    let body = match mod_ref.function_bodies.get(name_no_at) {
+        Some(b) => b,
+        None => return false,
+    };
+
+    // Must have a small body (thin wrapper).
+    // LLVM IR generates ~6 instructions for even trivial functions
+    // (alloca, store, load, bitcast, call, ret). 12 allows for basic
+    // argument preparation + single call + ret, with some margin for
+    // null checks or simple control flow.
+    if body.instructions.len() > 12 {
+        return false;
+    }
+
+    // Collect unique callees (excluding LLVM intrinsics and debug info)
+    let callees: Vec<&str> = body
+        .call_instructions()
+        .iter()
+        .filter_map(|i| i.callee.as_deref())
+        .filter(|c| {
+            // Exclude LLVM intrinsics and debug info
+            !c.starts_with("llvm.")
+                && !c.starts_with("dbg.")
+                && !c.contains("lifetime")
+                && !c.contains("annotation")
+        })
+        .collect();
+
+    // Must call exactly one unique function (single delegation target)
+    let unique_callees: std::collections::HashSet<&str> = callees.iter().copied().collect();
+    if unique_callees.len() != 1 {
+        return false;
+    }
+
+    // If the single callee is itself a deallocator (free, dealloc, etc.),
+    // this is NOT a thin wrapper — it's a function that directly calls free,
+    // which could be a real double free pattern.
+    let callee_name = callees[0];
+    if is_release_function(callee_name) {
+        return false;
+    }
+
+    // The wrapper must not contain its own free/dealloc/release calls
+    // (other than the single delegation target)
+    let has_own_free = body.call_instructions().iter().any(|i| {
+        i.callee.as_deref().is_some_and(|c| {
+            c != callee_name
+                && (c.contains("free")
+                    || c.contains("dealloc")
+                    || c.contains("release")
+                    || c.contains("destroy"))
+        })
+    });
+
+    !has_own_free
+}

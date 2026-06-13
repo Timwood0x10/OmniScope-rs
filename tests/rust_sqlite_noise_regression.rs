@@ -7,10 +7,10 @@
 use omniscope_ir::IRModule;
 use omniscope_pipeline::Pipeline;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Run analysis on a .ll file and return issue counts by kind.
-fn analyze_and_count(path: &PathBuf) -> HashMap<String, usize> {
+fn analyze_and_count(path: &Path) -> HashMap<String, usize> {
     let module = IRModule::load_from_file(path).expect("Failed to load IR file");
     let mut pipeline = Pipeline::new();
     pipeline.register_default_passes();

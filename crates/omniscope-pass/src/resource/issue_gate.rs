@@ -70,6 +70,13 @@ pub enum GateVerdict {
     /// Suppressed because the symbol is a runtime/compiler internal (e.g.,
     /// __rust_alloc, _ZN5alloc*, __cxa_*), not a user-code FFI violation.
     SuppressRuntimeInternal,
+    /// Suppressed because the function is a thin wrapper that delegates to
+    /// a single callee. Double-free signals from the callee's internal
+    /// memory management are false positives when attributed to the wrapper.
+    SuppressWrapperDelegation,
+    /// Issue suppressed because the pointer is null-checked before dereference.
+    /// Pattern: `icmp eq ptr %x, null` → `br` → dereference only in non-null arm.
+    SuppressNullChecked,
 }
 
 impl GateVerdict {
@@ -102,6 +109,12 @@ impl GateVerdict {
             }
             GateVerdict::SuppressRuntimeInternal => {
                 "runtime/compiler internal symbol, not a user-code FFI violation"
+            }
+            GateVerdict::SuppressWrapperDelegation => {
+                "thin wrapper delegates to single callee; double-free from callee's internal memory management is FP"
+            }
+            GateVerdict::SuppressNullChecked => {
+                "pointer verified non-null by conditional branch before dereference"
             }
         }
     }
@@ -207,6 +220,18 @@ where
             if has_kind(key, SemanticKind::RuntimeInternal) {
                 return GateVerdict::SuppressRuntimeInternal;
             }
+            // Python reference counting / copy-constructor patterns.
+            // Functions like PyUnicode_FromString copy their input — the
+            // caller retains ownership of the original buffer.  Python's
+            // refcount system manages the returned object, not the input.
+            if has_kind(key, SemanticKind::PythonRefcountInc)
+                || has_kind(key, SemanticKind::PythonRefcountDec)
+                || has_kind(key, SemanticKind::PythonBorrowedRef)
+                || has_kind(key, SemanticKind::PythonOwnedRef)
+                || has_kind(key, SemanticKind::PythonGilProtected)
+            {
+                return GateVerdict::SuppressRaii;
+            }
         }
 
         // ── DoubleFree: R-3 RAII drop + R-7 library release ──
@@ -226,16 +251,25 @@ where
             }
         }
 
-        // ── UncheckedReturn: R-9 allocator provenance ──
+        // ── UncheckedReturn: R-9 allocator provenance + NullChecked ──
         // System/library allocators (malloc, calloc, aligned_alloc, etc.) are
         // expected to be used without explicit null checks in many codebases.
         // Suppressing when HeapProvenance is detected covers these cases.
+        // Also suppress when the pointer is null-checked before use.
         omniscope_core::IssueKind::UncheckedReturn => {
             if has_kind(key, SemanticKind::HeapProvenance) {
                 return GateVerdict::SuppressAllocatorReturn;
             }
             if has_kind(key, SemanticKind::GoRuntimeAlloc) {
                 return GateVerdict::SuppressAllocatorReturn;
+            }
+            if has_kind(key, SemanticKind::NullChecked) {
+                return GateVerdict::SuppressNullChecked;
+            }
+            if let Some(func) = issue.location.as_ref().and_then(|l| l.function.as_ref()) {
+                if func.as_str() != key.as_str() && has_kind(func, SemanticKind::NullChecked) {
+                    return GateVerdict::SuppressNullChecked;
+                }
             }
         }
 
@@ -417,6 +451,22 @@ where
             // RuntimeInternal: runtime wrapper
             if has_kind(key, SemanticKind::RuntimeInternal) {
                 return GateVerdict::SuppressRuntimeInternal;
+            }
+        }
+
+        // ── NullDereference: suppress when pointer is null-checked before use ──
+        // Pattern: `icmp eq ptr %x, null` → `br` → dereference only in non-null arm.
+        // The FfiReturnCheckPass detects this at the candidate level, but the gate
+        // provides a second defense layer via SRT-based NullChecked facts.
+        // Check by both the symbol (callee) and the enclosing function name.
+        omniscope_core::IssueKind::NullDereference => {
+            if has_kind(key, SemanticKind::NullChecked) {
+                return GateVerdict::SuppressNullChecked;
+            }
+            if let Some(func) = issue.location.as_ref().and_then(|l| l.function.as_ref()) {
+                if func.as_str() != key.as_str() && has_kind(func, SemanticKind::NullChecked) {
+                    return GateVerdict::SuppressNullChecked;
+                }
             }
         }
 
@@ -668,6 +718,8 @@ mod tests {
             GateVerdict::SuppressFromParameter,
             GateVerdict::SuppressAllocatorReturn,
             GateVerdict::SuppressRuntimeInternal,
+            GateVerdict::SuppressWrapperDelegation,
+            GateVerdict::SuppressNullChecked,
         ] {
             assert!(
                 !verdict.reason().is_empty(),
@@ -859,6 +911,24 @@ mod tests {
         );
     }
 
+    /// Objective: Verify OwnershipViolation with PythonOwnedRef is suppressed.
+    /// Invariants: Python copy constructors (PyUnicode_FromString etc.) copy
+    /// their input — the caller retains ownership of the original buffer.
+    /// Suppressing this avoids FPs where the analyzer thinks the C string
+    /// ownership was transferred to Python.
+    #[test]
+    fn test_gate_suppresses_ownership_violation_python_owned_ref() {
+        let issue = make_issue(IssueKind::OwnershipViolation, "PyUnicode_FromString");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "PyUnicode_FromString" && kind == SemanticKind::PythonOwnedRef
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressRaii,
+            "OwnershipViolation with PythonOwnedRef (copy constructor) must be suppressed"
+        );
+    }
+
     /// Objective: Verify OwnershipEscapeLeak with RuntimeInternal returns
     /// SuppressRuntimeInternal.
     /// Invariants: Runtime bridges are not user-level ownership escapes.
@@ -887,6 +957,90 @@ mod tests {
         assert!(
             reason.contains("runtime") || reason.contains("internal"),
             "SuppressRuntimeInternal reason must mention runtime/internal, got: {reason}"
+        );
+    }
+
+    // ── NullChecked suppression tests (CWE-476 FP reduction) ──────────
+
+    /// Objective: Verify NullDereference with NullChecked SRT entry is suppressed.
+    /// Invariants: When the enclosing function has null-check patterns (icmp+br),
+    /// the gate must suppress NullDereference to avoid false positives.
+    #[test]
+    fn test_gate_suppresses_null_dereference_null_checked() {
+        let issue = make_issue(IssueKind::NullDereference, "strlen");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "strlen" && kind == SemanticKind::NullChecked
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressNullChecked,
+            "NullDereference with NullChecked SRT entry must be suppressed"
+        );
+    }
+
+    /// Objective: Verify NullDereference without NullChecked passes the gate.
+    /// Invariants: When no null-check pattern exists, the issue must be reported.
+    #[test]
+    fn test_gate_allows_null_dereference_no_null_check() {
+        let issue = make_issue(IssueKind::NullDereference, "strlen");
+        let verdict = check_issue(&issue, |_, _| false);
+        assert_eq!(
+            verdict,
+            GateVerdict::Allow,
+            "NullDereference without NullChecked must pass the gate"
+        );
+    }
+
+    /// Objective: Verify UncheckedReturn with NullChecked SRT entry is suppressed.
+    /// Invariants: FFI returns that are null-checked before Load/Store/GEP
+    /// must be suppressed.
+    #[test]
+    fn test_gate_suppresses_unchecked_return_null_checked() {
+        let issue = make_issue(IssueKind::UncheckedReturn, "ffi_get");
+        let verdict = check_issue(&issue, |key, kind| {
+            key == "ffi_get" && kind == SemanticKind::NullChecked
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressNullChecked,
+            "UncheckedReturn with NullChecked SRT entry must be suppressed"
+        );
+    }
+
+    /// Objective: Verify NullDereference is suppressed when NullChecked is on
+    /// the enclosing function (location.function), not just the symbol.
+    /// Invariants: The gate checks both issue.symbol and issue.location.function.
+    #[test]
+    fn test_gate_suppresses_null_dereference_by_location_function() {
+        use omniscope_core::IssueLocation;
+        let mut issue = make_issue(IssueKind::NullDereference, "duckdb_prepare_error");
+        issue.location = Some(
+            IssueLocation::new(std::path::PathBuf::from("<ir>"), 0)
+                .with_function("result_from_duckdb_prepare"),
+        );
+        let verdict = check_issue(&issue, |key, kind| {
+            // NullChecked is on the enclosing function, not the callee
+            key == "result_from_duckdb_prepare" && kind == SemanticKind::NullChecked
+        });
+        assert_eq!(
+            verdict,
+            GateVerdict::SuppressNullChecked,
+            "NullDereference must be suppressed when enclosing function has NullChecked"
+        );
+    }
+
+    /// Objective: Verify SuppressNullChecked reason is informative.
+    /// Invariants: The reason must mention null-check or conditional branch.
+    #[test]
+    fn test_null_checked_verdict_reason() {
+        let reason = GateVerdict::SuppressNullChecked.reason();
+        assert!(
+            !reason.is_empty(),
+            "SuppressNullChecked reason must not be empty"
+        );
+        assert!(
+            reason.contains("null") || reason.contains("conditional"),
+            "SuppressNullChecked reason must mention null/conditional, got: {reason}"
         );
     }
 }

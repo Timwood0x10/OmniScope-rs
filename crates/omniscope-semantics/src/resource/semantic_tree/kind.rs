@@ -209,6 +209,12 @@ pub enum SemanticKind {
     /// has 3 bytes padding that packed-layout callers miss).
     AbiLayoutPadding,
 
+    // ── Null-check suppression (CWE-476 FP reduction) ──
+    /// Pointer is verified non-null by a conditional branch before use.
+    /// Pattern: `icmp eq ptr %x, null` → `br` → dereference only in non-null arm.
+    /// Suppresses NullDereference and UncheckedFfiReturn false positives.
+    NullChecked,
+
     // ── WASM/JS: WebAssembly and JavaScript FFI patterns ──
     /// WASM linear memory allocation (malloc/free in WASM heap).
     /// Memory allocated from the WASM linear memory region.
@@ -804,6 +810,8 @@ impl SemanticKind {
             SemanticKind::Unknown => 0.5,
             // ── Phase 6: ABI layout detection ──
             SemanticKind::AbiLayoutPadding => 0.2, // High risk: real FFI bug pattern
+            // ── Null-check suppression ──
+            SemanticKind::NullChecked => 0.9, // Verified non-null by conditional check
         }
     }
 

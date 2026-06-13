@@ -89,14 +89,25 @@ impl Pass for FfiReturnCheckPass {
             }
 
             // Now scan function bodies without borrow conflicts
+            // Track functions that have null-checked FFI returns for SRT suppression.
+            let mut null_checked_functions: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for (func_name, instructions) in functions_to_scan {
-                scan_function_body(
+                let had_null_checks = scan_function_body(
                     module,
                     &func_name,
                     &instructions,
                     &mut candidates,
                     &mut next_id,
                 );
+                if had_null_checks {
+                    null_checked_functions.insert(func_name.clone());
+                }
+            }
+            // Store null-checked functions for the IssueGate to suppress
+            // NullDereference/UncheckedReturn false positives via SRT.
+            if !null_checked_functions.is_empty() {
+                ctx.store("null_checked_functions", null_checked_functions);
             }
         }
 
@@ -120,13 +131,19 @@ impl Default for FfiReturnCheckPass {
 }
 
 /// Scans a single function body for unchecked FFI nullable returns.
+///
+/// Returns `true` if any null-check patterns (`icmp eq/ne ptr %x, null` + `br`)
+/// were detected — indicating the function is null-aware. This is used by the
+/// IssueGate to suppress NullDereference false positives via SRT NullChecked facts.
 fn scan_function_body(
     module: &IRModule,
     func_name: &str,
     instructions: &[IRInstruction],
     candidates: &mut Vec<IssueCandidate>,
     next_id: &mut u64,
-) {
+) -> bool {
+    // Track whether any null-check patterns were found in this function.
+    let mut found_null_check = false;
     // ── OOM-termination pre-check ──
     // If this function has a noreturn exit path (abort/unreachable/out_of_memory),
     // then unchecked FFI returns are likely on the OOM path — downgrade them
@@ -146,6 +163,13 @@ fn scan_function_body(
     // Maps register name -> callee name (for evidence context).
     let mut ffi_return_regs: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+
+    // Track which registers come from `noundef` FFI calls — these are
+    // guaranteed non-null by the compiler and should not produce
+    // UncheckedFfiReturn, but may still produce NullDereference if
+    // passed to a null-sink function (defensive check).
+    let mut noundef_return_regs: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     for inst in instructions {
         match inst.kind {
@@ -167,6 +191,12 @@ fn scan_function_body(
                                 // If the call returns into a register, track it
                                 if let Some(ref dest) = inst.dest {
                                     ffi_return_regs.insert(dest.clone(), callee_name.to_string());
+                                    // Track noundef returns separately — they are
+                                    // guaranteed non-null but still checked for
+                                    // NullDereference when passed to null-sinks.
+                                    if has_noundef_return(inst) {
+                                        noundef_return_regs.insert(dest.clone());
+                                    }
                                 }
                             }
                         }
@@ -237,6 +267,8 @@ fn scan_function_body(
             }
 
             IRInstructionKind::Icmp | IRInstructionKind::Fcmp if is_null_compare(inst) => {
+                // Mark function as null-aware for SRT suppression.
+                found_null_check = true;
                 // A comparison only proves a null check once control flow
                 // branches on the comparison result. This avoids treating
                 // dead/unused `icmp` instructions as guards while still
@@ -278,6 +310,7 @@ fn scan_function_body(
                     if op.starts_with('%')
                         && ffi_return_regs.contains_key(op)
                         && !null_checked.contains(op)
+                        && !noundef_return_regs.contains(op)
                     {
                         // Found an unchecked use! Create a candidate.
                         let id = *next_id;
@@ -330,6 +363,8 @@ fn scan_function_body(
             _ => {}
         }
     }
+
+    found_null_check
 }
 
 fn is_null_compare(inst: &IRInstruction) -> bool {
@@ -445,6 +480,38 @@ fn returns_pointer_from_raw(raw_text: &str) -> bool {
             let last_word = ret_type.split_whitespace().next_back().unwrap_or("");
             return last_word == "ptr";
         }
+    }
+
+    false
+}
+
+/// Returns true if the call instruction has `noundef` on its return value.
+///
+/// In LLVM IR, `noundef` on a pointer return indicates the function guarantees
+/// a valid (non-null) return value. This is a strong signal from the compiler
+/// that the function panics/aborts on error rather than returning null.
+///
+/// Pattern: `call noundef ptr @func(...)` or `tail call noundef ptr @func(...)`
+fn has_noundef_return(inst: &IRInstruction) -> bool {
+    let mut inst_clone = inst.clone();
+    inst_clone.ensure_raw();
+    let raw = inst_clone.raw_text.trim();
+
+    // Strip "tail " / "musttail " / "notail " prefix
+    let raw = raw
+        .strip_prefix("tail ")
+        .or_else(|| raw.strip_prefix("musttail "))
+        .or_else(|| raw.strip_prefix("notail "))
+        .unwrap_or(raw);
+
+    // After stripping prefix, check for "call noundef ptr" pattern
+    // The pattern is: "call [calling_conv] noundef ptr @func(...)"
+    if let Some(call_pos) = raw.find("call ") {
+        let after_call = &raw[call_pos + 5..];
+        // Skip calling conventions
+        let after_call = skip_calling_conventions(after_call);
+        // Check if "noundef" appears before "ptr"
+        return after_call.starts_with("noundef ");
     }
 
     false
@@ -1120,6 +1187,83 @@ mod tests {
         );
     }
 
+    /// FP guard: FFI calls with `noundef` on the return value are skipped for
+    /// UncheckedFfiReturn. `noundef` indicates the compiler guarantees a non-null
+    /// return (e.g., Rust wrappers that panic/abort on error).
+    #[test]
+    fn test_e2e_noundef_return_suppressed() {
+        use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
+        use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
+
+        let ir = r#"
+            declare ptr @duckdb_vector_get_data(ptr)
+
+            define void @noundef_test(ptr %vec) {
+                %p = call noundef ptr @duckdb_vector_get_data(ptr %vec)
+                %v = load i8, ptr %p
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let unchecked_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::UncheckedFfiReturn)
+            .collect();
+        assert!(
+            unchecked_candidates.is_empty(),
+            "FFI calls with noundef return must NOT produce UncheckedFfiReturn candidates, got {} candidates",
+            unchecked_candidates.len()
+        );
+    }
+
+    /// TP guard: `noundef` FFI returns passed to null-sink functions still
+    /// produce NullDereference. Even though the compiler guarantees non-null,
+    /// defensive null-sink checks are still valuable.
+    #[test]
+    fn test_e2e_noundef_null_sink_still_detected() {
+        use crate::pass::PassContext;
+        use omniscope_core::IssueCandidate;
+        use omniscope_ir::IRModule;
+        use omniscope_types::IssueCandidateKind;
+
+        let ir = r#"
+            declare ptr @duckdb_vector_get_data(ptr)
+            declare i64 @strlen(ptr)
+
+            define i64 @noundef_strlen(ptr %vec) {
+                %p = call noundef ptr @duckdb_vector_get_data(ptr %vec)
+                %len = call i64 @strlen(ptr %p)
+                ret i64 %len
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
+        let null_deref_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.kind == IssueCandidateKind::NullDereference)
+            .collect();
+        assert!(
+            !null_deref_candidates.is_empty(),
+            "noundef FFI return passed to strlen MUST produce NullDereference candidate, got {} candidates",
+            candidates.len()
+        );
+    }
+
     /// TP: Non-allocator FFI calls returning ptr still produce UncheckedReturn.
     #[test]
     fn test_e2e_non_allocator_still_detected() {
@@ -1153,6 +1297,78 @@ mod tests {
         assert!(
             !unchecked_candidates.is_empty(),
             "Non-allocator FFI (fopen) must still produce UncheckedFfiReturn candidate, got 0 candidates",
+        );
+    }
+
+    /// Objective: Verify null_checked_functions is populated when a function has
+    /// null-check patterns (icmp eq ptr + br).
+    /// Invariants: Functions with null-checked FFI returns must be tracked for
+    /// SRT-based NullChecked suppression in the IssueGate.
+    #[test]
+    fn test_e2e_null_checked_functions_populated() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        // Function with null-check pattern: icmp + br + use in non-null arm
+        let ir = r#"
+            declare ptr @ffi_get()
+
+            define void @null_aware_func() {
+                %p = call ptr @ffi_get()
+                %isnull = icmp eq ptr %p, null
+                br i1 %isnull, label %null, label %ok
+            null:
+                ret void
+            ok:
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let null_checked: std::collections::HashSet<String> =
+            ctx.get("null_checked_functions").unwrap_or_default();
+        assert!(
+            null_checked.contains("null_aware_func") || null_checked.contains("@null_aware_func"),
+            "Function with icmp+br null-check pattern must be in null_checked_functions, got: {:?}",
+            null_checked
+        );
+    }
+
+    /// Objective: Verify null_checked_functions is NOT populated when a function
+    /// has no null-check patterns.
+    /// Invariants: Functions without null-check patterns must not be tracked.
+    #[test]
+    fn test_e2e_null_checked_functions_not_populated_without_check() {
+        use crate::pass::PassContext;
+        use omniscope_ir::IRModule;
+
+        // Function without null-check pattern: direct use of FFI return
+        let ir = r#"
+            declare ptr @ffi_get()
+
+            define void @unaware_func() {
+                %p = call ptr @ffi_get()
+                ret void
+            }
+        "#;
+
+        let module = IRModule::parse_from_text(ir);
+        let mut ctx = PassContext::new();
+        ctx.store("ir_module", module);
+
+        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+
+        let null_checked: std::collections::HashSet<String> =
+            ctx.get("null_checked_functions").unwrap_or_default();
+        assert!(
+            !null_checked.contains("unaware_func") && !null_checked.contains("@unaware_func"),
+            "Function without null-check pattern must NOT be in null_checked_functions, got: {:?}",
+            null_checked
         );
     }
 }

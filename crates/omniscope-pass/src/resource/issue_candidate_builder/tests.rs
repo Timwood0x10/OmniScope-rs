@@ -1759,3 +1759,165 @@ mod may_alias_gate_tests {
         );
     }
 }
+
+// ── Thin wrapper function detection tests ──────────────────────────────────
+
+mod thin_wrapper_tests {
+    use crate::resource::issue_candidate_builder::helpers::is_thin_wrapper_function;
+    use omniscope_ir::IRModule;
+
+    /// Objective: Verify that a pure wrapper function (single callee, small body)
+    /// is detected as a thin wrapper.
+    /// Invariants: A function that just calls another function and returns
+    /// the result must be classified as a thin wrapper.
+    #[test]
+    fn test_thin_wrapper_pure_delegation() {
+        let ir = r#"
+            declare ptr @try_with_provider(ptr)
+
+            define ptr @rustls_platform_server_cert_verifier_with_provider(ptr %provider) {
+                %out = call ptr @try_with_provider(ptr %provider)
+                ret ptr %out
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        assert!(
+            is_thin_wrapper_function(
+                "rustls_platform_server_cert_verifier_with_provider",
+                Some(&module)
+            ),
+            "pure delegation function with single callee must be detected as thin wrapper"
+        );
+    }
+
+    /// Objective: Verify that a function with multiple callees is NOT a thin wrapper.
+    /// Invariants: A function calling two or more different functions must not
+    /// be classified as a thin wrapper.
+    #[test]
+    fn test_thin_wrapper_rejects_multiple_callees() {
+        let ir = r#"
+            declare ptr @malloc(i64)
+            declare void @free(ptr)
+
+            define void @multi_callee_func(ptr %p) {
+                %q = call ptr @malloc(i64 100)
+                call void @free(ptr %p)
+                ret void
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        assert!(
+            !is_thin_wrapper_function("multi_callee_func", Some(&module)),
+            "function calling multiple different functions must NOT be thin wrapper"
+        );
+    }
+
+    /// Objective: Verify that a function with its own free/dealloc calls is NOT
+    /// a thin wrapper, even if it has a single callee.
+    /// Invariants: A function that frees memory itself is doing real work,
+    /// not just delegating.
+    #[test]
+    fn test_thin_wrapper_rejects_function_with_own_free() {
+        let ir = r#"
+            declare ptr @inner_alloc(i64)
+            declare void @free(ptr)
+
+            define void @wrapper_with_free(ptr %p) {
+                %q = call ptr @inner_alloc(i64 100)
+                call void @free(ptr %p)
+                ret void
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        assert!(
+            !is_thin_wrapper_function("wrapper_with_free", Some(&module)),
+            "function that calls free in addition to its main callee must NOT be thin wrapper"
+        );
+    }
+
+    /// Objective: Verify that a function with too many instructions is NOT a thin wrapper.
+    /// Invariants: Large function bodies indicate real logic, not delegation.
+    #[test]
+    fn test_thin_wrapper_rejects_large_body() {
+        let ir = r#"
+            declare ptr @inner(i64)
+
+            define ptr @large_wrapper(i64 %n) {
+                %a = add i64 %n, 1
+                %b = add i64 %a, 2
+                %c = add i64 %b, 3
+                %d = add i64 %c, 4
+                %e = add i64 %d, 5
+                %f = add i64 %e, 6
+                %g = add i64 %f, 7
+                %h = add i64 %g, 8
+                %i = add i64 %h, 9
+                %j = add i64 %i, 10
+                %k = add i64 %j, 11
+                %result = call ptr @inner(i64 %k)
+                ret ptr %result
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        assert!(
+            !is_thin_wrapper_function("large_wrapper", Some(&module)),
+            "function with >12 instructions must NOT be thin wrapper"
+        );
+    }
+
+    /// Objective: Verify that a function with no IR body returns false.
+    /// Invariants: Without IR data, we cannot determine if it's a wrapper.
+    #[test]
+    fn test_thin_wrapper_no_body_returns_false() {
+        assert!(
+            !is_thin_wrapper_function("unknown_func", None),
+            "without IR module, must return false"
+        );
+    }
+
+    /// Objective: Verify that a function with no call instructions is NOT a thin wrapper.
+    /// Invariants: A leaf function (no calls) is not a wrapper.
+    #[test]
+    fn test_thin_wrapper_rejects_leaf_function() {
+        let ir = r#"
+            define i64 @leaf_func(i64 %n) {
+                %result = add i64 %n, 42
+                ret i64 %result
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        assert!(
+            !is_thin_wrapper_function("leaf_func", Some(&module)),
+            "leaf function with no calls must NOT be thin wrapper"
+        );
+    }
+
+    /// Objective: Verify JNA-style error-path cleanup is NOT a thin wrapper.
+    /// Invariants: A function that conditionally allocates/frees internally
+    /// (error-path cleanup pattern) must not be classified as a thin wrapper.
+    #[test]
+    fn test_thin_wrapper_rejects_error_path_cleanup() {
+        let ir = r#"
+            declare ptr @calloc(i64, i64)
+            declare void @free(ptr)
+            declare ptr @get_existing_tls(ptr)
+
+            define ptr @JNA_get_thread_storage(ptr %env) {
+                %existing = call ptr @get_existing_tls(ptr %env)
+                %is_null = icmp eq ptr %existing, null
+                br i1 %is_null, label %alloc, label %done
+            alloc:
+                %new = call ptr @calloc(i64 1, i64 64)
+                br label %done
+            done:
+                %result = phi ptr [ %existing, %0 ], [ %new, %alloc ]
+                ret ptr %result
+            }
+        "#;
+        let module = IRModule::parse_from_text(ir);
+        assert!(
+            !is_thin_wrapper_function("JNA_get_thread_storage", Some(&module)),
+            "function with error-path calloc/free must NOT be thin wrapper"
+        );
+    }
+}

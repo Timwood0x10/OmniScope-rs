@@ -409,6 +409,32 @@ pub(crate) fn is_ffi_bridge_layer_candidate(
         }
     }
 
+    // DoubleRelease in thin wrapper function → FP
+    // When a pure wrapper function (small body, single callee) has a
+    // DoubleRelease candidate, the double-free signal comes from the
+    // callee's internal memory management (e.g., Arc operations in
+    // rustls-ffi's try_with_provider), not from the wrapper itself.
+    if candidate.kind == IssueCandidateKind::DoubleRelease {
+        use crate::resource::issue_candidate_builder::is_thin_wrapper_function;
+        if is_thin_wrapper_function(alloc_caller, _ir_module) {
+            tracing::debug!(
+                "[FP-SUPPRESS] DoubleRelease suppressed: alloc_caller={} \
+                 is thin wrapper function",
+                alloc_caller
+            );
+            return true;
+        }
+        // Also check release_caller if different
+        if alloc_caller != release_caller && is_thin_wrapper_function(release_caller, _ir_module) {
+            tracing::debug!(
+                "[FP-SUPPRESS] DoubleRelease suppressed: release_caller={} \
+                 is thin wrapper function",
+                release_caller
+            );
+            return true;
+        }
+    }
+
     false
 }
 

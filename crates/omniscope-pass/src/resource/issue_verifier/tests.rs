@@ -1941,3 +1941,178 @@ fn test_memory_leak_still_works_after_fd_support() {
         "Memory leak detection must still work after adding FD support"
     );
 }
+
+// ── Thin wrapper DoubleRelease suppression tests ──────────────────────────
+
+/// Objective: Verify that DoubleRelease in a thin wrapper function is
+/// suppressed as a false positive by the FFI bridge layer gate.
+/// Invariants: A pure delegation function (single callee, small body) must
+/// not generate DoubleFree reports — the signal comes from the callee's
+/// internal memory management (e.g., Arc operations in rustls-ffi).
+#[test]
+fn test_double_release_thin_wrapper_suppressed() {
+    use omniscope_ir::IRModule;
+
+    let ir = r#"
+        declare ptr @try_with_provider(ptr)
+
+        define ptr @rustls_platform_server_cert_verifier_with_provider(ptr %provider) {
+            %out = call ptr @try_with_provider(ptr %provider)
+            ret ptr %out
+        }
+    "#;
+    let module = IRModule::parse_from_text(ir);
+    let candidate = IssueCandidate::new(
+        1,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_alloc_caller("rustls_platform_server_cert_verifier_with_provider")
+    .with_release_caller("rustls_platform_server_cert_verifier_with_provider");
+
+    assert!(
+        is_ffi_bridge_layer_candidate(&candidate, Some(&module)),
+        "DoubleRelease in thin wrapper function must be suppressed as FFI bridge layer FP"
+    );
+}
+
+/// Objective: Verify that DoubleRelease in a NON-wrapper function is NOT
+/// suppressed by the thin wrapper gate.
+/// Invariants: A function with multiple callees or large body must still
+/// generate DoubleFree reports — it's not just delegating.
+#[test]
+fn test_double_release_non_wrapper_not_suppressed() {
+    use omniscope_ir::IRModule;
+
+    let ir = r#"
+        declare ptr @malloc(i64)
+        declare void @free(ptr)
+
+        define void @real_function(ptr %p) {
+            %q = call ptr @malloc(i64 100)
+            call void @free(ptr %p)
+            call void @free(ptr %p)
+            ret void
+        }
+    "#;
+    let module = IRModule::parse_from_text(ir);
+    let candidate = IssueCandidate::new(
+        1,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_alloc_caller("real_function")
+    .with_release_caller("real_function");
+
+    assert!(
+        !is_ffi_bridge_layer_candidate(&candidate, Some(&module)),
+        "DoubleRelease in non-wrapper function must NOT be suppressed"
+    );
+}
+
+/// Objective: Verify that DoubleRelease in a function with error-path
+/// cleanup is NOT incorrectly classified as a thin wrapper.
+/// Invariants: Functions that internally allocate/free (error-path cleanup)
+/// must not be classified as thin wrappers.
+#[test]
+fn test_double_release_error_path_cleanup_not_suppressed() {
+    use omniscope_ir::IRModule;
+
+    let ir = r#"
+        declare ptr @calloc(i64, i64)
+        declare void @free(ptr)
+        declare ptr @get_existing(ptr)
+
+        define ptr @JNA_get_thread_storage(ptr %env) {
+            %existing = call ptr @get_existing(ptr %env)
+            %is_null = icmp eq ptr %existing, null
+            br i1 %is_null, label %alloc, label %done
+        alloc:
+            %new = call ptr @calloc(i64 1, i64 64)
+            br label %done
+        done:
+            %result = phi ptr [ %existing, %0 ], [ %new, %alloc ]
+            ret ptr %result
+        }
+    "#;
+    let module = IRModule::parse_from_text(ir);
+    let candidate = IssueCandidate::new(
+        1,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_alloc_caller("JNA_get_thread_storage")
+    .with_release_caller("JNA_get_thread_storage");
+
+    assert!(
+        !is_ffi_bridge_layer_candidate(&candidate, Some(&module)),
+        "DoubleRelease in function with error-path cleanup must NOT be suppressed as thin wrapper"
+    );
+}
+
+/// Objective: Verify that the thin wrapper suppression applies when the
+/// release_caller (not alloc_caller) is the thin wrapper.
+/// Invariants: Both alloc_caller and release_caller are checked for
+/// thin wrapper classification.
+#[test]
+fn test_double_release_thin_wrapper_release_caller() {
+    use omniscope_ir::IRModule;
+
+    let ir = r#"
+        declare ptr @inner_alloc(i64)
+
+        define ptr @wrapper_func(i64 %n) {
+            %p = call ptr @inner_alloc(i64 %n)
+            ret ptr %p
+        }
+    "#;
+    let module = IRModule::parse_from_text(ir);
+    let candidate = IssueCandidate::new(
+        1,
+        IssueCandidateKind::DoubleRelease,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_alloc_caller("other_func")
+    .with_release_caller("wrapper_func");
+
+    assert!(
+        is_ffi_bridge_layer_candidate(&candidate, Some(&module)),
+        "DoubleRelease must be suppressed when release_caller is thin wrapper"
+    );
+}
+
+/// Objective: Verify that UseAfterFree is NOT suppressed by thin wrapper
+/// detection (only DoubleRelease should be).
+/// Invariants: UseAfterFree in a thin wrapper is still a real bug — the
+/// wrapper returns a pointer that's then used after being freed.
+#[test]
+fn test_use_after_free_not_suppressed_by_thin_wrapper() {
+    use omniscope_ir::IRModule;
+
+    let ir = r#"
+        declare ptr @inner_func(ptr)
+
+        define ptr @wrapper(ptr %p) {
+            %result = call ptr @inner_func(ptr %p)
+            ret ptr %result
+        }
+    "#;
+    let module = IRModule::parse_from_text(ir);
+    let candidate = IssueCandidate::new(
+        1,
+        IssueCandidateKind::UseAfterFree,
+        FamilyId::C_HEAP,
+        "free",
+    )
+    .with_alloc_caller("wrapper")
+    .with_release_caller("wrapper");
+
+    assert!(
+        !is_ffi_bridge_layer_candidate(&candidate, Some(&module)),
+        "UseAfterFree must NOT be suppressed by thin wrapper detection"
+    );
+}

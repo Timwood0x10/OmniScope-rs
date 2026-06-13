@@ -52,6 +52,7 @@ use helpers::{
 };
 // Re-export public API
 pub use helpers::build_cross_family_candidate;
+pub use helpers::is_thin_wrapper_function;
 
 /// Issue candidate builder pass.
 ///

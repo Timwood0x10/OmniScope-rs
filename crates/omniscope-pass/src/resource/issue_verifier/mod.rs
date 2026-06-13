@@ -129,6 +129,24 @@ impl Pass for IssueVerifierPass {
             .get_ref::<std::collections::HashMap<String, Vec<SemanticKind>>>("srt_resolutions")
             .cloned();
 
+        // Merge NullChecked facts from FfiReturnCheckPass into SRT resolutions.
+        // Functions that have null-checked FFI returns (icmp + br pattern) get
+        // NullChecked added to their SRT entry, enabling the IssueGate to suppress
+        // NullDereference/UncheckedReturn false positives.
+        let null_checked_functions: std::collections::HashSet<String> =
+            ctx.get("null_checked_functions").unwrap_or_default();
+        let mut srt_resolutions = srt_resolutions.unwrap_or_default();
+        if !null_checked_functions.is_empty() {
+            for func in &null_checked_functions {
+                srt_resolutions
+                    .entry(func.clone())
+                    .or_default()
+                    .push(SemanticKind::NullChecked);
+            }
+            // Store updated resolutions back so emit_issue's gate sees NullChecked.
+            ctx.store("srt_resolutions", srt_resolutions.clone());
+        }
+
         // Get SRT facts for confidence-aware semantic verification
         let srt_facts = ctx
             .get_ref::<std::collections::HashMap<String, Vec<omniscope_semantics::SemanticFact>>>(
@@ -181,7 +199,7 @@ impl Pass for IssueVerifierPass {
             let evidence_bundle = EvidenceBundle::from_candidate(
                 &candidate,
                 memory_graph.as_ref(),
-                srt_resolutions.as_ref(),
+                Some(&srt_resolutions),
                 srt_facts.as_ref(),
             );
             let has_semantic_suppression = evidence_bundle.has_semantic_suppression();
