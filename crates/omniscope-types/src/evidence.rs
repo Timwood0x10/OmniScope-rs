@@ -147,6 +147,9 @@ pub enum BoundaryEvidenceKind {
     /// Runtime or compiler-generated bridge function that mediates
     /// between languages (e.g., Rust __rust_alloc).
     RuntimeBridge,
+    /// Call to a known allocator/deallocator function (from family registry).
+    /// Promotes weak seeds to strong when the callee has SymbolEffect::Acquire.
+    AllocatorCall,
 }
 
 /// Kind of resource evidence supporting resource contract analysis conclusions.

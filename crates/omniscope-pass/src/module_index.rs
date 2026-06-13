@@ -330,6 +330,17 @@ fn count_foreign_declared_externs(
     count
 }
 
+/// Check if the module has C++ mangled symbols (_Z prefix).
+/// Used to demote single-language modules to mixed when C++ operator
+/// new/delete patterns are present in a C-compiled file.
+fn has_cpp_mangled_symbols(module: &IRModule) -> bool {
+    module
+        .declarations
+        .keys()
+        .chain(module.functions.keys())
+        .any(|name| name.starts_with("_Z"))
+}
+
 /// Allocator-related name patterns that indicate a function belongs to
 /// an allocator crate (bun_alloc, mimalloc wrapper, etc.).
 ///
@@ -558,6 +569,15 @@ impl ModuleIndex {
                         dominant
                     );
                 }
+                // Demote if module has C++ mangled symbols (_Z prefix)
+                if early_single_language && has_cpp_mangled_symbols(module) {
+                    early_single_language = false;
+                    tracing::info!(
+                        target: "omniscope_pass::module_index",
+                        "demoted single-language to mixed: C++ mangled symbols found in {:?}-dominated module",
+                        dominant
+                    );
+                }
             }
         }
         if early_single_language {
@@ -630,6 +650,7 @@ impl ModuleIndex {
                     is_dangerous_libc,
                     is_exported_wrapper,
                     is_function_pointer_ffi: false, // requires deeper analysis
+                    symbol_effect: meta.symbol_effect,
                 });
 
                 // Only store non-suppression seeds for expansion
@@ -834,6 +855,15 @@ impl ModuleIndex {
                         target: "omniscope_pass::module_index",
                         "demoted single-language to mixed: {} foreign-ABI externs declared in {:?}-dominated module",
                         foreign_externs,
+                        dominant
+                    );
+                }
+                // Demote if module has C++ mangled symbols (_Z prefix)
+                if is_single_language && has_cpp_mangled_symbols(module) {
+                    is_single_language = false;
+                    tracing::info!(
+                        target: "omniscope_pass::module_index",
+                        "demoted single-language to mixed: C++ mangled symbols found in {:?}-dominated module",
                         dominant
                     );
                 }

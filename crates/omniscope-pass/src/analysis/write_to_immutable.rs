@@ -286,7 +286,7 @@ impl WriteToImmutablePass {
         let issue = Issue::new(
             issue_id,
             IssueKind::WriteToImmutable,
-            Severity::Warning,
+            Severity::Note,
             format!(
                 "Potential write to immutable memory: {} -> {} [symbol={}]",
                 caller, callee, symbol

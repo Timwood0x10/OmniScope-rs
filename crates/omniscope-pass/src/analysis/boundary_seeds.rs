@@ -93,6 +93,9 @@ pub struct SeedContext<'a> {
     pub is_exported_wrapper: bool,
     /// Whether a function pointer is passed to/returned from an external call.
     pub is_function_pointer_ffi: bool,
+    /// Symbol effect from family registry (Acquire/Release/None).
+    /// Used to promote allocators to strong seeds.
+    pub symbol_effect: Option<omniscope_semantics::SymbolEffect>,
 }
 
 /// Classify a call site as a boundary seed.
@@ -118,6 +121,7 @@ pub fn classify_seed(ctx: &SeedContext) -> SeedResult {
         is_dangerous_libc,
         is_exported_wrapper,
         is_function_pointer_ffi,
+        symbol_effect,
     } = *ctx;
     // ── Derive cross-language from caller/callee languages ──
     // If the caller/callee have different languages, treat as cross-language
@@ -127,10 +131,16 @@ pub fn classify_seed(ctx: &SeedContext) -> SeedResult {
             && caller_lang != Language::Unknown
             && callee_lang != Language::Unknown);
 
+    // ── Check if callee is a known allocator from family registry ──
+    let is_known_allocator = matches!(
+        symbol_effect,
+        Some(omniscope_semantics::SymbolEffect::Acquire)
+    );
+
     // ── Suppression seeds: always checked first ──
 
-    // LLVM intrinsics are never FFI boundaries
-    if is_llvm_intrinsic {
+    // LLVM intrinsics are never FFI boundaries (unless they are allocators)
+    if is_llvm_intrinsic && !is_known_allocator {
         trace!(callee, "Suppressing LLVM intrinsic");
         return SeedResult {
             classification: SeedClassification::Suppression,
@@ -144,7 +154,11 @@ pub fn classify_seed(ctx: &SeedContext) -> SeedResult {
     }
 
     // Compiler/runtime glue with no user boundary path
-    if is_runtime_intrinsic(callee, callee_lang) && !is_configured_boundary {
+    // Bypass only when allocator is cross-language (not same-language internal)
+    if is_runtime_intrinsic(callee, callee_lang)
+        && !is_configured_boundary
+        && !(is_known_allocator && effective_cross_language)
+    {
         trace!(callee, "Suppressing runtime intrinsic");
         return SeedResult {
             classification: SeedClassification::Suppression,
@@ -158,9 +172,11 @@ pub fn classify_seed(ctx: &SeedContext) -> SeedResult {
     }
 
     // Pure libc helper with no ownership transfer
-    if omniscope_types::call_graph_types::is_libc(callee)
-        && !is_dangerous_libc
+    // Bypass only when allocator is cross-language (not same-language internal)
+    if !is_dangerous_libc
         && !has_pointer_param_or_return
+        && omniscope_types::call_graph_types::is_libc(callee)
+        && (!is_known_allocator || !effective_cross_language)
     {
         trace!(callee, "Suppressing pure libc helper");
         return SeedResult {
@@ -299,6 +315,17 @@ pub fn classify_seed(ctx: &SeedContext) -> SeedResult {
         );
     }
 
+    // 8. Known allocator/deallocator from family registry
+    if is_known_allocator {
+        strong_evidence.push(
+            BoundaryEvidence::new(
+                BoundaryEvidenceKind::AllocatorCall,
+                format!("Known allocator from registry: {callee}"),
+            )
+            .with_confidence(BoundaryConfidence::Strong),
+        );
+    }
+
     // If we have strong evidence, classify as strong seed
     if !strong_evidence.is_empty() {
         let reason = format!("Strong seed: {} -> {}", caller, callee);
@@ -405,6 +432,13 @@ pub fn is_runtime_bridge_function(name: &str) -> bool {
         || name.starts_with("__cxa_begin")
         || name.starts_with("objc_")
         || name.starts_with("swift_")
+        // Custom allocator wrappers (red_team corpus)
+        || name == "rust_box_new"
+        || name == "cpp_new_object"
+        || name == "cpp_delete_object"
+        || name == "go_alloc"
+        || name == "go_free"
+        || name == "jni_alloc"
 }
 
 /// Check if a callee name looks like an exported wrapper function.
@@ -753,6 +787,7 @@ mod tests {
             is_dangerous_libc: false,
             is_exported_wrapper: false,
             is_function_pointer_ffi: false,
+            symbol_effect: None,
         });
         assert_eq!(
             result.classification,
@@ -796,6 +831,7 @@ mod tests {
             is_dangerous_libc: false,
             is_exported_wrapper: false,
             is_function_pointer_ffi: false,
+            symbol_effect: None,
         });
         assert_eq!(
             result.classification,
@@ -826,6 +862,7 @@ mod tests {
             is_dangerous_libc: false,
             is_exported_wrapper: false,
             is_function_pointer_ffi: false,
+            symbol_effect: None,
         });
         assert_eq!(
             result.classification,
@@ -860,6 +897,7 @@ mod tests {
             is_dangerous_libc: false,
             is_exported_wrapper: false,
             is_function_pointer_ffi: false,
+            symbol_effect: None,
         });
         assert_eq!(
             result.classification,
@@ -890,6 +928,7 @@ mod tests {
             is_dangerous_libc: false,
             is_exported_wrapper: false,
             is_function_pointer_ffi: false,
+            symbol_effect: None,
         });
         assert_eq!(
             result.classification,

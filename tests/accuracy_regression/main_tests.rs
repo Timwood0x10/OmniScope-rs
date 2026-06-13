@@ -20,15 +20,15 @@ fn test_accuracy_regression() {
         return;
     }
 
-    // Load all ffi-demo files and run pipeline (skip Zig — support removed)
+    // Load all ffi-demo files and run pipeline (skip Zig files — support removed)
     let ll_files: Vec<PathBuf> = std::fs::read_dir(&ffi_demo_dir)
         .unwrap_or_else(|e| panic!("Cannot read ffi-demo dir: {e}"))
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            let name = entry.path();
-            let ext = name.extension().is_some_and(|ext| ext == "ll");
-            let file_name = name.file_name().unwrap_or_default().to_string_lossy();
-            ext && !file_name.starts_with("zig_")
+            let path = entry.path();
+            let ext = path.extension().is_some_and(|ext| ext == "ll");
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            ext && !name.starts_with("zig_")
         })
         .map(|entry| entry.path())
         .collect();
@@ -563,7 +563,12 @@ fn test_ffi_demo_dump_all_issues() {
     let ll_files: Vec<PathBuf> = std::fs::read_dir(&ffi_demo_dir)
         .unwrap_or_else(|e| panic!("Cannot read ffi-demo dir: {e}"))
         .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ll"))
+        .filter(|entry| {
+            let path = entry.path();
+            let ext = path.extension().is_some_and(|ext| ext == "ll");
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            ext && !name.starts_with("zig_")
+        })
         .map(|entry| entry.path())
         .collect();
 

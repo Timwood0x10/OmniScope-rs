@@ -93,6 +93,10 @@ impl FamilyId {
     /// Mixing VirtualAlloc+free is a serious mismatch.
     pub const WIN32_VIRTUAL: FamilyId = FamilyId(24);
 
+    /// Swift allocation family: swift_alloc/swift_dealloc.
+    /// Used for Swift object allocation in FFI contexts.
+    pub const SWIFT_ALLOC: FamilyId = FamilyId(25);
+
     /// Starting ID for user-inferred families (from model mining).
     pub const USER_FAMILY_START: u16 = 256;
 
@@ -146,6 +150,7 @@ impl FamilyId {
             FamilyId::UNKNOWN => "UNKNOWN",
             FamilyId::WIN32_HEAP => "WIN32_HEAP",
             FamilyId::WIN32_VIRTUAL => "WIN32_VIRTUAL",
+            FamilyId::SWIFT_ALLOC => "SWIFT_ALLOC",
             _ => "unknown",
         }
     }

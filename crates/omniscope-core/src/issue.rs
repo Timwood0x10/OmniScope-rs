@@ -154,6 +154,15 @@ impl IssueKind {
         matches!(self, IssueKind::UseAfterFree)
     }
 
+    /// Returns true if this issue kind is diagnostic-only (not a memory safety bug).
+    /// Diagnostic issues are informational and should not count toward precision metrics.
+    pub fn is_diagnostic_only(&self) -> bool {
+        matches!(
+            self,
+            IssueKind::WriteToImmutable | IssueKind::UncheckedReturn
+        )
+    }
+
     /// Returns the CWE (Common Weakness Enumeration) ID if applicable.
     pub fn cwe_id(&self) -> Option<u32> {
         match self {

@@ -215,7 +215,7 @@ fn may_alias_inner(
 /// Used to follow def-use chains while normalising SSA roots. The map is
 /// rebuilt per call because function bodies are small in practice and the
 /// gate runs once per candidate.
-fn build_def_map(
+pub(crate) fn build_def_map(
     body: &omniscope_ir::FunctionBody,
 ) -> HashMap<String, &omniscope_ir::IRInstruction> {
     let mut map: HashMap<String, &omniscope_ir::IRInstruction> = HashMap::new();
@@ -233,7 +233,7 @@ fn build_def_map(
 /// For each `store %val, ptr %loc` instruction, records that `%val` was
 /// written to `%loc`. This enables `trace_root_set` to expand a `load`
 /// from `%loc` into all values that were ever stored to that location.
-fn build_store_map(body: &omniscope_ir::FunctionBody) -> HashMap<String, Vec<String>> {
+pub(crate) fn build_store_map(body: &omniscope_ir::FunctionBody) -> HashMap<String, Vec<String>> {
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for inst in &body.instructions {
         if inst.kind != IRInstructionKind::Store {
@@ -288,7 +288,7 @@ fn extract_store_value(raw: &str) -> Option<String> {
 /// produces a *set* of possible roots: when a `load` is encountered,
 /// the store map is consulted and all values ever stored to that location
 /// are recursively traced.
-fn trace_root_set(
+pub(crate) fn trace_root_set(
     reg: &str,
     defs: &HashMap<String, &omniscope_ir::IRInstruction>,
     store_map: &HashMap<String, Vec<String>>,

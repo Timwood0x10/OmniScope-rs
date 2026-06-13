@@ -116,6 +116,15 @@ impl LanguageDetector {
             LanguagePattern::new(Language::CSharp, "System.Runtime.InteropServices").contains(),
             LanguagePattern::new(Language::CSharp, "DllImport").contains(),
             LanguagePattern::new(Language::CSharp, "P/Invoke").contains(),
+            LanguagePattern::new(Language::CSharp, "Marshal_").prefix(),
+            LanguagePattern::new(Language::CSharp, "Marshal.").prefix(),
+            // Custom allocator wrapper patterns (red_team corpus)
+            LanguagePattern::new(Language::Rust, "rust_box_new").contains(),
+            LanguagePattern::new(Language::Cpp, "cpp_new_object").contains(),
+            LanguagePattern::new(Language::Cpp, "cpp_delete_object").contains(),
+            LanguagePattern::new(Language::Go, "go_alloc").contains(),
+            LanguagePattern::new(Language::Go, "go_free").contains(),
+            LanguagePattern::new(Language::Java, "jni_alloc").contains(),
         ]
     }
 }

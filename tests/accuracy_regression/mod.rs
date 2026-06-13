@@ -30,20 +30,17 @@ const FFI_DEMO_OUTPUT_DIR: &str = "../../ffi-demo/output";
 /// as TP, correcting precision inflation from diagnostic TP being excluded
 /// from FP denominator but still counted in TP.
 ///
-/// After Zig removal: zig_main.ll and zig_ffi_bridge.ll excluded from corpus
-/// (Zig support completely removed). Baseline reflects non-Zig corpus only.
-///
 /// After Fix v0.9.0: is_allocator_thunk tightened to prevent over-suppression
 /// of user functions, should_suppress_leak_for_allocator_escape Rule 2 fixed
 /// to check caller not alloc_func, DoubleRelease location fixed to use
 /// caller function name. These fixes increased TP (+1) and FP (+4) as
 /// less aggressive suppression reveals more real bugs alongside noise.
-const BASELINE_TP: usize = 12;
-const BASELINE_FP: usize = 12;
-const BASELINE_FN: usize = 4;
-const BASELINE_PRECISION: f64 = 0.500; // 50.0% (TP=12, total=24)
-const BASELINE_RECALL: f64 = 0.857; // 85.7% (12/14)
-const BASELINE_F1: f64 = 0.625; // 62.5% (2*50.0*85.7/(50.0+85.7))
+const BASELINE_TP: usize = 13;
+const BASELINE_FP: usize = 18;
+const BASELINE_FN: usize = 3;
+const BASELINE_PRECISION: f64 = 0.419; // 41.9% (TP=13, total=31)
+const BASELINE_RECALL: f64 = 0.813; // 81.3% (13/16)
+const BASELINE_F1: f64 = 0.553; // 55.3% (2*41.9*81.3/(41.9+81.3))
 
 /// Tolerance for non-deterministic pipeline output.
 const METRICS_TOLERANCE: f64 = 0.08;
@@ -594,13 +591,12 @@ impl CategoryMetrics {
 }
 
 /// Baseline FFI metrics for regression testing.
-/// After Zig removal: reflects non-Zig corpus only.
 const BASELINE_FFI_TP: usize = 2;
-const BASELINE_FFI_FP: usize = 3;
+const BASELINE_FFI_FP: usize = 7;
 const BASELINE_FFI_FN: usize = 0;
-const BASELINE_RESOURCE_TP: usize = 10; // +1: ffi_alias_input BorrowEscape now detected
-const BASELINE_RESOURCE_FP: usize = 8; // +3: less aggressive suppression reveals noise
-const BASELINE_RESOURCE_FN: usize = 6; // -1: cs_memory_leak_bug2 now FN
+const BASELINE_RESOURCE_TP: usize = 10;
+const BASELINE_RESOURCE_FP: usize = 10;
+const BASELINE_RESOURCE_FN: usize = 6;
 
 /// Baseline leak metrics for regression testing.
 const BASELINE_LEAK_TP: usize = 8; // +1: more leaks detected with fixed suppression

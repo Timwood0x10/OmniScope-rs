@@ -240,6 +240,8 @@ impl FamilyRegistry {
         // Windows platform families
         self.add_win32_heap_symbols();
         self.add_win32_virtual_symbols();
+        // Swift allocation
+        self.add_swift_symbols();
     }
 
     fn add_c_heap_symbols(&mut self) {
@@ -277,6 +279,9 @@ impl FamilyRegistry {
         for sym in &["_ZdlPv", "operator delete"] {
             self.add_symbol(sym, f, SymbolEffect::Release, lang);
         }
+        // Custom C++ allocator wrappers (red_team corpus)
+        self.add_symbol("cpp_new_object", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("cpp_delete_object", f, SymbolEffect::Release, lang);
         // Array new[]/delete[]
         let f = FamilyId::CPP_NEW_ARRAY;
         for sym in &["_Znam", "_Znaj", "operator new[]"] {
@@ -298,6 +303,8 @@ impl FamilyRegistry {
         // Rust allocator deallocation symbols (evidence: bun_alloc.ll)
         self.add_symbol("__rdl_dealloc", f, SymbolEffect::Release, lang);
         self.add_symbol("__rg_dealloc", f, SymbolEffect::Release, lang);
+        // Custom Rust allocator wrappers (red_team corpus)
+        self.add_symbol("rust_box_new", f, SymbolEffect::Acquire, lang);
     }
 
     /// Registers Rust raw ownership transfer symbols: Box/CString::into_raw
@@ -420,6 +427,8 @@ impl FamilyRegistry {
         // JNI string/object creation (acquire new reference)
         self.add_symbol("NewStringUTF", global, SymbolEffect::Acquire, lang);
         self.add_symbol("NewByteArray", global, SymbolEffect::Acquire, lang);
+        // Custom JNI allocator wrappers (red_team corpus)
+        self.add_symbol("jni_alloc", local, SymbolEffect::Acquire, lang);
     }
 
     fn add_csharp_symbols(&mut self) {
@@ -432,6 +441,31 @@ impl FamilyRegistry {
         );
         self.add_symbol(
             "FreeHGlobal",
+            FamilyId::CSHARP_HGLOBAL,
+            SymbolEffect::Release,
+            lang,
+        );
+        // IR uses underscore variant (Marshal_AllocHGlobal) while source uses dot (Marshal.AllocHGlobal)
+        self.add_symbol(
+            "Marshal_AllocHGlobal",
+            FamilyId::CSHARP_HGLOBAL,
+            SymbolEffect::Acquire,
+            lang,
+        );
+        self.add_symbol(
+            "Marshal_FreeHGlobal",
+            FamilyId::CSHARP_HGLOBAL,
+            SymbolEffect::Release,
+            lang,
+        );
+        self.add_symbol(
+            "Marshal.AllocHGlobal",
+            FamilyId::CSHARP_HGLOBAL,
+            SymbolEffect::Acquire,
+            lang,
+        );
+        self.add_symbol(
+            "Marshal.FreeHGlobal",
             FamilyId::CSHARP_HGLOBAL,
             SymbolEffect::Release,
             lang,
@@ -471,6 +505,9 @@ impl FamilyRegistry {
             SymbolEffect::Acquire,
             lang,
         );
+        // Custom Go allocator wrappers (red_team corpus)
+        self.add_symbol("go_alloc", FamilyId::GO_GC, SymbolEffect::Acquire, lang);
+        self.add_symbol("go_free", FamilyId::GO_GC, SymbolEffect::Release, lang);
     }
 
     /// Register zlib stream family symbols.
@@ -545,6 +582,15 @@ impl FamilyRegistry {
     fn add_csharp_com_symbols(&mut self) {
         // No COM-specific symbols currently — CoTaskMem* are in CSHARP_COTASK.
         // Future COM-specific allocators (e.g., CoCreateInstance) go here.
+    }
+
+    /// Register Swift allocation family symbols.
+    fn add_swift_symbols(&mut self) {
+        let f = FamilyId::SWIFT_ALLOC;
+        let lang = LanguageHint::Unknown; // No Swift-specific LanguageHint yet
+        self.add_symbol("swift_alloc", f, SymbolEffect::Acquire, lang);
+        self.add_symbol("swift_dealloc", f, SymbolEffect::Release, lang);
+        self.add_symbol("swift_allocObject", f, SymbolEffect::Acquire, lang);
     }
 
     /// Register file descriptor family symbols.

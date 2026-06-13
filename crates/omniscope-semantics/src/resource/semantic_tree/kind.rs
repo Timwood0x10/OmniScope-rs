@@ -661,7 +661,9 @@ impl SemanticKind {
         }
         if func_name.contains("DllImport")
             || func_name.contains("Marshal.AllocHGlobal")
+            || func_name.contains("Marshal_AllocHGlobal")
             || func_name.contains("Marshal.FreeHGlobal")
+            || func_name.contains("Marshal_FreeHGlobal")
             || func_name.contains("P/Invoke")
         {
             return SemanticKind::CsharpPinvokeMarshal;

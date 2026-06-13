@@ -1082,6 +1082,139 @@ impl Pass for IssueCandidateBuilderPass {
             })
             .count();
 
+        // ── Freed-pointer-as-argument UAF detection ──
+        // Scan IR for patterns where a freed pointer is passed as an argument
+        // to a subsequent function call. Tracks poisoned locations (globals/allocas
+        // that hold freed pointers) and propagates through load/store chains.
+        if let Some(ir_module) = ctx.get_ir_module() {
+            use crate::resource::may_alias::{build_def_map, build_store_map, trace_root_set};
+            use omniscope_semantics::resource::ir_pattern::is_release_callee;
+
+            for body in ir_module.function_bodies.values() {
+                let defs = build_def_map(body);
+                let stores = build_store_map(body);
+                // Registers that trace back to a freed pointer
+                let mut poisoned_regs: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                // Locations (globals/allocas) that hold a freed pointer
+                let mut poisoned_locs: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                // Map from freed root to the release callee name
+                let mut freed_by_root: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+
+                for inst in &body.instructions {
+                    if let omniscope_ir::IRInstructionKind::Call = &inst.kind {
+                        // Phase 1: Check if this call frees a pointer
+                        if let Some(callee) = &inst.callee {
+                            let callee_trimmed = callee.trim_start_matches('@');
+                            if is_release_callee(callee_trimmed) {
+                                if let Some(freed_reg) = inst.operands.first() {
+                                    let roots = trace_root_set(
+                                        freed_reg,
+                                        &defs,
+                                        &stores,
+                                        &mut std::collections::HashSet::new(),
+                                    );
+                                    for root in &roots {
+                                        poisoned_regs.insert(root.clone());
+                                        freed_by_root
+                                            .insert(root.clone(), callee_trimmed.to_string());
+                                    }
+                                    // Check store_map: if the freed pointer was stored to
+                                    // any location, poison that location too
+                                    if let Some(locs) = stores.get(freed_reg) {
+                                        for loc in locs {
+                                            poisoned_locs.insert(loc.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Phase 2: Check if any argument is a poisoned register
+                        if !poisoned_regs.is_empty() {
+                            for (i, operand) in inst.operands.iter().enumerate().skip(1) {
+                                let arg_roots = trace_root_set(
+                                    operand,
+                                    &defs,
+                                    &stores,
+                                    &mut std::collections::HashSet::new(),
+                                );
+                                let intersects =
+                                    arg_roots.iter().any(|r| poisoned_regs.contains(r));
+                                if intersects {
+                                    let callee_name = inst.callee.as_deref().unwrap_or("unknown");
+                                    let freed_by = arg_roots
+                                        .iter()
+                                        .find_map(|r| freed_by_root.get(r))
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("free");
+                                    let family = registry
+                                        .lookup(freed_by)
+                                        .map(|e| e.family_id)
+                                        .unwrap_or(FamilyId::C_HEAP);
+
+                                    let id = next_id;
+                                    next_id += 1;
+                                    let mut candidate = IssueCandidate::new(
+                                        id,
+                                        IssueCandidateKind::UseAfterFree,
+                                        family,
+                                        callee_name,
+                                    );
+                                    candidate = candidate.with_description(format!(
+                                        "freed pointer (by {}) passed as arg {} to {} — use-after-free",
+                                        freed_by, i, callee_name
+                                    ));
+                                    candidate.add_evidence(
+                                        Evidence::new(
+                                            EvidenceKind::UseAfterFree,
+                                            format!(
+                                                "pointer freed by {} is used as argument {} in call to {}",
+                                                freed_by, i, callee_name
+                                            ),
+                                        )
+                                        .with_family(family),
+                                    );
+                                    candidates.push(candidate);
+                                }
+                            }
+                        }
+                    } else if let omniscope_ir::IRInstructionKind::Store = &inst.kind {
+                        // Track store→load propagation: if storing to a location,
+                        // check if the stored value is poisoned
+                        if let (Some(dest), Some(src)) =
+                            (inst.operands.first(), inst.operands.get(1))
+                        {
+                            let src_roots = trace_root_set(
+                                src,
+                                &defs,
+                                &stores,
+                                &mut std::collections::HashSet::new(),
+                            );
+                            let src_poisoned = src_roots.iter().any(|r| poisoned_regs.contains(r));
+                            if src_poisoned {
+                                poisoned_locs.insert(dest.clone());
+                            } else {
+                                // Overwriting a poisoned location with a clean value un-poisons it
+                                poisoned_locs.remove(dest);
+                            }
+                        }
+                    } else if let omniscope_ir::IRInstructionKind::Load = &inst.kind {
+                        // If loading from a poisoned location, poison the result register
+                        if let (Some(dest), Some(src_loc)) =
+                            (inst.dest.as_ref(), inst.operands.first())
+                        {
+                            if poisoned_locs.contains(src_loc) {
+                                poisoned_regs.insert(dest.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let filtered_candidates: Vec<IssueCandidate> = candidates
             .into_iter()
             .filter(|candidate| {

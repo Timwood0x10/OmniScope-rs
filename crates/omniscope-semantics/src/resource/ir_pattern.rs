@@ -1134,7 +1134,7 @@ fn is_alloc_callee(name: &str) -> bool {
 }
 
 /// Check if a callee is a release/dealloc function (for NULL-guarded release detection).
-fn is_release_callee(name: &str) -> bool {
+pub fn is_release_callee(name: &str) -> bool {
     matches!(
         name,
         "free"
@@ -1151,6 +1151,7 @@ fn is_release_callee(name: &str) -> bool {
         || name.contains("dealloc")
         || name.contains("release")
         || name.contains("destroy")
+        || name.contains("delete")
 }
 
 // ──────────────────────────────────────────────────────────────────────────

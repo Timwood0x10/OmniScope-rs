@@ -83,7 +83,12 @@ fn run_accuracy_with_cross(cross_boundaries: Vec<(&str, &str)>) -> AccuracyResul
     let ll_files: Vec<PathBuf> = std::fs::read_dir(&ffi_demo_dir)
         .unwrap_or_else(|e| panic!("Cannot read ffi-demo dir: {e}"))
         .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ll"))
+        .filter(|entry| {
+            let path = entry.path();
+            let ext = path.extension().is_some_and(|ext| ext == "ll");
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            ext && !name.starts_with("zig_")
+        })
         .map(|entry| entry.path())
         .collect();
 
