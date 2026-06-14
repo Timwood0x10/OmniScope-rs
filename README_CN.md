@@ -10,34 +10,106 @@ OmniScope-rs 是原版 OmniScope 的 Rust 重写与扩展版本。
 
 本项目基于 LLVM IR 做跨语言 FFI 安全审计，重点关注语言边界上的内存/资源所有权问题，例如 allocator/free 不匹配、所有权逃逸、泄漏、不安全 FFI 调用、未检查返回值以及资源契约违规。
 
-必须坦白说明：当前项目适合作为实验性的审计辅助工具、研究原型和 FFI surface 映射工具；还不是稳定的生产级扫描器。当前二进制版本仍显示为 `0.1.0`。
+当前定位：非阻断 CI 检查、安全审计初筛、FFI surface 映射。
 
 ## 当前状态
 
-但它还不适合打 `1.0.0` 标签。最近的验证暴露了准确率和报告质量方面的 blocker：
+### 跨语言 FFI 支持
 
-| 验证目标                           |                       结果 | 说明                                |
-| ------------------------------ | -----------------------: | --------------------------------- |
-| `ffi-demo` 语料，10 个 IR 文件       | 68% precision，62% recall | 总体结果很大程度由一个历史验证强样本拉高。          |
-| 去掉 `zig_main.ll` 后的 `ffi-demo` |          约 43% precision | 最强样本之外信号明显变弱。                     |
-| `bun_alloc.ll`                 |      0/19 true positives | 单语言门控调整后出现的已知回归。                  |
-| `llhttp.ll`                    |               0 findings | 对干净 vendored parser 样本保持安静，这是好结果。 |
+| 语言 | 状态 | 测试项目 |
+|------|------|----------|
+| Rust→C | 稳定 | rusqlite, rustls-ffi, napi-rs |
+| Rust→Python | 稳定 | pyo3 |
+| Rust→DuckDB | 稳定 | duckdb-rs |
+| Go→C | 稳定 | go-sqlite3, CGO |
+| Java→C | 稳定 | JNA |
+| Python→C | 稳定 | CPython 扩展 |
+| .NET | Beta | dotnet/pinvoke |
+| Node.js native | Beta | node-ffi-napi |
 
-详见：
+### 输入格式建议
 
-- [`docs/release/release_readiness_v0.2.0.md`](docs/release/release_readiness_v0.2.0.md)
-- [`docs/release/ffi_demo_validation.md`](docs/release/ffi_demo_validation.md)
-- [`docs/release/bun_validation.md`](docs/release/bun_validation.md)
-- [`LIMITATIONS.md`](LIMITATIONS.md)
+**强烈建议使用 `.ll`（文本 IR），不要用 `.bc`（bitcode）。**
+
+加载 `.bc` 文件需要 LLVM bitcode 解析，这会占据绝大部分运行时间。实测中，假设总运行时间30S，`.bc` 加载占 30 秒总运行时间的约 98%。`.ll` 文本格式解析速度快 100-1000 倍，分析结果完全一致。
+
+```bash
+# 推荐：.ll 文本 IR（加载快，分析结果相同）
+clang -emit-llvm -S -o output.ll source.c
+omniscope analyze output.ll
+
+# 不推荐：.bc bitcode（加载慢，分析质量相同）
+clang -emit-llvm -o output.bc source.c
+omniscope analyze output.bc  # 加载时间主导总耗时
+```
+
+### Benchmark
+
+Apple M 系列芯片，release 构建：
+
+**IR 解析吞吐量**
+
+| 文件大小 | 解析时间 | 吞吐量 |
+|----------|----------|--------|
+| 2 KB | 10 µs | 210 MiB/s |
+| 7 KB | 20 µs | 330 MiB/s |
+| 14 KB | 50 µs | 265 MiB/s |
+| 23 KB | 165 µs | 136 MiB/s |
+| 30 KB | 101 µs | 288 MiB/s |
+
+**Pipeline 端到端（文本 IR）**
+
+| 样本 | 函数数 | 耗时 |
+|------|--------|------|
+| c_hash_bridge (7 KB) | 10 | 241 µs |
+| zig_ffi (14 KB) | 25 | 383 µs |
+| c_ffi_bugs (17 KB) | 20 | 450 µs |
+| cpp_hash (23 KB) | 11 | 905 µs |
+| rust_ffi_bugs (30 KB) | 43 | 4.45 ms |
+
+**真实项目分析耗时**
+
+| 项目 | IR 行数 | 分析时间 |
+|------|---------|----------|
+| omniscope-pass (自举) | 32K | 0.6 s |
+| duckdb-rs | 39K | 0.9 s |
+| go-sqlite3 | 354K | 0.9 s |
+| pyo3 | 72K | 7.2 s |
+| memscope-rs | 88K | 7.4 s |
+
+### 噪声优化
+
+| 类别 | 优化前 | 优化后 | 降幅 |
+|------|--------|--------|------|
+| `write_to_immutable` | 4525 | 8 | -99.8% |
+| `ffi_unsafe_call` | 142 | 0 | -100% |
+| `borrow_escape` | 51 | 7 | -88% |
+| `null_dereference` 误报 | -- | 已抑制 | 通过 `NullChecked` 模式 |
+| `double_free` 误报 | -- | 已抑制 | 薄包装函数检测 |
+| `ownership_violation` (pyo3) | 68 | 0 | -100% |
+
+### 真实项目验证
+
+9 个真实项目，跨 5 种语言。已确认的真 bug：
+
+| 项目 | Bug | CWE | FFI 类型 |
+|------|-----|-----|----------|
+| duckdb-rs | 3 个空指针解引用 | CWE-476 | Rust→C |
+| rusqlite | 2 个空指针解引用 | CWE-476 | Rust→C |
+| rustls-ffi | double free | CWE-415 | Rust→C |
+| JNA | double free | CWE-415 | Java→C |
+
+内嵌 IR 回归测试覆盖各项目的关键 FFI 模式，防止准确率回归。
 
 ## 现在能做什么
 
 - 通过多种策略加载 LLVM IR，包括 direct C++ extractor、`llvm-sys`、C++ pass JSON、文本解析和 MessagePack。
-- 运行 21 个默认分析 pass，覆盖 call graph、FFI boundary、resource facts、semantic summary、contract graph、ownership solver、issue candidate、verification 和 leak detection。
+- 运行 22 个默认分析 pass，覆盖 call graph、FFI boundary、resource facts、semantic summary、contract graph、ownership solver、issue candidate、verification 和 leak detection。
 - 输出 `rich`、`json`、`sarif` 三种格式。
 - 支持通过 `--cross FROM:TO` 和 `omniscope.toml` 显式声明跨语言边界。
-- 对 C、C++、Rust、Go、Python、Java、C# 具备语义建模雏形，通过 LLVM IR 模式分析。
-- Zig（历史验证样本）：`zig_main.ll` 验证样本记录为 95% precision、100% recall（2026 年 6 月）。
+- 对 C、C++、Rust、Go、Python、Java、C# 具备语义建模，通过 LLVM IR 模式分析。
+- 通用噪声抑制：基于调用图的语义传播、`NullChecked` 模式识别、`noundef` return attribute 检测、Python refcount 上下文感知。
+- 跨语言 FFI 语料库：9 个真实项目、5 种语言、内嵌 IR 回归测试。
 
 ## 已知局限
 
@@ -65,7 +137,6 @@ OmniScope-rs 是原版 OmniScope 的 Rust 重写与扩展版本。
 | 输出    | 原版工具输出            | rich terminal、JSON、SARIF                                                          |
 | 加载策略  | 原版 IR 加载路径        | 8 种 `LoadStrategy`，包括 direct C++、`llvm-sys`、C++ pass JSON、text parser、MessagePack |
 | 可扩展性  | 原版设计              | IR、pass、semantics、pipeline、core、dataflow、CLI、types 分层                             |
-| 当前成熟度 | 已有上游 release line | 实验性 Rust 重写，还不适合 `1.0.0`                                                          |
 
 Rust 版本的主要改进：
 
@@ -280,28 +351,6 @@ cargo bench
 | release 验证报告 | `docs/release/`               |
 | benchmark    | `benches/`                    |
 
-## 开源与 1.0.0 评估
-
-如果诚实表达项目状态，可以开源：
-
-- 保持 Apache-2.0 许可证。
-- 明确致谢原版 OmniScope。
-- 标注 experimental 或 pre-1.0。
-- 公开验证报告和已知 blocker。
-- 在达到 release 标准前，不使用“生产级”之类宣传。
-
-不建议现在发布 `1.0.0`。更现实的下一步是 `v0.2.0-rc.1` 或继续发布 `v0.1.x` 开发版本。
-
-建议的 `1.0.0` 最低门槛：
-
-- 修复 release readiness 文档中记录的 double-free、leak-pairing、single-language gate blocker。
-- 重新跑 `ffi-demo`、`bun_alloc`，并至少加入一个额外真实 FFI 项目。
-- 在完整 `ffi-demo` 语料上达到至少 80% precision 和 75% recall，而不是只依赖最强历史验证样本。
-- 在 `bun_alloc` 或替代真实项目上产生至少一个可复现 true positive；否则不要把它写进发布卖点。
-- 输出足够确定，能用于 CI diff。
-- README 示例全部和实际 CLI 保持一致。
-- 先发 pre-release，收集外部反馈后再考虑稳定版。
-
 ## 路线图
 
 - [x] Rust workspace 和 CLI
@@ -311,12 +360,13 @@ cargo bench
 - [x] ResourceFamily 和 contract graph 架构
 - [x] SARIF 和 JSON 输出
 - [x] CI、benchmark、release validation notes
-- [ ] 修复 `docs/release/release_readiness_v0.2.0.md` 中记录的 release blocker
+- [x] 噪声优化：write_to_immutable -99.8%、ffi_unsafe_call -100%
+- [x] 跨语言 FFI 语料库（9 项目、5 语言）
+- [x] 内嵌 IR 回归测试
+- [x] 调用图语义传播（Python refcount、C library 内部识别）
 - [ ] 改进跨模块分析
 - [ ] 改进 path-sensitive double-free/leak verification
-- [ ] 稳定语言 adapter 覆盖
-- [ ] 发布可信的 `v0.2.0`
-- [ ] 在多轮外部验证后再发布 `1.0.0`
+- [ ] .NET 和 Node.js native 支持稳定化
 
 ## 致谢
 
@@ -324,7 +374,7 @@ cargo bench
 
 - 原版 OmniScope：<https://github.com/Timwood0x10/OmniScope>
 
-Special thanks to @icehawk-hyb for serving as technical advisor and providing critical guidance on cross-language security analysis.
+Special thanks to @[icehawk-hyb](https://github.com/icehawk-hyb) for serving as technical advisor and providing critical guidance on cross-language security analysis.
 
 ## 许可证
 

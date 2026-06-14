@@ -1,6 +1,6 @@
 [package]
 name = "omniscope-dataflow"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 authors = ["OmniScope Team"]
 description = "Dataflow analysis engine for tracking value flow and dependencies in OmniScope"

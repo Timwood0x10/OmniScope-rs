@@ -1,6 +1,6 @@
 [package]
 name = "omniscope-pass"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 authors = ["OmniScope Team"]
 description = "Analysis passes for FFI safety, memory safety, and concurrency in OmniScope"

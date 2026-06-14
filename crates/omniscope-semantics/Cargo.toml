@@ -1,6 +1,6 @@
 [package]
 name = "omniscope-semantics"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 authors = ["OmniScope Team"]
 description = "Semantic analysis module for understanding program behavior in OmniScope"
