@@ -723,9 +723,7 @@ impl Default for IssueVerifierPass {
 /// - Destructor/drop/cleanup release path
 /// - Runtime/compiler origin
 /// - Unknown family policy
-// Note: used by integration tests in /tests/ which are outside this crate,
-// so rustc's dead-code analysis cannot see the callers. Not actually dead.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn verify_candidate(
     candidate: &IssueCandidate,
     registry: &FamilyRegistry,

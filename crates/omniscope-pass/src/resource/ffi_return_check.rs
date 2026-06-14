@@ -220,7 +220,9 @@ fn scan_function_body(
                                 {
                                     let id = *next_id;
                                     *next_id += 1;
-                                    let callee_name = ffi_return_regs.get(op).unwrap();
+                                    let callee_name = ffi_return_regs
+                                        .get(op)
+                                        .expect("op verified in ffi_return_regs");
                                     let source_callee = callee_name.trim_start_matches('@');
                                     let mut candidate = IssueCandidate::new(
                                         id,
@@ -315,7 +317,9 @@ fn scan_function_body(
                         // Found an unchecked use! Create a candidate.
                         let id = *next_id;
                         *next_id += 1;
-                        let callee_name = ffi_return_regs.get(op).unwrap();
+                        let callee_name = ffi_return_regs
+                            .get(op)
+                            .expect("op verified in ffi_return_regs");
                         let source_callee = callee_name.trim_start_matches('@');
                         let mut candidate = IssueCandidate::new(
                             id,
@@ -810,7 +814,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -850,7 +856,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let null_deref_candidates: Vec<_> = candidates
@@ -897,7 +905,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -935,7 +945,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         assert!(
@@ -974,7 +986,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         assert!(
@@ -1013,7 +1027,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         assert!(
@@ -1053,7 +1069,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         assert!(
@@ -1087,7 +1105,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -1131,7 +1151,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -1173,7 +1195,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -1211,7 +1235,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -1250,7 +1276,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let null_deref_candidates: Vec<_> = candidates
@@ -1287,7 +1315,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let candidates: Vec<IssueCandidate> = ctx.get("ffi_return_candidates").unwrap_or_default();
         let unchecked_candidates: Vec<_> = candidates
@@ -1328,7 +1358,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let null_checked: std::collections::HashSet<String> =
             ctx.get("null_checked_functions").unwrap_or_default();
@@ -1361,7 +1393,9 @@ mod tests {
         let mut ctx = PassContext::new();
         ctx.store("ir_module", module);
 
-        let _result = FfiReturnCheckPass::new().run(&mut ctx).unwrap();
+        let _result = FfiReturnCheckPass::new()
+            .run(&mut ctx)
+            .expect("FfiReturnCheckPass run failed");
 
         let null_checked: std::collections::HashSet<String> =
             ctx.get("null_checked_functions").unwrap_or_default();

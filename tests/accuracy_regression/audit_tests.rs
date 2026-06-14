@@ -74,7 +74,7 @@ fn test_expected_bug_metadata() {
         expected_boundary_kind: Some("CrossLanguage"),
         known_noise: false,
         forbidden_kinds: &[],
-        category: BugCategory::WrongRelease,
+        _category: BugCategory::WrongRelease,
     };
 
     // Verify all fields are accessible

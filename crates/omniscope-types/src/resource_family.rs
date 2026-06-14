@@ -121,7 +121,7 @@ impl FamilyId {
         // 确保 ID 在 USER_FAMILY_START 范围内
         let id = (hash % (u16::MAX as u32 - Self::USER_FAMILY_START as u32))
             + Self::USER_FAMILY_START as u32;
-        FamilyId(id as u16)
+        FamilyId(u16::try_from(id).expect("custom FamilyId overflow: USER_FAMILY_START too large"))
     }
 
     /// Returns a human-readable name for well-known family IDs.

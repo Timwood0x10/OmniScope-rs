@@ -300,7 +300,7 @@ impl RustAdapter {
     }
 
     /// Check if a function name looks like a Rust mangled symbol.
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn looks_like_rust(name: &str) -> bool {
         name.starts_with("_ZN")
             || name.starts_with("_R")

@@ -73,10 +73,10 @@ fn run_accuracy_with_cross(cross_boundaries: Vec<(&str, &str)>) -> AccuracyResul
         return AccuracyResult {
             tp: 0,
             fp: 0,
-            fn_count: 0,
+            _fn_count: 0,
             precision: 1.0,
-            recall: 1.0,
-            issues: vec![],
+            _recall: 1.0,
+            _issues: vec![],
         };
     }
 
@@ -151,10 +151,10 @@ fn run_accuracy_with_cross(cross_boundaries: Vec<(&str, &str)>) -> AccuracyResul
     AccuracyResult {
         tp: tp_count,
         fp: fp_count,
-        fn_count,
+        _fn_count: fn_count,
         precision,
-        recall,
-        issues: all_results
+        _recall: recall,
+        _issues: all_results
             .iter()
             .flat_map(|(_, result)| result.issues().to_vec())
             .collect(),
@@ -165,13 +165,10 @@ fn run_accuracy_with_cross(cross_boundaries: Vec<(&str, &str)>) -> AccuracyResul
 struct AccuracyResult {
     tp: usize,
     fp: usize,
-    #[allow(dead_code)]
-    fn_count: usize,
+    _fn_count: usize,
     precision: f64,
-    #[allow(dead_code)]
-    recall: f64,
-    #[allow(dead_code)]
-    issues: Vec<omniscope_core::Issue>,
+    _recall: f64,
+    _issues: Vec<omniscope_core::Issue>,
 }
 
 // ─── with_cross scenario tests ──────────────────────────────────────

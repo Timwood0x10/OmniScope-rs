@@ -39,7 +39,6 @@ pub(super) enum FunctionTermination {
 /// **Stub note**: The current `LeakDetectionPass::run()` uses a simpler
 /// per-function release check instead of full path enumeration. This type
 /// is retained as a placeholder for the planned path-sensitive upgrade.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LeakPath {
     /// The allocation site (function ID).
@@ -76,7 +75,6 @@ impl LeakPath {
 ///
 /// **Stub note**: Retained as a placeholder for the planned path-sensitive
 /// upgrade. The current implementation uses simpler per-function checks.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PathAnalysisResult {
     /// Total paths explored.

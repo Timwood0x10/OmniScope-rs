@@ -69,7 +69,7 @@ make check
 **Formatting & Linting:**
 - [ ] Code formatted with `make fmt`
 - [ ] No clippy warnings (`make check` shows 0 errors)
-- [ ] No `#[allow(dead_code)]` used to suppress warnings
+- [ ] No `#[allow()]` used to suppress warnings
 
 **Code Standards:**
 - [ ] File size ≤ 1000 lines (including comments and tests)

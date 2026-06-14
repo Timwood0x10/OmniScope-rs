@@ -184,30 +184,9 @@ fn has_pointer_in_signature(params: &[String], return_type: &str) -> bool {
     params.iter().any(|p| is_ptr_type(p)) || is_ptr_type(return_type)
 }
 
-/// Check if a function name is a language runtime intrinsic (cached version).
-///
-/// This is a copy of the function in call_graph.rs, used to avoid
-/// importing it and creating a circular dependency.
+/// Delegates to `ffi_boundary_detector::is_runtime_intrinsic` (canonical copy).
 fn is_runtime_intrinsic_cached(name: &str, language: Language) -> bool {
-    match language {
-        Language::Rust => {
-            name.starts_with("__rust_")
-                || name.starts_with("_ZN4core")
-                || name.starts_with("_ZN5alloc")
-        }
-        Language::C => {
-            name.starts_with("__libc_")
-                || name.starts_with("__cxa_")
-                || name.starts_with("_Unwind_")
-                || name.starts_with("_tlv_")
-        }
-        Language::Cpp => {
-            name.starts_with("__cxxabiv1")
-                || name.starts_with("__cxa_")
-                || name.starts_with("__gxx_")
-        }
-        _ => false,
-    }
+    crate::analysis::ffi_boundary_detector::is_runtime_intrinsic(name, language)
 }
 
 /// Check if a function name suggests it is part of the C++ runtime.

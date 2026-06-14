@@ -187,7 +187,7 @@ fn test_group_same_resource_id() {
         vec![0, 1],
         "both candidates in the group"
     );
-    assert_eq!(groups[0].key, ResourceKey::Instance(100));
+    assert_eq!(groups[0]._key, ResourceKey::Instance(100));
 }
 
 /// Objective: Candidates with different `resource_id`s form separate groups.

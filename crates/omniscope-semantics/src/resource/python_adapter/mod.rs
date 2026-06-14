@@ -188,7 +188,6 @@ impl PythonFFISafety {
 
 /// Python C API function with semantic information.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct PythonFunction {
     /// Function name
     name: String,
@@ -196,8 +195,8 @@ struct PythonFunction {
     pattern: PythonPattern,
     /// Whether it's safe
     is_safe: bool,
-    /// Family ID
-    family: FamilyId,
+    /// Family ID (reserved for future use)
+    _family: FamilyId,
 }
 
 /// Analysis result for a Python function from IR.
@@ -758,69 +757,69 @@ impl PythonAdapter {
                 name: "PyObject_New".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyObject_NewVar".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyType_GenericAlloc".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // String/bytes creation
             PythonFunction {
                 name: "PyBytes_FromStringAndSize".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyBytes_FromString".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyUnicode_FromString".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyUnicode_FromStringAndSize".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Collection creation
             PythonFunction {
                 name: "PyList_New".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyTuple_New".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyDict_New".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PySet_New".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Reference counting
             PythonFunction {
@@ -830,7 +829,7 @@ impl PythonAdapter {
                     is_null_safe: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "Py_XDECREF".to_string(),
@@ -839,7 +838,7 @@ impl PythonAdapter {
                     is_null_safe: true,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "Py_INCREF".to_string(),
@@ -848,7 +847,7 @@ impl PythonAdapter {
                     is_null_safe: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "Py_XINCREF".to_string(),
@@ -857,117 +856,117 @@ impl PythonAdapter {
                     is_null_safe: true,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Borrowed references
             PythonFunction {
                 name: "PyList_GetItem".to_string(),
                 pattern: PythonPattern::BorrowedReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyTuple_GetItem".to_string(),
                 pattern: PythonPattern::BorrowedReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyDict_GetItem".to_string(),
                 pattern: PythonPattern::BorrowedReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // New references
             PythonFunction {
                 name: "PyList_GetItemRef".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyDict_GetItemRef".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Steal references
             PythonFunction {
                 name: "PyTuple_SetItem".to_string(),
                 pattern: PythonPattern::StolenReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyList_SetItem".to_string(),
                 pattern: PythonPattern::StolenReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Object destruction
             PythonFunction {
                 name: "PyObject_Del".to_string(),
                 pattern: PythonPattern::ObjectDestruction,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyObject_Free".to_string(),
                 pattern: PythonPattern::ObjectDestruction,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Value creation
             PythonFunction {
                 name: "Py_BuildValue".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Long/integer creation
             PythonFunction {
                 name: "PyLong_FromLong".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyLong_FromUnsignedLong".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyLong_FromLongLong".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyLong_FromDouble".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Float creation
             PythonFunction {
                 name: "PyFloat_FromDouble".to_string(),
                 pattern: PythonPattern::NewReference,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // GIL management
             PythonFunction {
                 name: "PyGILState_Ensure".to_string(),
                 pattern: PythonPattern::GILAcquire,
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyGILState_Release".to_string(),
                 pattern: PythonPattern::GILRelease,
                 is_safe: true,
-                family,
+                _family: family,
             },
             // Exception handling
             PythonFunction {
@@ -977,7 +976,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: false,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_Format".to_string(),
@@ -986,7 +985,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: false,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_Occurred".to_string(),
@@ -995,7 +994,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_Clear".to_string(),
@@ -1004,7 +1003,7 @@ impl PythonAdapter {
                     is_clearer: true,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_Print".to_string(),
@@ -1013,7 +1012,7 @@ impl PythonAdapter {
                     is_clearer: true,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_ExceptionMatches".to_string(),
@@ -1022,7 +1021,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_GivenExceptionMatches".to_string(),
@@ -1031,7 +1030,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_NewException".to_string(),
@@ -1040,7 +1039,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_NewExceptionWithDoc".to_string(),
@@ -1049,7 +1048,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_Fetch".to_string(),
@@ -1058,7 +1057,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
             PythonFunction {
                 name: "PyErr_Restore".to_string(),
@@ -1067,7 +1066,7 @@ impl PythonAdapter {
                     is_clearer: false,
                 },
                 is_safe: true,
-                family,
+                _family: family,
             },
         ]
     }

@@ -309,26 +309,15 @@ fn calls_python_c_api(func_name: &str, ir_module: &omniscope_ir::IRModule) -> bo
         .function_bodies
         .get(name)
         .or_else(|| ir_module.function_bodies.get(&format!("\"{name}\"")));
-    let found_body = body.is_some();
-    let has_py_calls = body
-        .map(|b| {
-            b.call_instructions().iter().any(|inst| {
-                inst.callee.as_deref().is_some_and(|c| {
-                    let c = c.trim_start_matches('@');
-                    c.starts_with("Py") || c.starts_with("_Py")
-                })
+    body.map(|b| {
+        b.call_instructions().iter().any(|inst| {
+            inst.callee.as_deref().is_some_and(|c| {
+                let c = c.trim_start_matches('@');
+                c.starts_with("Py") || c.starts_with("_Py")
             })
         })
-        .unwrap_or(false);
-    if name.contains("pyo3") {
-        tracing::debug!(
-            "calls_python_c_api: name={}, body_found={}, has_py_calls={}",
-            name,
-            found_body,
-            has_py_calls
-        );
-    }
-    has_py_calls
+    })
+    .unwrap_or(false)
 }
 
 /// Check if a function name looks like Java/JNI.

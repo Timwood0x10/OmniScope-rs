@@ -11,7 +11,6 @@
 //! and gracefully falls back to the next.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -36,80 +35,6 @@ pub struct LoadedIr {
     /// Whether the result was loaded from cache.
     pub cache_hit: bool,
 }
-
-// ---------------------------------------------------------------------------
-// Backend cache for tool discovery
-// ---------------------------------------------------------------------------
-
-/// Cached paths for C++ pass backend tools.
-///
-/// This avoids repeated filesystem scans when checking availability
-/// or loading IR modules multiple times.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct CppPassBackend {
-    opt: PathBuf,
-    plugin: PathBuf,
-}
-
-/// Cached paths for direct C++ IR extractor.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct DirectCppBackend {
-    extractor: PathBuf,
-}
-
-/// Global cache for backend tool paths.
-///
-/// Uses `OnceLock` for thread-safe lazy initialization.
-/// The cache is populated on first access and reused for subsequent calls.
-#[allow(dead_code)]
-struct BackendCache {
-    cpp_pass: OnceLock<Option<CppPassBackend>>,
-    direct_cpp: OnceLock<Option<DirectCppBackend>>,
-}
-
-#[allow(dead_code)]
-impl BackendCache {
-    const fn new() -> Self {
-        Self {
-            cpp_pass: OnceLock::new(),
-            direct_cpp: OnceLock::new(),
-        }
-    }
-
-    /// Get or compute the C++ pass backend paths.
-    ///
-    /// Returns `Some(CppPassBackend)` if both `opt` and `SafetyExportPass.so` are found.
-    fn get_cpp_pass(&self) -> Option<&CppPassBackend> {
-        self.cpp_pass
-            .get_or_init(|| {
-                let opt = find_opt()?;
-                let plugin = find_pass_plugin()?;
-                Some(CppPassBackend { opt, plugin })
-            })
-            .as_ref()
-    }
-
-    /// Get or compute the direct C++ backend path.
-    ///
-    /// Returns `Some(DirectCppBackend)` if `ir_extractor` is found.
-    fn get_direct_cpp(&self) -> Option<&DirectCppBackend> {
-        self.direct_cpp
-            .get_or_init(|| {
-                let extractor = find_ir_extractor()?;
-                Some(DirectCppBackend { extractor })
-            })
-            .as_ref()
-    }
-}
-
-/// Global backend cache instance.
-///
-/// This is safe to use from multiple threads because `OnceLock` provides
-/// thread-safe initialization guarantees.
-#[allow(dead_code)]
-static BACKEND_CACHE: BackendCache = BackendCache::new();
 
 // ---------------------------------------------------------------------------
 // Strategy enum

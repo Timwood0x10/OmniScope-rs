@@ -129,8 +129,7 @@ impl FaultClass {
 /// Candidates under the same `ResourceKey`.
 pub(crate) struct FindingGroup {
     /// Shared resource identity for this group (auditable).
-    #[allow(dead_code)]
-    pub key: ResourceKey,
+    pub _key: ResourceKey,
     /// Indices into the source candidates array (zero-copy reference).
     pub members: Vec<usize>,
 }
@@ -200,7 +199,7 @@ pub(crate) fn group_candidates(candidates: &[IssueCandidate]) -> Vec<FindingGrou
                 let group_idx = groups.len();
                 key_to_group_idx.insert(key.clone(), group_idx);
                 groups.push(FindingGroup {
-                    key,
+                    _key: key,
                     members: vec![idx],
                 });
             }
@@ -386,7 +385,7 @@ fn reconcile_group(
 /// Produces a `ReconcileAction::Keep` for every candidate.
 ///
 /// Retained for testing; production code uses `reconcile_candidates`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn reconcile_all_keep(len: usize) -> Vec<ReconcileAction> {
     vec![ReconcileAction::Keep; len]
 }

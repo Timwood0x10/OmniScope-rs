@@ -267,31 +267,9 @@ fn classify_function(name: &str, is_declaration: bool, language: Language) -> Fu
 ///
 /// Runtime intrinsics should not be treated as user FFI boundaries.
 ///
-/// Note: For C++, we only filter actual compiler/runtime support functions
-/// (`__cxxabiv1::*`, `__cxa_*`), NOT all `_Z`-prefixed mangled names.
-/// User C++ functions like `_ZdlPv` (operator delete) are legitimate FFI
-/// boundaries when called from C code.
+/// Delegates to `ffi_boundary_detector::is_runtime_intrinsic` (canonical copy).
 fn is_runtime_intrinsic(name: &str, language: Language) -> bool {
-    match language {
-        Language::Rust => {
-            name.starts_with("__rust_")
-                || name.starts_with("_ZN4core")
-                || name.starts_with("_ZN5alloc")
-        }
-        Language::C => {
-            name.starts_with("__libc_")
-                || name.starts_with("__cxa_")
-                || name.starts_with("_Unwind_")
-                || name.starts_with("_tlv_")
-        }
-        Language::Cpp => {
-            // Only filter actual compiler runtime support, not all _Z mangled names
-            name.starts_with("__cxxabiv1")
-                || name.starts_with("__cxa_")
-                || name.starts_with("__gxx_")
-        }
-        _ => false,
-    }
+    super::ffi_boundary_detector::is_runtime_intrinsic(name, language)
 }
 
 /// Determine if a cross-language edge is a genuine FFI boundary.

@@ -625,7 +625,7 @@ mod tests {
         // First load (cache miss)
         let start = std::time::Instant::now();
         let entry1 = cache.check_cache(&test_file);
-        let miss_duration = start.elapsed();
+        let _miss_duration = start.elapsed();
         assert!(entry1.is_none(), "First load should be cache miss");
 
         // Save to cache
@@ -637,10 +637,6 @@ mod tests {
         let entry2 = cache.check_cache(&test_file);
         let hit_duration = start.elapsed();
         assert!(entry2.is_some(), "Second load should be cache hit");
-
-        // Verify cache hit is faster (should be sub-second)
-        println!("Cache miss took: {:?}", miss_duration);
-        println!("Cache hit took: {:?}", hit_duration);
 
         // Cache hit should be very fast (sub-millisecond typically)
         assert!(

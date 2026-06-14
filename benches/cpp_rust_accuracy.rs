@@ -54,8 +54,7 @@ struct ExpectedBug {
 
 /// Noise (safe) patterns that should NOT generate issues.
 struct ExpectedNoise {
-    #[allow(dead_code)]
-    label: &'static str,
+    _label: &'static str,
     /// Function name substring that identifies this noise pattern.
     func_substring: &'static str,
 }
@@ -85,11 +84,11 @@ const CPP_BUGS: &[ExpectedBug] = &[
 
 const CPP_NOISE: &[ExpectedNoise] = &[
     ExpectedNoise {
-        label: "N1: proper_new_delete",
+        _label: "N1: proper_new_delete",
         func_substring: "noise_n1",
     },
     ExpectedNoise {
-        label: "N2: proper_new_array_delete_array",
+        _label: "N2: proper_new_array_delete_array",
         func_substring: "noise_n2",
     },
 ];
@@ -119,11 +118,11 @@ const RUST_BUGS: &[ExpectedBug] = &[
 
 const RUST_NOISE: &[ExpectedNoise] = &[
     ExpectedNoise {
-        label: "N1: __rust_alloc+dealloc",
+        _label: "N1: __rust_alloc+dealloc",
         func_substring: "noise_n1",
     },
     ExpectedNoise {
-        label: "N2: __rust_alloc_zeroed+dealloc",
+        _label: "N2: __rust_alloc_zeroed+dealloc",
         func_substring: "noise_n2",
     },
 ];

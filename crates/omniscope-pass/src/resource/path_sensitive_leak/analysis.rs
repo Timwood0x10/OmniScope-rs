@@ -39,7 +39,6 @@ pub(super) struct PathExitState {
 /// - `AbortOrUnreachable` → program terminates, not a leak
 /// - `Unknown` → fall back to counting logic
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(super) enum ResourcePathState {
     /// Resource is still owned (not freed).
     Owned,

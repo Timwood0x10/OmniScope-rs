@@ -741,7 +741,14 @@ impl Pass for ContractGraphBuilderPass {
                     {
                         let (id, _, _) = func_acquires
                             .remove(pos)
-                            .expect("contract_graph_builder: position should be valid after find");
+                            .ok_or_else(|| {
+                                omniscope_core::OmniScopeError::Analysis(
+                                    omniscope_core::AnalysisError::PassFailed {
+                                        pass_name: "ContractGraphBuilder".to_string(),
+                                        message: "contract_graph_builder: position should be valid after find".to_string(),
+                                    },
+                                )
+                            })?;
                         id
                     } else {
                         // No same-family acquire — try controlled cross-family matching.
@@ -815,7 +822,14 @@ impl Pass for ContractGraphBuilderPass {
                     {
                         let (id, _, _) = func_acquires
                             .remove(pos)
-                            .expect("contract_graph_builder: position should be valid after find");
+                            .ok_or_else(|| {
+                                omniscope_core::OmniScopeError::Analysis(
+                                    omniscope_core::AnalysisError::PassFailed {
+                                        pass_name: "ContractGraphBuilder".to_string(),
+                                        message: "contract_graph_builder: position should be valid after find".to_string(),
+                                    },
+                                )
+                            })?;
                         id
                     } else {
                         *escape_id

@@ -49,15 +49,15 @@ const METRICS_TOLERANCE: f64 = 0.08;
 
 /// Classification of a bug for per-category metric tracking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // category field / variants used for future per-category assertions
+// category field / variants used for future per-category assertions
 enum BugCategory {
     MemoryDoubleFree,
     UseAfterFree,
     WrongRelease,
     Leak,
-    FdLeak,
+    _FdLeak,
     BoundaryDiagnostic,
-    BorrowEscape,
+    _BorrowEscape,
 }
 
 /// A known bug that the pipeline should detect.
@@ -82,8 +82,7 @@ struct ExpectedBug {
     /// If any forbidden kind IS detected, it counts as FP.
     forbidden_kinds: &'static [IssueKind],
     /// Category for per-metric accounting.
-    #[allow(dead_code)]
-    category: BugCategory,
+    _category: BugCategory,
 }
 
 impl ExpectedBug {
@@ -119,7 +118,7 @@ impl ExpectedBug {
             expected_boundary_kind: None,
             known_noise: false,
             forbidden_kinds: &[],
-            category,
+            _category: category,
         }
     }
 }
@@ -155,7 +154,7 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
         expected_boundary_kind: None,
         known_noise: false,
         forbidden_kinds: &[IssueKind::DoubleFree],
-        category: BugCategory::UseAfterFree,
+        _category: BugCategory::UseAfterFree,
     },
     // ── cpp_hash.ll bugs ─────────────────────────────────────────────
     ExpectedBug::simple(

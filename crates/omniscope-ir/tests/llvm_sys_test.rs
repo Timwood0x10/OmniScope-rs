@@ -12,21 +12,17 @@
 // Only compile when the llvm-backend feature is active.
 #![cfg(feature = "llvm-backend")]
 
-use std::path::Path;
-use std::sync::Once;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use omniscope_ir::llvm_sys_adapter::{is_available, parse_with_llvm_sys};
 use omniscope_ir::{IRInstructionKind, IRModule};
 
-/// Path to the test .ll file (created lazily by the test harness).
-fn test_ll_path() -> &'static Path {
-    Path::new("/tmp/test_llvm_sys.ll")
-}
-
-fn ensure_fixture_exists() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let content = r#"target triple = "arm64-apple-darwin24.6.0"
+/// Fixture content for the test .ll file.
+fn fixture_content() -> &'static str {
+    static CONTENT: OnceLock<String> = OnceLock::new();
+    CONTENT.get_or_init(|| {
+        r#"target triple = "arm64-apple-darwin24.6.0"
 target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128-Fn32"
 
 declare void @external_func(i32)
@@ -48,10 +44,28 @@ else:
 exit:
   ret i32 0
 }
-"#;
-        std::fs::write(test_ll_path(), content)
-            .expect("Failed to write test fixture /tmp/test_llvm_sys.ll");
-    });
+"#
+        .to_string()
+    })
+}
+
+/// Path to the test .ll file (created lazily in a per-process temp directory).
+fn test_ll_path() -> &'static Path {
+    static FIXTURE_PATH: OnceLock<PathBuf> = OnceLock::new();
+    FIXTURE_PATH
+        .get_or_init(|| {
+            let content = fixture_content();
+            // Create a unique temp directory per process — no sharing between
+            // concurrent test processes (e.g. parallel `cargo test` invocations).
+            let dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+            let path = dir.path().join("fixture.ll");
+            std::fs::write(&path, content).expect("Failed to write test fixture");
+            // Leak the TempDir so the directory lives for the process duration.
+            // This is acceptable for test code: the OS will clean up /tmp eventually.
+            Box::leak(Box::new(dir));
+            path
+        })
+        .as_path()
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -77,7 +91,6 @@ fn test_llvm_sys_is_available() {
 /// endianness marker, and little_endian flag is set.
 #[test]
 fn test_module_metadata() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse test .ll file");
 
     let triple = module
@@ -118,7 +131,6 @@ fn test_module_metadata() {
 /// external declaration (`external_func`) must be present.
 #[test]
 fn test_function_count() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     assert_eq!(
@@ -152,7 +164,6 @@ fn test_function_count() {
 /// 1 load, 1 call, 1 store, 1 ret.
 #[test]
 fn test_function_body_instructions() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -209,7 +220,6 @@ fn test_function_body_instructions() {
 /// `external_func` (without the `@` prefix).
 #[test]
 fn test_call_target() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let call_insts = module
@@ -243,7 +253,6 @@ fn test_call_target() {
 /// a non-None result type.
 #[test]
 fn test_result_type_populated() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -300,7 +309,6 @@ fn test_result_type_populated() {
 /// `i32` element type derived from the pointer operand.
 #[test]
 fn test_element_type_populated() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -340,7 +348,6 @@ fn test_element_type_populated() {
 /// present in the parsed instruction.
 #[test]
 fn test_icmp_predicate() {
-    ensure_fixture_exists();
     let module = parse_with_llvm_sys(test_ll_path()).expect("Failed to parse");
 
     let body = module
@@ -407,7 +414,6 @@ fn test_empty_module() {
 /// and per-kind instruction counts for `test_function`.
 #[test]
 fn test_cross_validate_with_text_parser() {
-    ensure_fixture_exists();
     let ll_content = std::fs::read_to_string(test_ll_path()).expect("Failed to read .ll file");
 
     let text_module = IRModule::parse_from_text(&ll_content);

@@ -238,12 +238,6 @@ impl PassManager {
         Ok((results, timings, issues))
     }
 
-    /// Build a module-level cache key for the given pass.
-    #[allow(dead_code)]
-    fn make_cache_key(&self, pass_name: &str) -> CacheKey {
-        CacheKey::new(self.file_fingerprint, pass_name, "", self.config_hash)
-    }
-
     /// Try to retrieve a cached pass result.
     ///
     /// Returns `Some(PassResult)` on cache hit, `None` on miss.

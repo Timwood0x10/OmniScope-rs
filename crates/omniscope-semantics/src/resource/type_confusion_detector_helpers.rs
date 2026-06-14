@@ -3,7 +3,6 @@
 //! This module contains internal helper functions used by TypeConfusionDetector
 //! for FFI call collection, type parsing, and struct size estimation.
 //! All functions are `pub(crate)` to allow access from tests.
-#![allow(dead_code)]
 
 use omniscope_ir::{FunctionBody, IRInstruction, IRInstructionKind};
 
