@@ -165,6 +165,21 @@ pub struct ModuleIndex {
     pub is_allocator_crate: bool,
 }
 
+/// Captures the relationship between call sites in the "caller" module and
+/// the function definition in the "callee" module. Created by
+/// [`ModuleIndex::resolve_cross_module_call`].
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct CrossModuleCallChain<'a> {
+    /// The callee function name (trimmed, no leading `@`).
+    pub callee_name: String,
+    /// Call metadata for each call site in the local module that calls
+    /// the cross-module function.
+    pub call_sites: Vec<&'a CachedCallMeta>,
+    /// Function metadata from the other module where the callee is defined.
+    pub definition_meta: &'a CachedFunctionMeta,
+}
+
 /// Check if a function signature involves pointer types (params or return).
 ///
 /// Pointer types are identified by common IR patterns: `*`, `ptr`, `i8*`,
@@ -980,6 +995,77 @@ impl ModuleIndex {
     pub fn is_allocator_crate(&self) -> bool {
         self.is_allocator_crate
     }
+
+    /// Looks up function metadata in this index first, then falls back to another index.
+    ///
+    /// This is used for cross-module analysis where a function might be declared in one
+    /// module and defined in another. The local lookup is checked first; if absent, the
+    /// fallback index is consulted.
+    ///
+    /// # Arguments
+    /// * `name` - The function name to look up.
+    /// * `other_index` - Another `ModuleIndex` to search if not found locally.
+    #[allow(dead_code)]
+    pub(crate) fn function_meta_cross_module<'a>(
+        &'a self,
+        name: &str,
+        other_index: &'a ModuleIndex,
+    ) -> Option<&'a CachedFunctionMeta> {
+        let trimmed = name.trim_start_matches('@');
+        self.function_metas
+            .get(trimmed)
+            .or_else(|| other_index.function_metas.get(trimmed))
+    }
+
+    /// Resolves a cross-module function call chain from this module to
+    /// another module.
+    ///
+    /// For a given callee function name, this method:
+    /// 1. Checks if the callee is called (declared but not defined) in this module
+    /// 2. Checks if the callee is defined in the other module
+    /// 3. Returns the call metadata for all call sites in this module that
+    ///    reference the callee, along with the definition metadata from the
+    ///    other module
+    ///
+    /// Returns `None` if either:
+    /// - The callee has no local call sites
+    /// - The callee is not defined in the other module
+    #[allow(dead_code)]
+    pub(crate) fn resolve_cross_module_call<'a>(
+        &'a self,
+        callee: &str,
+        other_index: &'a ModuleIndex,
+    ) -> Option<CrossModuleCallChain<'a>> {
+        let trimmed = callee.trim_start_matches('@');
+
+        // Find local call sites for this callee
+        let call_indices = self.callers_of(trimmed);
+        if call_indices.is_empty() {
+            return None;
+        }
+
+        // Check if the callee is defined in the other module
+        let def_meta = other_index.function_metas.get(trimmed)?;
+        if def_meta.is_declaration {
+            // Only actual definitions (not declarations) count
+            return None;
+        }
+
+        let call_sites: Vec<&CachedCallMeta> = call_indices
+            .iter()
+            .filter_map(|&idx| self.call_metas.get(idx))
+            .collect();
+
+        if call_sites.is_empty() {
+            return None;
+        }
+
+        Some(CrossModuleCallChain {
+            callee_name: trimmed.to_string(),
+            call_sites,
+            definition_meta: def_meta,
+        })
+    }
 }
 
 /// Build resource pair closure: find (acquire_call_idx, release_call_idx)
@@ -1416,5 +1502,207 @@ mod tests {
             !index.is_allocator_crate(),
             "Normal application module must NOT be detected as allocator crate"
         );
+    }
+
+    // ── Cross-module function resolution tests ──
+
+    /// Objective: Verify that function_meta_cross_module looks up in
+    /// the local index first, then falls back to the other index.
+    /// Invariants: Local definition is found; fallback is consulted
+    /// when local lookup returns None.
+    #[test]
+    fn test_function_meta_cross_module_local_first() {
+        let mut module_a = IRModule::new();
+        module_a.functions.insert(
+            "@local_func".to_string(),
+            Function {
+                name: "local_func".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+        let index_a = ModuleIndex::build(&module_a);
+
+        let module_b = IRModule::new();
+        let index_b = ModuleIndex::build(&module_b);
+
+        let meta = index_a.function_meta_cross_module("local_func", &index_b);
+        assert!(
+            meta.is_some(),
+            "Must find local_func in the local index first"
+        );
+        assert_eq!(
+            meta.unwrap().name,
+            "local_func",
+            "Must return the correct function metadata"
+        );
+    }
+
+    /// Objective: Verify that function_meta_cross_module falls back to
+    /// another index when the function is not found locally.
+    /// Invariants: Function defined only in other_index is found via fallback.
+    #[test]
+    fn test_function_meta_cross_module_fallback() {
+        let module_a = IRModule::new();
+        let index_a = ModuleIndex::build(&module_a);
+
+        let mut module_b = IRModule::new();
+        module_b.functions.insert(
+            "@remote_func".to_string(),
+            Function {
+                name: "remote_func".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+        let index_b = ModuleIndex::build(&module_b);
+
+        let meta = index_a.function_meta_cross_module("remote_func", &index_b);
+        assert!(
+            meta.is_some(),
+            "Must find remote_func via fallback to index_b"
+        );
+        assert_eq!(
+            meta.unwrap().name,
+            "remote_func",
+            "Must return the correct function metadata from fallback"
+        );
+    }
+
+    /// Objective: Verify that function_meta_cross_module returns None
+    /// when the function is not found in either index.
+    /// Invariants: Non-existent function returns None.
+    #[test]
+    fn test_function_meta_cross_module_not_found() {
+        let module_a = IRModule::new();
+        let index_a = ModuleIndex::build(&module_a);
+        let index_b = ModuleIndex::build(&IRModule::new());
+
+        let meta = index_a.function_meta_cross_module("nonexistent", &index_b);
+        assert!(
+            meta.is_none(),
+            "Non-existent function must return None from both indices"
+        );
+    }
+
+    /// Objective: Verify that resolve_cross_module_call correctly
+    /// resolves a function called in one module but defined in another.
+    /// Invariants: CrossModuleCallChain is returned with correct call sites
+    /// and definition metadata.
+    #[test]
+    fn test_resolve_cross_module_call_basic() {
+        let mut module_a = IRModule::new();
+        // Module A calls 'helper' but doesn't define it
+        module_a.calls.push(CallInstruction {
+            callee: "@helper".to_string(),
+            caller: "@caller_a".to_string(),
+            is_external: true,
+            location: None,
+            args: Vec::new(),
+            result: None,
+        });
+        module_a.functions.insert(
+            "@caller_a".to_string(),
+            Function {
+                name: "caller_a".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+        let index_a = ModuleIndex::build(&module_a);
+
+        let mut module_b = IRModule::new();
+        // Module B defines 'helper'
+        module_b.functions.insert(
+            "@helper".to_string(),
+            Function {
+                name: "helper".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+        let index_b = ModuleIndex::build(&module_b);
+
+        let chain = index_a.resolve_cross_module_call("helper", &index_b);
+        assert!(
+            chain.is_some(),
+            "Must resolve cross-module call for 'helper'"
+        );
+
+        let chain = chain.unwrap();
+        assert_eq!(chain.callee_name, "helper");
+        assert_eq!(
+            chain.call_sites.len(),
+            1,
+            "Must find 1 call site in module_a"
+        );
+        assert!(
+            !chain.definition_meta.is_declaration,
+            "helper must be a definition in module_b"
+        );
+    }
+
+    /// Objective: Verify that resolve_cross_module_call returns None
+    /// when the callee is only declared (not defined) in the other module.
+    /// Invariants: Declaration-only callee returns None.
+    #[test]
+    fn test_resolve_cross_module_call_declaration_only() {
+        let mut module_a = IRModule::new();
+        module_a.calls.push(CallInstruction {
+            callee: "@helper".to_string(),
+            caller: "@caller_a".to_string(),
+            is_external: true,
+            location: None,
+            args: Vec::new(),
+            result: None,
+        });
+        let index_a = ModuleIndex::build(&module_a);
+
+        let mut module_b = IRModule::new();
+        // 'helper' is only declared, not defined in module_b
+        module_b.declarations.insert(
+            "@helper".to_string(),
+            Function {
+                name: "helper".to_string(),
+                is_declaration: true,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+        let index_b = ModuleIndex::build(&module_b);
+
+        let chain = index_a.resolve_cross_module_call("helper", &index_b);
+        assert!(
+            chain.is_none(),
+            "Declaration-only callee must not resolve as cross-module call"
+        );
+    }
+
+    /// Objective: Verify that resolve_cross_module_call returns None
+    /// when the callee has no call sites in the local module.
+    /// Invariants: No local call sites → None.
+    #[test]
+    fn test_resolve_cross_module_call_no_call_sites() {
+        let module_a = IRModule::new();
+        let index_a = ModuleIndex::build(&module_a);
+
+        let mut module_b = IRModule::new();
+        module_b.functions.insert(
+            "@helper".to_string(),
+            Function {
+                name: "helper".to_string(),
+                is_declaration: false,
+                params: vec![],
+                return_type: "void".to_string(),
+            },
+        );
+        let index_b = ModuleIndex::build(&module_b);
+
+        let chain = index_a.resolve_cross_module_call("helper", &index_b);
+        assert!(chain.is_none(), "No local call sites must return None");
     }
 }

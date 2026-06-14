@@ -228,6 +228,61 @@ impl ContractGraph {
             })
             .collect()
     }
+
+    /// Merges a contract graph from another module into this one.
+    ///
+    /// Cross-module graph merging enables the verifier to detect contract
+    /// violations that cross module boundaries.
+    ///
+    /// # Strategy
+    /// - Instance IDs from `other` are offset by this graph's
+    ///   `next_instance_id` to prevent collisions, unless this graph is
+    ///   empty (no offset needed).
+    /// - Sentinel IDs (0) are never offset — they represent source/sink nodes.
+    /// - FFI boundary definitions are merged (existing entries take precedence).
+    ///
+    /// # Arguments
+    /// * `other` - The contract graph from another module to merge.
+    #[allow(dead_code)]
+    pub(crate) fn merge_cross_module(&mut self, other: ContractGraph) {
+        // Bail early if there's nothing to merge.
+        if other.edges.is_empty() && other.ffi_boundaries.is_empty() {
+            return;
+        }
+
+        let offset = self.next_instance_id;
+
+        // Only offset instance IDs if self already has allocated instances,
+        // to avoid unnecessary offsetting when merging into an empty graph.
+        let needs_offset = self.next_instance_id > 1;
+
+        // Merge edges, conditionally offsetting instance IDs to avoid collision.
+        for mut edge in other.edges {
+            if needs_offset {
+                if edge.source > 0 {
+                    edge.source += offset;
+                }
+                if edge.target > 0 {
+                    edge.target += offset;
+                }
+            }
+            self.edges.push(edge);
+        }
+
+        // Merge FFI boundary definitions (existing entries take precedence).
+        for (name, boundary) in other.ffi_boundaries {
+            self.ffi_boundaries.entry(name).or_insert(boundary);
+        }
+
+        // Advance the instance ID counter past the merged range.
+        self.next_instance_id = offset + other.next_instance_id;
+
+        tracing::debug!(
+            "ContractGraph merged: {} edges, next_instance_id={}",
+            self.edges.len(),
+            self.next_instance_id
+        );
+    }
 }
 
 /// Contract graph builder pass.

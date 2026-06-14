@@ -358,6 +358,79 @@ impl EvidenceBundle {
 
         None
     }
+
+    /// Associates this evidence bundle with another from a different module,
+    /// producing cross-module evidence when resource families overlap.
+    ///
+    /// Cross-module evidence is valuable for detecting ownership flows
+    /// across module boundaries (e.g., alloc in module A, release in module B).
+    ///
+    /// # Arguments
+    /// * `other` - The evidence bundle from another module.
+    /// * `alloc_module` - The module ID of the alloc side.
+    /// * `release_module` - The module ID of the release side.
+    ///
+    /// # Returns
+    /// `Some(CrossModuleEvidence)` when the bundles share alloc family
+    /// or function; `None` otherwise.
+    #[allow(dead_code)]
+    pub(crate) fn associate_cross_module(
+        &self,
+        other: &EvidenceBundle,
+        alloc_module: &str,
+        release_module: &str,
+    ) -> Option<CrossModuleEvidence> {
+        // Check for shared resource family — the primary indicator of
+        // cross-module ownership flow.
+        if self.alloc_family != other.alloc_family {
+            // Also check if one bundle's alloc_family matches the other's
+            // release_family (asymmetric ownership: A allocs, B releases).
+            let cross_consistent = self.release_family == Some(other.alloc_family)
+                || other.release_family == Some(self.alloc_family);
+            if !cross_consistent {
+                return None;
+            }
+        }
+
+        // Collect shared semantic kinds between the two bundles.
+        let mut shared_semantic_kinds: Vec<SemanticKind> = Vec::new();
+        for kind in &self.semantic_kinds {
+            if other.semantic_kinds.contains(kind) && !shared_semantic_kinds.contains(kind) {
+                shared_semantic_kinds.push(*kind);
+            }
+        }
+
+        let family = self.alloc_family;
+
+        Some(CrossModuleEvidence {
+            alloc_module: alloc_module.to_string(),
+            release_module: release_module.to_string(),
+            family_consistent: self.alloc_family == other.alloc_family,
+            family,
+            shared_semantic_kinds,
+        })
+    }
+}
+
+/// Cross-module evidence association for a resource issue candidate.
+///
+/// Captures the relationship between evidence from two different modules
+/// that share the same resource allocation family or function.
+/// This enables the verifier to detect cross-module ownership flows
+/// (e.g., resource allocated in module A, released in module B).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct CrossModuleEvidence {
+    /// The module ID where the alloc side originates.
+    pub alloc_module: String,
+    /// The module ID where the release side originates.
+    pub release_module: String,
+    /// Whether both modules agree on the allocation family.
+    pub family_consistent: bool,
+    /// The resource family identified across modules.
+    pub family: FamilyId,
+    /// Overlapping semantic kinds between the two modules' evidence.
+    pub shared_semantic_kinds: Vec<SemanticKind>,
 }
 
 fn collect_semantic_kinds(
@@ -1025,6 +1098,163 @@ mod tests {
         assert!(
             bundle.has_semantic_suppression_high_confidence(),
             "High-confidence DestructorRelease must be in semantic suppression"
+        );
+    }
+
+    // ── Cross-module evidence association tests ──
+
+    /// Objective: Verify that two bundles with the same alloc_family
+    /// produce cross-module evidence.
+    /// Invariants: Same alloc_family → CrossModuleEvidence with family_consistent=true.
+    #[test]
+    fn test_associate_cross_module_same_family() {
+        let candidate_a = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+        let candidate_b = IssueCandidate::new(
+            2,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "free",
+        );
+
+        let bundle_a = EvidenceBundle::from_candidate(&candidate_a, None, None, None);
+        let bundle_b = EvidenceBundle::from_candidate(&candidate_b, None, None, None);
+
+        let evidence = bundle_a.associate_cross_module(&bundle_b, "mod_a", "mod_b");
+        assert!(
+            evidence.is_some(),
+            "Same alloc_family must produce cross-module evidence"
+        );
+
+        let evidence = evidence.unwrap();
+        assert_eq!(evidence.alloc_module, "mod_a");
+        assert_eq!(evidence.release_module, "mod_b");
+        assert!(evidence.family_consistent, "Family should be consistent");
+        assert_eq!(evidence.family, FamilyId::C_HEAP);
+    }
+
+    /// Objective: Verify that bundles with different alloc_family but
+    /// matching alloc↔release families produce cross-module evidence.
+    /// Invariants: A's alloc_family matches B's release_family → evidence.
+    #[test]
+    fn test_associate_cross_module_asymmetric() {
+        let candidate_a = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        )
+        .with_release_family(FamilyId::CPP_NEW_SCALAR);
+
+        let candidate_b = IssueCandidate::new(
+            2,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::CPP_NEW_SCALAR,
+            "operator_delete",
+        )
+        .with_release_family(FamilyId::C_HEAP);
+
+        let bundle_a = EvidenceBundle::from_candidate(&candidate_a, None, None, None);
+        let bundle_b = EvidenceBundle::from_candidate(&candidate_b, None, None, None);
+
+        let evidence = bundle_a.associate_cross_module(&bundle_b, "mod_a", "mod_b");
+        assert!(
+            evidence.is_some(),
+            "Asymmetric alloc↔release must produce cross-module evidence"
+        );
+
+        let evidence = evidence.unwrap();
+        assert!(
+            !evidence.family_consistent,
+            "Family should NOT be consistent for asymmetric match"
+        );
+    }
+
+    /// Objective: Verify that bundles with completely different families
+    /// and no cross-consistency do NOT produce cross-module evidence.
+    /// Invariants: No family overlap → None.
+    #[test]
+    fn test_associate_cross_module_no_match() {
+        let candidate_a = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+        let candidate_b = IssueCandidate::new(
+            2,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::PYTHON_OBJECT,
+            "PyObject_New",
+        );
+
+        let bundle_a = EvidenceBundle::from_candidate(&candidate_a, None, None, None);
+        let bundle_b = EvidenceBundle::from_candidate(&candidate_b, None, None, None);
+
+        let evidence = bundle_a.associate_cross_module(&bundle_b, "mod_a", "mod_b");
+        assert!(
+            evidence.is_none(),
+            "Completely different families must NOT produce cross-module evidence"
+        );
+    }
+
+    /// Objective: Verify that shared semantic kinds are collected
+    /// when both bundles have overlapping semantic kinds.
+    /// Invariants: Overlapping semantic kinds appear in shared_semantic_kinds.
+    #[test]
+    fn test_associate_cross_module_shared_semantic_kinds() {
+        let mut srt_a = std::collections::HashMap::new();
+        srt_a.insert(
+            "malloc".to_string(),
+            vec![SemanticKind::RuntimeManagedResource],
+        );
+
+        let mut srt_b = std::collections::HashMap::new();
+        srt_b.insert(
+            "free".to_string(),
+            vec![
+                SemanticKind::RuntimeManagedResource,
+                SemanticKind::StoredToOwner,
+            ],
+        );
+
+        let candidate_a = IssueCandidate::new(
+            1,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "malloc",
+        );
+        let candidate_b = IssueCandidate::new(
+            2,
+            IssueCandidateKind::DefiniteLeak,
+            FamilyId::C_HEAP,
+            "free",
+        );
+
+        let bundle_a = EvidenceBundle::from_candidate(&candidate_a, None, Some(&srt_a), None);
+        let bundle_b = EvidenceBundle::from_candidate(&candidate_b, None, Some(&srt_b), None);
+
+        let evidence = bundle_a.associate_cross_module(&bundle_b, "mod_a", "mod_b");
+        assert!(
+            evidence.is_some(),
+            "Same alloc_family must produce cross-module evidence"
+        );
+
+        let evidence = evidence.unwrap();
+        assert!(
+            evidence
+                .shared_semantic_kinds
+                .contains(&SemanticKind::RuntimeManagedResource),
+            "Shared semantic kind must be collected"
+        );
+        assert_eq!(
+            evidence.shared_semantic_kinds.len(),
+            1,
+            "Only RuntimeManagedResource should be shared (StoredToOwner is not in bundle_a)"
         );
     }
 }

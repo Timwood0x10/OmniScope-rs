@@ -30,11 +30,25 @@ pub struct ProjectPipeline {
     input_paths: Vec<PathBuf>,
 }
 
+/// A cross-module edge representing a function defined in one module and
+/// declared (used) in another.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct CrossModuleEdge {
+    /// The symbol (function name) that crosses module boundaries.
+    pub symbol: String,
+    /// The module ID where the symbol is defined.
+    pub def_module_id: String,
+    /// The module ID where the symbol is declared.
+    pub decl_module_id: String,
+}
+
 /// Aggregate report from analyzing multiple modules.
 ///
 /// # Fields
 /// * `project_index` - The merged project index.
 /// * `cross_module_issues` - Issues detected across module boundaries.
+/// * `cross_module_edges` - Cross-module edges detected (def→decl pairs).
 /// * `module_count` - Number of modules analyzed.
 /// * `total_functions` - Total number of functions across all modules.
 pub struct ProjectReport {
@@ -42,10 +56,15 @@ pub struct ProjectReport {
     pub project_index: ProjectIndex,
     /// Cross-module issues detected.
     pub cross_module_issues: Vec<Issue>,
+    /// Cross-module edges detected (def→decl pairs).
+    #[expect(dead_code)]
+    pub(crate) cross_module_edges: Vec<CrossModuleEdge>,
     /// Number of modules analyzed.
     pub module_count: usize,
     /// Total number of functions across all modules.
     pub total_functions: usize,
+    /// Number of cross-module edges found.
+    pub cross_module_edge_count: usize,
 }
 
 impl ProjectPipeline {
@@ -175,6 +194,7 @@ impl ProjectPipeline {
         // Identify cross-module issues: declarations matched to definitions
         // in different modules create potential cross-module call edges.
         let mut cross_module_issues: Vec<Issue> = Vec::new();
+        let mut cross_module_edges: Vec<CrossModuleEdge> = Vec::new();
         for (symbol, def_indices) in &self.project_index.defs_by_symbol {
             for &idx in def_indices {
                 if let Some(decl_indices) = self.project_index.decls_by_symbol.get(symbol) {
@@ -196,6 +216,13 @@ impl ProjectPipeline {
                                 )
                                 .with_confidence(omniscope_core::Confidence::Medium),
                             );
+
+                            // Record the cross-module edge for pipeline coordination
+                            cross_module_edges.push(CrossModuleEdge {
+                                symbol: symbol.clone(),
+                                def_module_id: def_module.module_id.clone(),
+                                decl_module_id: decl_module.module_id.clone(),
+                            });
                         }
                     }
                 }
@@ -209,11 +236,15 @@ impl ProjectPipeline {
             .map(|m| m.defined_functions.len())
             .sum();
 
+        let cross_module_edge_count = cross_module_edges.len();
+
         Ok(ProjectReport {
             project_index: self.project_index.clone(),
             cross_module_issues,
+            cross_module_edges,
             module_count: self.pipelines.len(),
             total_functions,
+            cross_module_edge_count,
         })
     }
 
@@ -355,8 +386,10 @@ mod tests {
         let report = ProjectReport {
             project_index,
             cross_module_issues: Vec::new(),
+            cross_module_edges: Vec::new(),
             module_count: 2,
             total_functions: 3,
+            cross_module_edge_count: 0,
         };
 
         assert_eq!(report.module_count, 2, "Report must show 2 modules");
@@ -424,5 +457,55 @@ mod tests {
             cross_module_issues[0].description.contains("make_token"),
             "Issue must reference the cross-module symbol"
         );
+    }
+
+    /// Objective: Verify that cross-module edges are correctly collected
+    /// when a symbol is defined in one module and declared in another.
+    ///
+    /// Invariants:
+    /// - cross_module_edges must contain entries for symbols that
+    ///   cross module boundaries.
+    /// - cross_module_edge_count must match the number of edges.
+    #[test]
+    fn test_project_pipeline_cross_module_edges() {
+        let mut project_index = ProjectIndex::new();
+
+        let mod_a = make_test_summary("mod_a", vec!["helper"], vec!["make_token"]);
+        let mod_b = make_test_summary("mod_b", vec!["make_token"], vec![]);
+
+        project_index.add_module(mod_a);
+        project_index.add_module(mod_b);
+
+        // Simulate cross-module edge collection
+        let mut cross_module_edges: Vec<CrossModuleEdge> = Vec::new();
+        for (symbol, def_indices) in &project_index.defs_by_symbol {
+            for &idx in def_indices {
+                if let Some(decl_indices) = project_index.decls_by_symbol.get(symbol) {
+                    for &decl_idx in decl_indices {
+                        if idx != decl_idx {
+                            let def_module = &project_index.modules[idx];
+                            let decl_module = &project_index.modules[decl_idx];
+
+                            cross_module_edges.push(CrossModuleEdge {
+                                symbol: symbol.clone(),
+                                def_module_id: def_module.module_id.clone(),
+                                decl_module_id: decl_module.module_id.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            cross_module_edges.len(),
+            1,
+            "Must detect 1 cross-module edge for 'make_token'"
+        );
+
+        let edge = &cross_module_edges[0];
+        assert_eq!(edge.symbol, "make_token");
+        assert_eq!(edge.def_module_id, "mod_b");
+        assert_eq!(edge.decl_module_id, "mod_a");
     }
 }

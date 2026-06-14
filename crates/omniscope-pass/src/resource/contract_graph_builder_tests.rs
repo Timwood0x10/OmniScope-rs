@@ -1163,3 +1163,259 @@ fn test_find_matching_release() {
     let matches = empty_graph.find_matching_release("test_func", FamilyId::C_HEAP, 0);
     assert!(matches.is_empty(), "Empty graph should return no matches");
 }
+
+// ── Cross-module merge tests ──
+
+/// Objective: Verify that merging two empty graphs produces an empty graph.
+/// Invariants: edge_count == 0 after merge.
+#[test]
+fn test_merge_cross_module_both_empty() {
+    let mut graph_a = ContractGraph::new();
+    let graph_b = ContractGraph::new();
+
+    graph_a.merge_cross_module(graph_b);
+
+    assert_eq!(
+        graph_a.edge_count(),
+        0,
+        "Merged empty graphs must produce empty graph"
+    );
+    assert_eq!(
+        graph_a.next_instance_id, 1,
+        "next_instance_id must stay at initial value when merging empty graph"
+    );
+}
+
+/// Objective: Verify that merging a non-empty graph into an empty graph
+/// preserves all edges and FFI boundaries from the non-empty graph.
+/// Invariants: All edges present after merge, instance IDs unchanged.
+#[test]
+fn test_merge_cross_module_into_empty() {
+    let mut graph_a = ContractGraph::new();
+    let mut graph_b = ContractGraph::new();
+
+    // Add an acquire-release pair to graph_b
+    let instance = graph_b.alloc_instance();
+    graph_b.add_edge(ContractEdge {
+        source: 0,
+        target: instance,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance,
+        },
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "mod_b_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+    graph_b.add_edge(ContractEdge {
+        source: instance,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 1,
+        function_name: "free".to_string(),
+        caller_name: "mod_b_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+    graph_b.mark_ffi_boundary("ffi_func", Language::Rust, Language::C);
+
+    graph_a.merge_cross_module(graph_b);
+
+    assert_eq!(
+        graph_a.edge_count(),
+        2,
+        "Must preserve 2 edges from graph_b"
+    );
+    assert!(
+        graph_a.is_ffi_boundary("ffi_func").is_some(),
+        "FFI boundary must be merged"
+    );
+
+    // Instance IDs should be preserved (no offset since graph_a was empty)
+    let acquire_edge = graph_a
+        .edges
+        .iter()
+        .find(|e| matches!(e.effect, Effect::Acquire { .. }));
+    assert!(
+        acquire_edge.is_some(),
+        "Acquire edge must exist after merge"
+    );
+    assert_eq!(
+        acquire_edge.unwrap().target,
+        instance,
+        "Instance ID must be preserved when merging into empty graph"
+    );
+}
+
+/// Objective: Verify that instance IDs from the second graph are offset
+/// to avoid collisions with existing IDs in the first graph.
+/// Invariants: After merging, all instance IDs from graph_b are offset
+/// by graph_a's next_instance_id.
+#[test]
+fn test_merge_cross_module_instance_id_offset() {
+    let mut graph_a = ContractGraph::new();
+    let mut graph_b = ContractGraph::new();
+
+    // Graph A: 1 acquire
+    let instance_a = graph_a.alloc_instance();
+    graph_a.add_edge(ContractEdge {
+        source: 0,
+        target: instance_a,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance_a,
+        },
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "mod_a_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    // Graph B: 1 acquire (instance ID will also be 1 in its own scope)
+    let instance_b = graph_b.alloc_instance();
+    graph_b.add_edge(ContractEdge {
+        source: 0,
+        target: instance_b,
+        effect: Effect::Acquire {
+            family: FamilyId::CPP_NEW_SCALAR,
+            result: instance_b,
+        },
+        function: 2,
+        function_name: "_Znwm".to_string(),
+        caller_name: "mod_b_func".to_string(),
+        family: Some(FamilyId::CPP_NEW_SCALAR),
+        boundary_evidence: None,
+    });
+
+    // Both graphs have next_instance_id = 2 at this point
+    assert_eq!(instance_a, 1, "Graph A instance_a should be 1");
+    assert_eq!(instance_b, 1, "Graph B instance_b should be 1");
+
+    graph_a.merge_cross_module(graph_b);
+
+    // After merge, graph_a has 2 edges — the second edge's instance ID
+    // should be offset by 2 (graph_a's next_instance_id before merge).
+    let acquire_edges: Vec<_> = graph_a
+        .edges
+        .iter()
+        .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
+        .collect();
+    assert_eq!(acquire_edges.len(), 2, "Both acquire edges must be present");
+
+    // First edge (from graph_a) keeps its original ID
+    assert_eq!(
+        acquire_edges[0].target, 1,
+        "Graph A's instance ID should stay at 1"
+    );
+    // Second edge (from graph_b) has its ID offset by graph_a's next_instance_id (2)
+    assert_eq!(
+        acquire_edges[1].target, 3,
+        "Graph B's instance ID must be offset by graph_a's next_instance_id"
+    );
+
+    // next_instance_id should also be updated
+    // graph_a had 2, graph_b had 2, so combined = 4
+    assert_eq!(
+        graph_a.next_instance_id, 4,
+        "next_instance_id must reflect total allocated instances"
+    );
+}
+
+/// Objective: Verify that sentinel IDs (0) are NOT offset during merge.
+/// Source/sink IDs of 0 must remain 0 in the merged graph.
+/// Invariants: All edges with source=0 or target=0 preserve those values.
+#[test]
+fn test_merge_cross_module_sentinel_ids_preserved() {
+    let mut graph_a = ContractGraph::new();
+    let mut graph_b = ContractGraph::new();
+
+    // Graph A: acquire edge with source=0
+    let instance_a = graph_a.alloc_instance();
+    graph_a.add_edge(ContractEdge {
+        source: 0,
+        target: instance_a,
+        effect: Effect::Acquire {
+            family: FamilyId::C_HEAP,
+            result: instance_a,
+        },
+        function: 1,
+        function_name: "malloc".to_string(),
+        caller_name: "mod_a_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    // Graph B: release edge with target=0
+    let instance_b = graph_b.alloc_instance();
+    graph_b.add_edge(ContractEdge {
+        source: instance_b,
+        target: 0,
+        effect: Effect::Release {
+            family: FamilyId::C_HEAP,
+            arg: 0,
+        },
+        function: 2,
+        function_name: "free".to_string(),
+        caller_name: "mod_b_func".to_string(),
+        family: Some(FamilyId::C_HEAP),
+        boundary_evidence: None,
+    });
+
+    graph_a.merge_cross_module(graph_b);
+
+    // Sentinel values (0) must remain 0
+    let acquire_edges: Vec<_> = graph_a
+        .edges
+        .iter()
+        .filter(|e| matches!(e.effect, Effect::Acquire { .. }))
+        .collect();
+    assert_eq!(acquire_edges.len(), 1, "Acquire edge must exist");
+    assert_eq!(
+        acquire_edges[0].source, 0,
+        "Acquire edge source=0 must remain 0"
+    );
+
+    let release_edges: Vec<_> = graph_a
+        .edges
+        .iter()
+        .filter(|e| matches!(e.effect, Effect::Release { .. }))
+        .collect();
+    assert_eq!(release_edges.len(), 1, "Release edge must exist");
+    assert_eq!(
+        release_edges[0].target, 0,
+        "Release edge target=0 must remain 0"
+    );
+}
+
+/// Objective: Verify that FFI boundary definitions from both graphs are
+/// merged correctly, with existing entries taking precedence.
+/// Invariants: First-module FFI boundaries survive merge; new boundaries added.
+#[test]
+fn test_merge_cross_module_ffi_boundaries() {
+    let mut graph_a = ContractGraph::new();
+    let mut graph_b = ContractGraph::new();
+
+    graph_a.mark_ffi_boundary("existing_func", Language::Rust, Language::C);
+    graph_b.mark_ffi_boundary("existing_func", Language::C, Language::Rust); // should NOT override
+    graph_b.mark_ffi_boundary("new_func", Language::Go, Language::Rust);
+
+    graph_a.merge_cross_module(graph_b);
+
+    // Existing entry takes precedence
+    let existing = graph_a.is_ffi_boundary("existing_func").unwrap();
+    assert_eq!(
+        existing.0,
+        Language::Rust,
+        "Existing FFI boundary must take precedence"
+    );
+
+    // New entry added
+    let new = graph_a.is_ffi_boundary("new_func").unwrap();
+    assert_eq!(new.0, Language::Go, "New FFI boundary must be added");
+}
