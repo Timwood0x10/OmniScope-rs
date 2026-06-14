@@ -43,6 +43,35 @@ See:
 - Has a growing semantic model for C, C++, Rust, Go, Python, Java, and C# through LLVM IR patterns.
 - Zig (historical validation only): the `zig_main.ll` fixture achieved 95% precision and 100% recall in the June 2026 validation report.
 
+## Cross-Language FFI Support
+
+| Language | Status | Test Projects |
+|----------|--------|---------------|
+| Rust->C | Stable | rusqlite, rustls-ffi, napi-rs |
+| Rust->Python | Stable | pyo3 |
+| Rust->DuckDB | Stable | duckdb-rs |
+| Go->C | Stable | go-sqlite3, CGO |
+| Java->C | Stable | JNA |
+| Python->C | Stable | CPython extensions |
+| .NET | Beta | dotnet/pinvoke |
+| Node.js native | Beta | node-ffi-napi |
+
+## Noise Reduction
+
+Recent work reduced false-positive noise across key issue categories:
+
+| Category | Before | After | Change |
+|----------|--------|-------|--------|
+| `write_to_immutable` | 4525 | 8 | -99.8% |
+| `ffi_unsafe_call` | 142 | 0 | -100% |
+| `borrow_escape` | 51 | 7 | -88% |
+| `null_dereference` FP | -- | suppressed | via `NullChecked` pattern |
+| `double_free` FP | -- | suppressed | for thin wrappers |
+
+## Real-World Validation
+
+9 real-world projects across 5 languages were tested as part of the cross-language FFI corpus: rusqlite, rustls-ffi, napi-rs, pyo3, duckdb-rs, go-sqlite3, JNA, CPython extensions, and dotnet/pinvoke. Inline IR regression tests capture key FFI patterns from each project to prevent accuracy regressions.
+
 ## Known Limits
 
 - This is not a formal verification tool.
@@ -162,6 +191,8 @@ The default pipeline currently registers 21 passes:
 - Rust 1.75+
 - LLVM development libraries for the optional LLVM-backed paths
 - `make`, CMake, and a C++ compiler for the SafetyExportPass / extractor path
+- Optional: JDK 21+ for Java FFI analysis
+- Optional: .NET 8+ for C# FFI analysis
 - Optional: `cargo-nextest`, `cargo-audit`, Miri, Criterion benchmark tooling
 
 ### Commands

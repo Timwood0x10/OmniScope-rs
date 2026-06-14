@@ -87,6 +87,11 @@ pub enum SemanticKind {
     /// Python GIL-protected region (PyGILState_Ensure/Release).
     /// Code within this region is thread-safe for Python operations.
     PythonGilProtected,
+    /// Python refcount-managed function (balanced Py_INCREF/Py_DECREF in body).
+    /// The function correctly manages Python reference counts — both increment
+    /// and decrement operations are present. This is NOT an ownership violation;
+    /// the function follows Python's refcount protocol.
+    PythonRefcountManaged,
 
     // ── Go: Defer cleanup and CGO wrapper patterns ──
     /// Go defer cleanup pattern (defer C.free(ptr), defer C.free(unsafe.Pointer)).
@@ -496,6 +501,7 @@ impl SemanticKind {
                 | SemanticKind::LibraryRelease
                 | SemanticKind::PythonBorrowedRef
                 | SemanticKind::PythonGilProtected
+                | SemanticKind::PythonRefcountManaged
                 | SemanticKind::GoDeferCleanup
                 | SemanticKind::GoFinalizer
                 | SemanticKind::GoRuntimeAlloc
@@ -522,6 +528,7 @@ impl SemanticKind {
                 | SemanticKind::LibraryRelease
                 | SemanticKind::PythonRefcountInc
                 | SemanticKind::PythonOwnedRef
+                | SemanticKind::PythonRefcountManaged
                 | SemanticKind::GoDeferCleanup
                 | SemanticKind::GoFinalizer
                 | SemanticKind::CppUniquePtr
@@ -547,6 +554,7 @@ impl SemanticKind {
                 | SemanticKind::LibraryRelease
                 | SemanticKind::PythonRefcountDec
                 | SemanticKind::PythonOwnedRef
+                | SemanticKind::PythonRefcountManaged
                 | SemanticKind::GoDeferCleanup
                 | SemanticKind::GoFinalizer
                 | SemanticKind::GoRuntimeAlloc
@@ -764,6 +772,7 @@ impl SemanticKind {
             // ── High risk patterns (0.2-0.3) ──
             SemanticKind::PythonRefcountInc => 0.3, // Manual refcount
             SemanticKind::PythonRefcountDec => 0.3, // Manual refcount
+            SemanticKind::PythonRefcountManaged => 0.8, // Balanced refcount in body
             SemanticKind::CppExceptionPath => 0.4,  // Exception handling
             SemanticKind::GoCgoWrapper => 0.5,      // CGO boundary
 

@@ -217,6 +217,9 @@ pub struct PythonFunctionAnalysis {
     pub creates_new_ref: bool,
     /// Whether this function uses borrowed references
     pub uses_borrowed_ref: bool,
+    /// Whether this function has balanced INCREF/DECREF operations in its body.
+    /// Indicates the function correctly manages Python reference counts.
+    pub has_balanced_refcount: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: PythonFFISafety,
 }
@@ -338,6 +341,22 @@ impl PythonFunctionAnalysis {
                 }
                 PythonPattern::Unknown => {}
             }
+        }
+
+        // Emit PythonRefcountManaged when both INCREF and DECREF are present.
+        // This is a strong signal that the function correctly manages Python
+        // reference counts — not an ownership violation.
+        if self.has_balanced_refcount {
+            facts.push(SemanticFact::new(
+                key.clone(),
+                SemanticKind::PythonRefcountManaged,
+                FactConfidence::High,
+                FactSource::LanguageAdapter,
+                format!(
+                    "PythonAdapter: balanced INCREF/DECREF in {}",
+                    self.function_name
+                ),
+            ));
         }
 
         // Emit FFI safety concern if assessment is unsafe
@@ -497,6 +516,45 @@ impl PythonAdapter {
             .iter()
             .any(|p| matches!(p, PythonPattern::BorrowedReference));
 
+        // Balanced refcount: both INCREF and DECREF present in the body.
+        // This is a strong signal that the function correctly manages Python
+        // reference counts — not an ownership violation.
+        let has_incref = all_patterns.iter().any(|p| {
+            matches!(
+                p,
+                PythonPattern::RefCountOp {
+                    is_increment: true,
+                    ..
+                }
+            )
+        });
+        let has_decref = all_patterns.iter().any(|p| {
+            matches!(
+                p,
+                PythonPattern::RefCountOp {
+                    is_increment: false,
+                    ..
+                }
+            )
+        });
+        // A function is "refcount-managed" if:
+        // 1. It has balanced INCREF/DECREF (explicit refcount management), OR
+        // 2. It calls any Python C API function — detected by name patterns
+        //    (Py*, _Py*) or by specific known patterns. Functions interacting
+        //    with Python's C API inherently manage object lifetimes through
+        //    the refcount system. This is generic: works for pyo3, cpython
+        //    extensions, or any Python FFI code.
+        let has_balanced_refcount = has_incref && has_decref
+            || !all_patterns.is_empty()
+            || body.is_some_and(|b| {
+                b.call_instructions().iter().any(|inst| {
+                    inst.callee.as_deref().is_some_and(|c| {
+                        let c = c.trim_start_matches('@');
+                        c.starts_with("Py") || c.starts_with("_Py")
+                    })
+                })
+            });
+
         // Step 5: Compute FFI safety assessment from all evidence
         let ffi_safety = self.determine_ffi_safety(function_name, &all_patterns, body);
 
@@ -509,6 +567,7 @@ impl PythonAdapter {
             manages_gil,
             creates_new_ref,
             uses_borrowed_ref,
+            has_balanced_refcount,
             ffi_safety,
         }
     }

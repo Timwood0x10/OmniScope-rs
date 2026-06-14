@@ -527,6 +527,107 @@ impl Pass for StructuralInferencePass {
             }
         }
 
+        // ── Merge adapter-produced PythonRefcountManaged into SRT ──
+        // Must happen BEFORE transitive propagation so the propagation
+        // loop can forward-propagate from callers to callees.
+        let semantic_facts: Vec<omniscope_semantics::SemanticFact> =
+            ctx.get("semantic_facts").unwrap_or_default();
+        for fact in &semantic_facts {
+            if fact.kind == SemanticKind::PythonRefcountManaged {
+                if let omniscope_semantics::SemanticKey::Symbol(sym) = &fact.key {
+                    let kinds = srt_resolutions.entry(sym.clone()).or_default();
+                    if !kinds.contains(&fact.kind) {
+                        kinds.push(fact.kind);
+                    }
+                }
+            }
+        }
+
+        // ── Transitive propagation through call graph ──
+        // Two propagation directions for different semantic meanings:
+        //
+        // **Backward (callee → caller)**: If callee has a kind, caller inherits it.
+        // - PythonRefcountManaged: if callee manages refcounts, caller also does.
+        //
+        // **Forward (caller → callee)**: If caller has a kind, callee inherits it.
+        // - PythonRefcountManaged: if caller manages refcounts, the callee
+        //   (e.g., PyUnicode_FromString) is being used correctly by a refcount-
+        //   aware caller. The gate checks the callee symbol, so the kind must
+        //   be on the callee for suppression to work.
+        //
+        // Uses ModuleIndex's call_metas for traversal.
+        // Collects propagations first, then applies — avoids borrow conflict.
+        if let Some(index) = ctx.get_ref::<crate::module_index::ModuleIndex>("module_index") {
+            let mut changed = true;
+            let mut iterations = 0;
+            const MAX_ITERATIONS: usize = 3;
+            while changed && iterations < MAX_ITERATIONS {
+                changed = false;
+                iterations += 1;
+                let mut propagations: Vec<(String, SemanticKind)> = Vec::new();
+                for meta in &index.call_metas {
+                    // Backward: callee → caller
+                    if let Some(callee_kinds) = srt_resolutions.get(&meta.callee_name) {
+                        if callee_kinds.contains(&SemanticKind::PythonRefcountManaged) {
+                            let already_has = srt_resolutions
+                                .get(&meta.caller_name)
+                                .is_some_and(|k| k.contains(&SemanticKind::PythonRefcountManaged));
+                            if !already_has {
+                                propagations.push((
+                                    meta.caller_name.clone(),
+                                    SemanticKind::PythonRefcountManaged,
+                                ));
+                            }
+                        }
+                    }
+                    // Forward: caller → callee
+                    // If caller manages refcounts, propagate to callees that
+                    // are Python C API functions (Py*/_Py*) so the gate can
+                    // suppress ownership_violation on the callee symbol.
+                    // Only propagate to Python API callees — not to arbitrary
+                    // functions like free/malloc which are not Python-specific.
+                    if let Some(caller_kinds) = srt_resolutions.get(&meta.caller_name) {
+                        if caller_kinds.contains(&SemanticKind::PythonRefcountManaged) {
+                            let callee = meta.callee_name.trim_start_matches('@').trim_matches('"');
+                            let is_python_api =
+                                callee.starts_with("Py") || callee.starts_with("_Py");
+                            if is_python_api {
+                                let already_has =
+                                    srt_resolutions.get(&meta.callee_name).is_some_and(|k| {
+                                        k.contains(&SemanticKind::PythonRefcountManaged)
+                                    });
+                                if !already_has {
+                                    propagations.push((
+                                        meta.callee_name.clone(),
+                                        SemanticKind::PythonRefcountManaged,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Apply collected propagations.
+                // Only propagate to functions that already have SRT entries
+                // (i.e., they have some semantic analysis). This prevents
+                // LibraryRelease from spreading to unrelated functions that
+                // happen to call a library function (e.g., test harness code).
+                for (target, kind) in propagations {
+                    let kinds = srt_resolutions.entry(target).or_default();
+                    if !kinds.contains(&kind) {
+                        kinds.push(kind);
+                        changed = true;
+                    }
+                }
+            }
+            if iterations > 1 {
+                tracing::debug!(
+                    "SRT transitive propagation: {} iterations, {} entries",
+                    iterations,
+                    srt_resolutions.len()
+                );
+            }
+        }
+
         let srt_entry_count = srt_resolutions.len();
         let srt_key_entry_count = srt_key_resolutions.len();
         ctx.store("srt_resolutions", srt_resolutions);
@@ -539,7 +640,6 @@ impl Pass for StructuralInferencePass {
         let mut srt_facts: HashMap<String, Vec<SemanticFact>> = HashMap::new();
 
         // Merge facts from IRBehaviorSummaryPass and LanguageAdapterFactPass.
-        let semantic_facts: Vec<SemanticFact> = ctx.get("semantic_facts").unwrap_or_default();
         for fact in &semantic_facts {
             let keys = match &fact.key {
                 omniscope_semantics::SemanticKey::Symbol(s) => vec![s.clone()],

@@ -162,6 +162,7 @@ impl Pass for LanguageAdapterFactPass {
         let mut go_count: usize = 0;
         let mut csharp_count: usize = 0;
         let mut wasm_count: usize = 0;
+        let ir_module = ctx.get_ir_module();
 
         for func_name in &func_names {
             // Determine language: ModuleIndex first, heuristic fallback
@@ -176,7 +177,10 @@ impl Pass for LanguageAdapterFactPass {
             let run_cpp =
                 lang == Language::Cpp || (lang == Language::Unknown && looks_like_cpp(func_name));
             let run_python = lang == Language::Python
-                || (lang == Language::Unknown && looks_like_python(func_name));
+                || (lang == Language::Unknown && looks_like_python(func_name))
+                // Rust functions calling Python C API (e.g., pyo3 bindings)
+                // should also be analyzed for refcount patterns.
+                || (lang == Language::Rust && ir_module.is_some_and(|m| calls_python_c_api(func_name, m)));
             let run_java =
                 lang == Language::Java || (lang == Language::Unknown && looks_like_jni(func_name));
             let run_go =
@@ -193,10 +197,15 @@ impl Pass for LanguageAdapterFactPass {
             }
 
             if run_python {
-                if let Some(semantic) = python_adapter.analyze_function(func_name) {
-                    adapter_facts.push(semantic.to_semantic_fact());
-                    python_count += 1;
-                }
+                let body = ir_module.and_then(|m| {
+                    m.function_bodies
+                        .get(func_name)
+                        .or_else(|| m.function_bodies.get(&format!("\"{func_name}\"")))
+                });
+                let analysis = python_adapter.analyze_function_with_ir(func_name, body);
+                let facts = analysis.to_semantic_facts();
+                python_count += facts.len();
+                adapter_facts.extend(facts);
             }
 
             if run_java {
@@ -286,6 +295,40 @@ fn looks_like_python(name: &str) -> bool {
         || name.contains("PyErr")
         || name.contains("PyGIL")
         || name.contains("PyMem")
+}
+
+/// Check if a function's IR body calls Python C API functions.
+///
+/// Used to run the Python adapter on Rust functions that interact with
+/// Python's refcount system (e.g., pyo3 bindings). Generic: works for
+/// any function that calls Py* functions, not just pyo3.
+fn calls_python_c_api(func_name: &str, ir_module: &omniscope_ir::IRModule) -> bool {
+    let name = func_name.trim_start_matches('@');
+    // function_bodies keys may have quotes around names with special chars
+    let body = ir_module
+        .function_bodies
+        .get(name)
+        .or_else(|| ir_module.function_bodies.get(&format!("\"{name}\"")));
+    let found_body = body.is_some();
+    let has_py_calls = body
+        .map(|b| {
+            b.call_instructions().iter().any(|inst| {
+                inst.callee.as_deref().is_some_and(|c| {
+                    let c = c.trim_start_matches('@');
+                    c.starts_with("Py") || c.starts_with("_Py")
+                })
+            })
+        })
+        .unwrap_or(false);
+    if name.contains("pyo3") {
+        tracing::debug!(
+            "calls_python_c_api: name={}, body_found={}, has_py_calls={}",
+            name,
+            found_body,
+            has_py_calls
+        );
+    }
+    has_py_calls
 }
 
 /// Check if a function name looks like Java/JNI.

@@ -361,6 +361,27 @@ impl NoiseReduction {
                     SemanticKind::HeapProvenance | SemanticKind::GoRuntimeAlloc
                 )
             }),
+            // OwnershipViolation: suppress for Python refcount patterns,
+            // runtime internals, ownership transfer, and POSIX syscalls.
+            // Mirrors issue_gate.rs OwnershipViolation arm.
+            "ownership_violation" => kinds.iter().any(|k| {
+                matches!(
+                    k,
+                    SemanticKind::IntoRawTransfer
+                        | SemanticKind::FileOperation
+                        | SemanticKind::NetworkOperation
+                        | SemanticKind::ProcessOperation
+                        | SemanticKind::LibraryRelease
+                        | SemanticKind::RuntimeInternal
+                        | SemanticKind::PythonRefcountInc
+                        | SemanticKind::PythonRefcountDec
+                        | SemanticKind::PythonBorrowedRef
+                        | SemanticKind::PythonOwnedRef
+                        | SemanticKind::PythonGilProtected
+                        | SemanticKind::PythonRefcountManaged
+                        | SemanticKind::RefcountTransfer
+                )
+            }),
             _ => false,
         };
 

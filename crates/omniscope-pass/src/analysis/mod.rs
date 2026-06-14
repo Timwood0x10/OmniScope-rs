@@ -538,6 +538,36 @@ impl FFIBoundaryPass {
 
         let boundary_kind = classify_boundary(&boundary.caller_lang, &boundary.callee_lang);
 
+        // ── Python refcount suppression ──
+        // If the caller's IR body calls Python C API functions (Py*, _Py*),
+        // the caller is managing Python refcounts. The FFI call is normal
+        // Python interop, not an ownership violation. This is a generic
+        // pattern based on Python C API naming convention, not a whitelist.
+        if kind == IssueKind::OwnershipViolation {
+            if let Some(module) = ctx.get_ir_module() {
+                let caller_name = boundary
+                    .caller_name
+                    .trim_start_matches('@')
+                    .trim_matches('"');
+                let calls_py_api = module
+                    .function_bodies
+                    .get(caller_name)
+                    .or_else(|| module.function_bodies.get(&format!("\"{caller_name}\"")))
+                    .map(|body| {
+                        body.call_instructions().iter().any(|inst| {
+                            inst.callee.as_deref().is_some_and(|c| {
+                                let c = c.trim_start_matches('@');
+                                c.starts_with("Py") || c.starts_with("_Py")
+                            })
+                        })
+                    })
+                    .unwrap_or(false);
+                if calls_py_api {
+                    return; // Suppress — caller manages Python refcounts
+                }
+            }
+        }
+
         // ── Allocator crate downgrading ──
         // Allocator crates (e.g., bun_alloc) wrap C allocation APIs
         // in safe Rust abstractions. Their CrossLanguageFree and

@@ -137,7 +137,19 @@ where
     F: Fn(&str, SemanticKind) -> bool,
 {
     // Use the issue's symbol (callee or function name) as the SRT key.
+    // Also check the enclosing function (caller) for transitive patterns
+    // like PythonRefcountManaged — the callee may not have the pattern,
+    // but the caller that uses it does.
     let key = &issue.symbol;
+    let caller_key = issue
+        .location
+        .as_ref()
+        .and_then(|loc| loc.function.as_deref())
+        .unwrap_or("");
+    let has_kind_any = |k: &str, kind: SemanticKind| -> bool {
+        has_kind(k, kind)
+            || (!caller_key.is_empty() && caller_key != k && has_kind(caller_key, kind))
+    };
 
     match issue.kind {
         // ── BorrowEscape: R-1 heap/global provenance + R-7 library + R-8 from_parameter ──
@@ -224,11 +236,14 @@ where
             // Functions like PyUnicode_FromString copy their input — the
             // caller retains ownership of the original buffer.  Python's
             // refcount system manages the returned object, not the input.
-            if has_kind(key, SemanticKind::PythonRefcountInc)
-                || has_kind(key, SemanticKind::PythonRefcountDec)
-                || has_kind(key, SemanticKind::PythonBorrowedRef)
-                || has_kind(key, SemanticKind::PythonOwnedRef)
-                || has_kind(key, SemanticKind::PythonGilProtected)
+            // Check both callee (key) and caller (caller_key) because
+            // PythonRefcountManaged is set on the caller, not the callee.
+            if has_kind_any(key, SemanticKind::PythonRefcountInc)
+                || has_kind_any(key, SemanticKind::PythonRefcountDec)
+                || has_kind_any(key, SemanticKind::PythonBorrowedRef)
+                || has_kind_any(key, SemanticKind::PythonOwnedRef)
+                || has_kind_any(key, SemanticKind::PythonGilProtected)
+                || has_kind_any(key, SemanticKind::PythonRefcountManaged)
             {
                 return GateVerdict::SuppressRaii;
             }
@@ -340,6 +355,10 @@ where
                 || has_kind(key, SemanticKind::PythonBorrowedRef)
                 || has_kind(key, SemanticKind::PythonOwnedRef)
                 || has_kind(key, SemanticKind::PythonGilProtected)
+            // NOTE: PythonRefcountManaged does NOT suppress leaks.
+            // It means "this function interacts with refcounts", not
+            // "resources are managed". A function calling PyObject_New
+            // without Py_DECREF is a genuine leak.
             {
                 return GateVerdict::SuppressRaii;
             }
@@ -392,6 +411,8 @@ where
                 return GateVerdict::SuppressRaii;
             }
             // Python: refcount ensures cleanup
+            // NOTE: PythonRefcountManaged does NOT suppress leaks —
+            // it means "interacts with refcounts", not "resources managed".
             if has_kind(key, SemanticKind::PythonRefcountInc)
                 || has_kind(key, SemanticKind::PythonRefcountDec)
                 || has_kind(key, SemanticKind::PythonBorrowedRef)
