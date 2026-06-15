@@ -10,11 +10,11 @@ keywords = ["static-analysis", "llvm", "passes", "analysis", "ffi", "memory-safe
 categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
-omniscope-core = { path = "../omniscope-core" }
-omniscope-types = { path = "../omniscope-types" }
-omniscope-ir = { path = "../omniscope-ir" }
-omniscope-dataflow = { path = "../omniscope-dataflow" }
-omniscope-semantics = { path = "../omniscope-semantics" }
+omniscope-core = { version = "0.9.0", path = "../omniscope-core" }
+omniscope-types = { version = "0.9.0", path = "../omniscope-types" }
+omniscope-ir = { version = "0.9.0", path = "../omniscope-ir" }
+omniscope-dataflow = { version = "0.9.0", path = "../omniscope-dataflow" }
+omniscope-semantics = { version = "0.9.0", path = "../omniscope-semantics" }
 
 rayon = { workspace = true }
 thiserror = { workspace = true }
@@ -28,8 +28,8 @@ indexmap = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
-omniscope-ir = { path = "../omniscope-ir" }
-omniscope-pipeline = { path = "../omniscope-pipeline" }
+omniscope-ir = { version = "0.9.0", path = "../omniscope-ir" }
+omniscope-pipeline = { version = "0.9.0", path = "../omniscope-pipeline" }
 tracing-subscriber = { workspace = true }
 tempfile = { workspace = true }
 

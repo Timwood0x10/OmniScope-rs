@@ -15,8 +15,8 @@ default = []
 llvm-backend = ["llvm-sys"]
 
 [dependencies]
-omniscope-core = { path = "../omniscope-core" }
-omniscope-types = { path = "../omniscope-types" }
+omniscope-core = { version = "0.9.0", path = "../omniscope-core" }
+omniscope-types = { version = "0.9.0", path = "../omniscope-types" }
 
 anyhow = { workspace = true }
 llvm-sys = { version = "221", optional = true }

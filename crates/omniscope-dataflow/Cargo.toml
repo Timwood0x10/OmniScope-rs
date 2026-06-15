@@ -10,9 +10,9 @@ keywords = ["static-analysis", "llvm", "dataflow", "analysis", "ffi"]
 categories = ["development-tools", "development-tools::debugging"]
 
 [dependencies]
-omniscope-core = { path = "../omniscope-core" }
-omniscope-types = { path = "../omniscope-types" }
-omniscope-ir = { path = "../omniscope-ir" }
+omniscope-core = { version = "0.9.0", path = "../omniscope-core" }
+omniscope-types = { version = "0.9.0", path = "../omniscope-types" }
+omniscope-ir = { version = "0.9.0", path = "../omniscope-ir" }
 
 thiserror = { workspace = true }
 serde = { workspace = true }
