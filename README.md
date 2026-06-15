@@ -27,13 +27,6 @@ It is not ready for `0.9.0` because recent validation found accuracy and reporti
 | `bun_alloc.ll` | 0/19 true positives | Known regression after the single-language gate change. |
 | `llhttp.ll` | 0 findings | Correctly quiet on this clean vendored parser sample. |
 
-See:
-
-- [`docs/release/release_readiness_v0.2.0.md`](docs/release/release_readiness_v0.2.0.md)
-- [`docs/release/ffi_demo_validation.md`](docs/release/ffi_demo_validation.md)
-- [`docs/release/bun_validation.md`](docs/release/bun_validation.md)
-- [`LIMITATIONS.md`](LIMITATIONS.md)
-
 ## What Works
 
 - Loads LLVM IR through multiple strategies, including direct C++ extraction, `llvm-sys`, C++ pass JSON, text parsing, and MessagePack.
