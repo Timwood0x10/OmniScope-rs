@@ -366,15 +366,6 @@ Important test and validation areas:
 | Release validation reports | `docs/release/` |
 | Benchmarks | `benches/` |
 
-## Open Source And 0.9.0 Assessment
-
-Open-sourcing is reasonable if the repository is presented honestly:
-
-- Keep Apache-2.0 licensing.
-- Credit the original OmniScope project clearly.
-- Mark the project as experimental or pre-1.0.
-- Publish validation reports and known blockers.
-- Avoid claims such as "production-grade" until the release criteria are met.
 
 ## Roadmap
 
