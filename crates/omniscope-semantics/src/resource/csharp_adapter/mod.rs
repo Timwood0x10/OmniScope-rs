@@ -432,23 +432,9 @@ impl CSharpAdapter {
     fn analyze_function_name(&self, function_name: &str) -> Vec<CSharpSemanticPattern> {
         let mut patterns = Vec::new();
 
-        // P/Invoke patterns: functions called via DllImport
-        // These are native functions imported into C# code
-        if function_name.contains("P/Invoke") || function_name.contains("DllImport") {
-            patterns.push(CSharpSemanticPattern::PInvokeCall);
-        }
-
-        // Marshal memory operations
-        // These handle memory allocation/deallocation for interop
-        if function_name.contains("Marshal.AllocHGlobal")
-            || function_name.contains("Marshal.AllocCoTaskMem")
-        {
-            patterns.push(CSharpSemanticPattern::MarshalAllocation);
-        } else if function_name.contains("Marshal.FreeHGlobal")
-            || function_name.contains("Marshal.FreeCoTaskMem")
-        {
-            patterns.push(CSharpSemanticPattern::MarshalDeallocation);
-        }
+        // Delegate to pinvoke module for P/Invoke, Marshal, and COM interop detection
+        let pinvoke_patterns = pinvoke::detect_pinvoke_patterns(function_name);
+        patterns.extend(pinvoke_patterns);
 
         // GCHandle operations
         // These pin managed objects for native code access
@@ -476,15 +462,6 @@ impl CSharpAdapter {
             || function_name.contains("GC.WaitForPendingFinalizers")
         {
             patterns.push(CSharpSemanticPattern::GCOperation);
-        }
-
-        // COM interop
-        // These handle COM object interactions
-        if function_name.contains("Marshal.GetIUnknownForObject")
-            || function_name.contains("Marshal.GetObjectForIUnknown")
-            || function_name.contains("ComVisible")
-        {
-            patterns.push(CSharpSemanticPattern::COMInterop);
         }
 
         patterns
@@ -516,20 +493,12 @@ impl CSharpAdapter {
             if let IRInstructionKind::Call = instruction.kind {
                 // Extract called function name from instruction's callee field
                 if let Some(ref callee) = instruction.callee {
-                    // Marshal memory allocation functions
-                    if callee.contains("Marshal.AllocHGlobal")
-                        || callee.contains("Marshal.AllocCoTaskMem")
-                    {
-                        patterns.push(CSharpSemanticPattern::MarshalAllocation);
-                    }
-                    // Marshal memory deallocation functions
-                    else if callee.contains("Marshal.FreeHGlobal")
-                        || callee.contains("Marshal.FreeCoTaskMem")
-                    {
-                        patterns.push(CSharpSemanticPattern::MarshalDeallocation);
-                    }
+                    // Delegate to pinvoke module for P/Invoke, Marshal, and COM interop detection
+                    let pinvoke_patterns = pinvoke::detect_pinvoke_patterns(callee);
+                    patterns.extend(pinvoke_patterns);
+
                     // GCHandle allocation
-                    else if callee.contains("GCHandle.Alloc") {
+                    if callee.contains("GCHandle.Alloc") {
                         patterns.push(CSharpSemanticPattern::GCHandleAllocation);
                     }
                     // GCHandle deallocation
@@ -543,16 +512,6 @@ impl CSharpAdapter {
                     // IDisposable pattern
                     else if callee.contains("IDisposable") || callee.contains(".Dispose()") {
                         patterns.push(CSharpSemanticPattern::IDisposablePattern);
-                    }
-                    // P/Invoke calls
-                    else if callee.contains("P/Invoke") || callee.contains("DllImport") {
-                        patterns.push(CSharpSemanticPattern::PInvokeCall);
-                    }
-                    // COM interop
-                    else if callee.contains("Marshal.GetIUnknownForObject")
-                        || callee.contains("Marshal.GetObjectForIUnknown")
-                    {
-                        patterns.push(CSharpSemanticPattern::COMInterop);
                     }
                 }
             }

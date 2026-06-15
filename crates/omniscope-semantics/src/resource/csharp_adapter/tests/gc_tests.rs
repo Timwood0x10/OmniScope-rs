@@ -1,6 +1,7 @@
 //! Tests for GC pattern detection in C# adapter.
 
 use super::super::*;
+use crate::resource::semantic_tree::{FactConfidence, FactSource, SemanticKind};
 
 /// Objective: Verify GCHandle allocation detection
 /// Invariants: GCHandle.Alloc must be detected as GCHandleAllocation
@@ -169,5 +170,160 @@ fn test_gc_safety_assessment() {
         analysis.ffi_safety,
         CSharpFFISafety::ConcernGCHandleLeak,
         "GCHandle leak must be ConcernGCHandleLeak"
+    );
+}
+
+/// Objective: Verify GC root tracking through SemanticFact conversion
+/// Invariants: GCHandle patterns must produce CsharpPinvokeMarshal SemanticFacts
+#[test]
+fn test_gc_root_tracking_semantic_facts() {
+    let adapter = CSharpAdapter::new();
+
+    // GCHandle allocation produces a semantic fact
+    let analysis = adapter.analyze_function("System.Runtime.InteropServices.GCHandle.Alloc", None);
+    let facts = analysis.to_semantic_facts();
+    let has_gchandle_fact = facts.iter().any(|f| {
+        f.kind == SemanticKind::CsharpPinvokeMarshal
+            && f.confidence == FactConfidence::Medium
+            && f.source == FactSource::LanguageAdapter
+    });
+    assert!(
+        has_gchandle_fact,
+        "GCHandle allocation must produce CsharpPinvokeMarshal fact"
+    );
+
+    // GC operation produces RuntimeManagedResource facts
+    let analysis = adapter.analyze_function("GC.Collect", None);
+    let facts = analysis.to_semantic_facts();
+    let has_gc_fact = facts.iter().any(|f| {
+        f.kind == SemanticKind::RuntimeManagedResource
+            && f.confidence == FactConfidence::High
+            && f.source == FactSource::LanguageAdapter
+    });
+    assert!(
+        has_gc_fact,
+        "GC.Collect must produce RuntimeManagedResource fact"
+    );
+
+    // Unsafe function with GCHandle leak
+    let analysis = adapter.analyze_function("System.Runtime.InteropServices.GCHandle.Alloc", None);
+    let facts = analysis.to_semantic_facts();
+    let has_concern_fact = facts.iter().any(|f| {
+        f.kind == SemanticKind::Unknown
+            && f.confidence == FactConfidence::Low
+            && f.source == FactSource::LanguageAdapter
+    });
+    assert!(
+        has_concern_fact,
+        "GCHandle leak must produce low confidence concern fact"
+    );
+}
+
+/// Objective: Verify GCHandle safety context with balanced alloc/dealloc in IR
+/// Invariants: GCHandle.Alloc followed by GCHandle.Free must be properly assessed
+#[test]
+fn test_gc_handle_balanced_with_ir() {
+    let adapter = CSharpAdapter::new();
+
+    use omniscope_ir::parser::{FunctionBody, IRInstruction, IRInstructionKind};
+
+    let body = FunctionBody {
+        name: "test_gchandle_balanced".to_string(),
+        instructions: vec![
+            IRInstruction {
+                kind: IRInstructionKind::Call,
+                dest: Some("%handle".to_string()),
+                operands: vec!["i8*".to_string(), "%obj".to_string()],
+                callee: Some("GCHandle.Alloc".to_string()),
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text: "%handle = call i8* @GCHandle.Alloc(i8* %obj)".to_string(),
+                result_type: Some("i8*".to_string()),
+                element_type: None,
+                function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
+            },
+            IRInstruction {
+                kind: IRInstructionKind::Call,
+                dest: None,
+                operands: vec!["i8*".to_string(), "%handle".to_string()],
+                callee: Some("GCHandle.Free".to_string()),
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text: "call void @GCHandle.Free(i8* %handle)".to_string(),
+                result_type: Some("void".to_string()),
+                element_type: None,
+                function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
+            },
+            IRInstruction {
+                kind: IRInstructionKind::Ret,
+                dest: None,
+                operands: vec![],
+                callee: None,
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text: "ret void".to_string(),
+                result_type: Some("void".to_string()),
+                element_type: None,
+                function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
+            },
+        ],
+    };
+
+    let analysis = adapter.analyze_function("test_gchandle_balanced", Some(&body));
+
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::GCHandleAllocation),
+        "GCHandle.Alloc must be detected from IR body"
+    );
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::GCHandleDeallocation),
+        "GCHandle.Free must be detected from IR body"
+    );
+    // With both alloc and dealloc, should not be GCHandleLeak
+    assert_ne!(
+        analysis.ffi_safety,
+        CSharpFFISafety::ConcernGCHandleLeak,
+        "Balanced GCHandle alloc/dealloc must not be ConcernGCHandleLeak"
+    );
+}
+
+/// Objective: Verify GC pinned object detection
+/// Invariants: P/Invoke with GCHandle pinning must be detected
+#[test]
+fn test_gc_pinned_object_detection() {
+    let adapter = CSharpAdapter::new();
+
+    // Simulate a function that pins managed memory via GCHandle
+    let analysis = adapter.analyze_function("System.Runtime.InteropServices.GCHandle.Alloc", None);
+
+    // Verify GCHandle allocation pattern is detected
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::GCHandleAllocation),
+        "GCHandle.Alloc must be detected as GCHandleAllocation"
+    );
+
+    // Function that uses GCHandle for pinning but also shows GC interaction
+    let analysis = adapter.analyze_function("GCHandle.Alloc_and_GC.Collect", None);
+    let has_gchandle = analysis
+        .patterns
+        .contains(&CSharpSemanticPattern::GCHandleAllocation);
+    let has_gc_op = analysis
+        .patterns
+        .contains(&CSharpSemanticPattern::GCOperation);
+    assert!(
+        has_gchandle || has_gc_op,
+        "Function must detect at least one GC pattern"
     );
 }

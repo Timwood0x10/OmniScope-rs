@@ -12,10 +12,12 @@ use super::CSharpSemanticPattern;
 /// # Objective
 /// Detect P/Invoke patterns in C# function names. P/Invoke calls
 /// bridge managed C# code and native C/C++ functions through
-/// Platform Invocation Services.
+/// Platform Invocation Services. Also recognizes Marshal class
+/// operations that interact with native memory (PtrToStructure,
+/// StructureToPtr, SizeOf, PtrToStringAnsi, etc.).
 ///
 /// # Invariants
-/// - Returns true for P/Invoke or DllImport patterns.
+/// - Returns true for P/Invoke, DllImport, or Marshal class native operations.
 /// - Returns false for non-P/Invoke patterns.
 ///
 /// # Arguments
@@ -24,7 +26,14 @@ use super::CSharpSemanticPattern;
 /// # Returns
 /// `true` if the function is identified as a P/Invoke call, `false` otherwise.
 pub fn is_pinvoke_call(function_name: &str) -> bool {
-    function_name.contains("P/Invoke") || function_name.contains("DllImport")
+    function_name.contains("P/Invoke")
+        || function_name.contains("DllImport")
+        || function_name.contains("Marshal.PtrToStructure")
+        || function_name.contains("Marshal.StructureToPtr")
+        || function_name.contains("Marshal.SizeOf")
+        || function_name.contains("Marshal.PtrToStringAnsi")
+        || function_name.contains("Marshal.PtrToStringUni")
+        || function_name.contains("Marshal.PtrToStringAuto")
 }
 
 /// Checks if a function name indicates a Marshal memory allocation.
@@ -32,10 +41,13 @@ pub fn is_pinvoke_call(function_name: &str) -> bool {
 /// # Objective
 /// Detect Marshal memory allocation patterns in C# function names.
 /// Marshal allocations create memory on the native heap for interop
-/// scenarios.
+/// scenarios. This includes direct allocations (AllocHGlobal,
+/// AllocCoTaskMem) and string marshaling allocations
+/// (StringToHGlobalAnsi, StringToCoTaskMemAnsi, etc.).
 ///
 /// # Invariants
-/// - Returns true for Marshal.AllocHGlobal or Marshal.AllocCoTaskMem.
+/// - Returns true for Marshal.AllocHGlobal, Marshal.AllocCoTaskMem,
+///   and Marshal.StringToHGlobalAnsi/Uni, Marshal.StringToCoTaskMemAnsi/Uni.
 /// - Returns false for non-Marshal allocation patterns.
 ///
 /// # Arguments
@@ -46,6 +58,10 @@ pub fn is_pinvoke_call(function_name: &str) -> bool {
 pub fn is_marshal_allocation(function_name: &str) -> bool {
     function_name.contains("Marshal.AllocHGlobal")
         || function_name.contains("Marshal.AllocCoTaskMem")
+        || function_name.contains("Marshal.StringToHGlobalAnsi")
+        || function_name.contains("Marshal.StringToHGlobalUni")
+        || function_name.contains("Marshal.StringToCoTaskMemAnsi")
+        || function_name.contains("Marshal.StringToCoTaskMemUni")
 }
 
 /// Checks if a function name indicates a Marshal memory deallocation.
@@ -73,9 +89,12 @@ pub fn is_marshal_deallocation(function_name: &str) -> bool {
 /// # Objective
 /// Detect COM interop patterns in C# function names. COM interop
 /// handles interactions with COM objects through the .NET runtime.
+/// This includes Marshal.GetIUnknownForObject, Marshal.GetObjectForIUnknown,
+/// Marshal.GetComInterfaceForObject, Marshal.GetIDispatchForObject,
+/// Marshal.ReleaseComObject, and ComVisible attribute.
 ///
 /// # Invariants
-/// - Returns true for Marshal.GetIUnknownForObject, Marshal.GetObjectForIUnknown, or ComVisible.
+/// - Returns true for known COM interop patterns.
 /// - Returns false for non-COM interop patterns.
 ///
 /// # Arguments
@@ -86,6 +105,9 @@ pub fn is_marshal_deallocation(function_name: &str) -> bool {
 pub fn is_com_interop(function_name: &str) -> bool {
     function_name.contains("Marshal.GetIUnknownForObject")
         || function_name.contains("Marshal.GetObjectForIUnknown")
+        || function_name.contains("Marshal.GetComInterfaceForObject")
+        || function_name.contains("Marshal.GetIDispatchForObject")
+        || function_name.contains("Marshal.ReleaseComObject")
         || function_name.contains("ComVisible")
 }
 

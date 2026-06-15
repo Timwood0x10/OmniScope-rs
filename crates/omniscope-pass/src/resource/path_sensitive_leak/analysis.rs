@@ -8,6 +8,11 @@
 //! - path_state_label — human-readable label for exit states
 //! - format_exit_state_summary — builds exit state summary string
 //! - determine_leak_type — determines leak type from exit states
+//! - PathConfidence — confidence level for path-sensitive analysis
+//! - PathCombinationResult — aggregated result of combining path states
+//! - combine_path_states — combines multiple path exit states into one result
+//! - path_confidence_score — calculates confidence score from state distribution
+//! - detect_release_path_pattern — detects the release pattern across paths
 
 use omniscope_semantics::{SemanticKind, SummaryStore};
 use omniscope_types::Evidence;
@@ -95,6 +100,8 @@ pub(super) fn collect_exit_states(
     // produces two Released entries → downstream counters may interpret
     // that as a double-free even though the releases are mutually exclusive.
     let mut released_instances: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // Track total release events (including duplicates from mutually exclusive paths).
+    let mut total_release_count: usize = 0;
 
     // Look for pointer states related to this allocation's function.
     let function_prefix = format!("{}_", alloc.caller_name);
@@ -106,6 +113,7 @@ pub(super) fn collect_exit_states(
 
         // Skip duplicate Released states from mutually exclusive paths.
         if let crate::resource::ownership_solver::PointerValueState::Released { instance } = state {
+            total_release_count += 1;
             if !released_instances.insert(*instance) {
                 // Instance already recorded as Released on a prior path —
                 // this is a mutually-exclusive duplicate, not a real double-release.
@@ -163,6 +171,20 @@ pub(super) fn collect_exit_states(
 
     // Return empty vec when no pointer states match — the caller will
     // fall back to counting-based leak detection.
+
+    // Analyze release path pattern when multiple releases were found.
+    // This information can be used by the verifier to distinguish mutually
+    // exclusive releases (if/else) from sequential releases (double-free).
+    if released_instances.len() > 1 {
+        let pattern = detect_release_path_pattern(total_release_count, released_instances.len());
+        tracing::trace!(
+            "release path pattern for '{}': {:?} ({} instances)",
+            alloc.caller_name,
+            pattern,
+            released_instances.len()
+        );
+    }
+
     exit_states
 }
 
@@ -238,7 +260,8 @@ pub(super) fn path_state_label(state: &ResourcePathState) -> &'static str {
 /// Builds a concise summary of path exit states for evidence attachment.
 ///
 /// Returns a string like "2 Owned, 1 Released, 1 EscapedToCaller" or
-/// an empty string when no exit states are available.
+/// an empty string when no exit states are available. When confidence
+/// information is available, appends a confidence descriptor.
 pub(super) fn format_exit_state_summary(exit_states: &[PathExitState]) -> String {
     if exit_states.is_empty() {
         return String::new();
@@ -257,11 +280,23 @@ pub(super) fn format_exit_state_summary(exit_states: &[PathExitState]) -> String
     let mut entries: Vec<(&str, usize)> = counts.into_iter().collect();
     entries.sort_by_key(|b| std::cmp::Reverse(b.1));
 
-    entries
+    let mut summary = entries
         .iter()
         .map(|(label, count)| format!("{count} {label}"))
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+
+    // Append path confidence information when multiple paths exist.
+    if exit_states.len() > 1 {
+        let combined = combine_path_states(exit_states);
+        summary.push_str(&format!(
+            " [confidence={}, leak_ratio={:.2}]",
+            combined.confidence.to_score(),
+            combined.leak_ratio()
+        ));
+    }
+
+    summary
 }
 
 /// Determines leak type from path-sensitive exit states.
@@ -313,5 +348,209 @@ pub(super) fn determine_leak_type(
         LeakType::Safe
     } else {
         LeakType::NeedsModel
+    }
+}
+
+/// Confidence level for path-sensitive analysis results.
+///
+/// Reflects how strongly the path analysis supports its conclusion:
+/// - `High`: overwhelming majority of paths agree (e.g., all paths leak or all are safe).
+/// - `Medium`: mixed results with a clear leaning.
+/// - `Low`: approximately balanced or insufficient data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum PathConfidence {
+    /// Weak confidence — paths are approximately balanced.
+    Low,
+    /// Moderate confidence — some paths disagree.
+    Medium,
+    /// Strong confidence in the analysis result.
+    High,
+}
+
+impl PathConfidence {
+    /// Returns `true` if this confidence level is at least `Medium`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "only used in tests"))]
+    pub(super) fn is_at_least_medium(&self) -> bool {
+        matches!(self, PathConfidence::High | PathConfidence::Medium)
+    }
+
+    /// Converts this confidence level to a numeric score in `[0.0, 1.0]`.
+    pub(super) fn to_score(self) -> f32 {
+        match self {
+            PathConfidence::High => 0.9,
+            PathConfidence::Medium => 0.6,
+            PathConfidence::Low => 0.3,
+        }
+    }
+}
+
+/// Aggregated result of combining multiple path exit states for an allocation.
+///
+/// Provides a unified view of how many paths are safe vs. leaking, along
+/// with a confidence score for the overall assessment.
+#[derive(Debug, Clone)]
+pub(super) struct PathCombinationResult {
+    /// Total number of path exit states analyzed.
+    pub total_paths: usize,
+    /// Number of paths where the resource remains owned (potential leak).
+    pub owned_paths: usize,
+    /// Number of paths where the resource is safely released or transferred.
+    pub safe_paths: usize,
+    /// Number of paths with unknown or indeterminate state.
+    pub unknown_paths: usize,
+    /// Confidence level of the combined result.
+    pub confidence: PathConfidence,
+}
+
+impl PathCombinationResult {
+    /// Returns `true` when all paths are safe (no leak).
+    #[cfg_attr(not(test), expect(dead_code, reason = "only used in tests"))]
+    pub(super) fn is_all_safe(&self) -> bool {
+        self.total_paths > 0 && self.owned_paths == 0 && self.unknown_paths == 0
+    }
+
+    /// Returns `true` when all paths leak (definite leak).
+    #[cfg_attr(not(test), expect(dead_code, reason = "only used in tests"))]
+    pub(super) fn is_all_leak(&self) -> bool {
+        self.total_paths > 0 && self.safe_paths == 0 && self.unknown_paths == 0
+    }
+
+    /// Returns the ratio of owned (leaking) paths to total paths.
+    pub(super) fn leak_ratio(&self) -> f32 {
+        if self.total_paths == 0 {
+            return 0.0;
+        }
+        self.owned_paths as f32 / self.total_paths as f32
+    }
+}
+
+/// Combines multiple path exit states into a single aggregated result.
+///
+/// Counts owned vs. safe paths and assigns a confidence level based on
+/// the distribution. This is useful for producing a summary verdict when
+/// an allocation has multiple exit states from different execution paths.
+///
+/// # Examples
+///
+/// ```
+/// # use omniscope_pass::resource::path_sensitive_leak::analysis::*;
+/// let states = vec![
+///     PathExitState { resource_state: ResourcePathState::Owned, _evidence: vec![] },
+///     PathExitState { resource_state: ResourcePathState::Released, _evidence: vec![] },
+/// ];
+/// let result = combine_path_states(&states);
+/// assert!(result.total_paths == 2);
+/// assert!(result.owned_paths == 1);
+/// assert!(result.safe_paths == 1);
+/// ```
+pub(super) fn combine_path_states(exit_states: &[PathExitState]) -> PathCombinationResult {
+    let total_paths = exit_states.len();
+    let mut owned_paths = 0usize;
+    let mut safe_paths = 0usize;
+    let mut unknown_paths = 0usize;
+
+    for state in exit_states {
+        if is_safe_exit(&state.resource_state) {
+            safe_paths += 1;
+        } else if state.resource_state == ResourcePathState::Owned {
+            owned_paths += 1;
+        } else {
+            unknown_paths += 1;
+        }
+    }
+
+    let confidence = path_confidence_score(total_paths, owned_paths, safe_paths);
+
+    PathCombinationResult {
+        total_paths,
+        owned_paths,
+        safe_paths,
+        unknown_paths,
+        confidence,
+    }
+}
+
+/// Calculates the confidence score for a path-sensitive analysis result
+/// based on the distribution of owned vs. safe paths.
+///
+/// Confidence is determined by the ratio of the majority outcome:
+/// - >= 90% agreement → High
+/// - >= 65% agreement → Medium
+/// - Otherwise        → Low
+fn path_confidence_score(total: usize, owned: usize, safe: usize) -> PathConfidence {
+    if total == 0 {
+        return PathConfidence::Low;
+    }
+
+    let majority_ratio = owned.max(safe) as f32 / total as f32;
+
+    if majority_ratio >= 0.90 {
+        PathConfidence::High
+    } else if majority_ratio >= 0.65 {
+        PathConfidence::Medium
+    } else {
+        PathConfidence::Low
+    }
+}
+
+/// Describes the release pattern detected across multiple execution paths.
+///
+/// Used by the double-free verifier to distinguish between:
+/// - Mutually exclusive releases (if/else branches each free once).
+/// - Sequential releases (same path frees twice).
+/// - Mixed patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReleasePathPattern {
+    /// All release paths are mutually exclusive (branch-alternatives).
+    /// Example: `if (cond) free(p); else free(p);`
+    MutuallyExclusive,
+    /// Releases appear on sequential (non-exclusive) paths.
+    /// Example: `free(p); free(p);` in the same basic block.
+    SequentialRelease,
+    /// Mixed: some releases are mutually exclusive, some are sequential.
+    #[expect(dead_code, reason = "available for future path analysis refinement")]
+    MixedRelease,
+    /// Cannot determine the release pattern.
+    Indeterminate,
+}
+
+/// Detects the release path pattern from a set of exit states.
+///
+/// Examines the ratio of Released states to total states to determine
+/// whether releases are likely mutually exclusive or sequential.
+/// When more than half the exit states are Released for the same
+/// instance, they are likely mutually exclusive branches (if/else).
+/// When instances differ, releases are sequential.
+///
+/// # Examples
+///
+/// ```
+/// # use omniscope_pass::resource::path_sensitive_leak::analysis::*;
+/// // Two Released states for the same instance → mutually exclusive.
+/// let pattern = detect_release_path_pattern(2, 1);
+/// assert_eq!(pattern, ReleasePathPattern::MutuallyExclusive);
+/// ```
+pub(super) fn detect_release_path_pattern(
+    total_released_instances: usize,
+    unique_instances: usize,
+) -> ReleasePathPattern {
+    if total_released_instances == 0 {
+        return ReleasePathPattern::Indeterminate;
+    }
+
+    if unique_instances == 0 {
+        return ReleasePathPattern::Indeterminate;
+    }
+
+    // When there are more Released states than unique instances, the
+    // same instance is released on multiple paths → mutually exclusive.
+    if total_released_instances > unique_instances {
+        ReleasePathPattern::MutuallyExclusive
+    } else if total_released_instances == unique_instances {
+        // Each release is for a distinct instance → sequential.
+        ReleasePathPattern::SequentialRelease
+    } else {
+        // Should not normally happen, but be safe.
+        ReleasePathPattern::Indeterminate
     }
 }

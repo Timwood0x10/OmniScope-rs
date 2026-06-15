@@ -1,5 +1,6 @@
 //! Tests for C# adapter semantic analysis.
 
+pub mod dispose_tests;
 pub mod gc_tests;
 pub mod pinvoke_tests;
 

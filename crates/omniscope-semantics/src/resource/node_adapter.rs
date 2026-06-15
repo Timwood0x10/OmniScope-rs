@@ -1,22 +1,22 @@
-//! Node.js/N-API language adapter for semantic analysis.
+//! Node.js/napi language adapter for semantic analysis.
 //!
-//! Provides Node.js-specific semantic analysis for N-API (node-addon-api)
-//! function calls, resource management patterns, and memory leak detection.
+//! Detects napi_* function call patterns from Node.js native addons and
+//! identifies memory management patterns, reference cycles, and handle
+//! scope violations.
 //!
 //! # N-API Memory Model
 //!
-//! Node.js native addons built with N-API interact with the JavaScript heap
-//! through a set of C functions prefixed with `napi_`. Key patterns:
+//! Node.js N-API (node-addon-api) provides a C API for building native
+//! addons. Key memory management concepts:
 //!
-//! 1. **Value creation** (`napi_create_*`) — creates JS values on the heap.
-//! 2. **Reference management** (`napi_create_reference` / `napi_delete_reference`)
-//!    — manages persistent references to JS objects.
-//! 3. **Async work** (`napi_create_async_work` / `napi_delete_async_work`)
-//!    — manages async work items that may leak if not cleaned up.
-//! 4. **Threadsafe functions** (`napi_create_threadsafe_function` /
-//!    `napi_release_threadsafe_function`) — cross-thread JS callbacks.
-//! 5. **Object wrap** (`napi_wrap` / `napi_unwrap`) — C++ object lifecycle
-//!    tied to JS object lifetime.
+//! - **Handle scopes**: `napi_open_handle_scope` / `napi_close_handle_scope`
+//!   manage local reference lifetimes. Unclosed scopes cause memory leaks.
+//! - **References**: `napi_create_reference` / `napi_delete_reference`
+//!   manage persistent references. Unreleased references prevent GC.
+//! - **Object wrapping**: `napi_wrap` links a C++ instance to a JS object.
+//!   Must be paired with a finalizer or `napi_remove_wrap`.
+//! - **Async work**: `napi_create_async_work` must be paired with
+//!   `napi_delete_async_work` to avoid leaking native resources.
 
 use omniscope_ir::{FunctionBody, IRInstructionKind};
 use omniscope_types::Language;
@@ -25,166 +25,156 @@ use crate::resource::semantic_tree::{
     FactConfidence, FactSource, SemanticFact, SemanticKey, SemanticKind,
 };
 
-/// Node.js N-API-specific semantic patterns derived from IR analysis.
+/// Node.js/napi-specific semantic patterns derived from IR analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NapiSemanticPattern {
-    /// napi_create_* (creating JavaScript values, arrays, objects, strings, etc.)
-    NapiCreateValue,
-    /// napi_get_* (getting JavaScript values, properties, array elements)
-    NapiGetValue,
-    /// napi_call_* (calling JavaScript functions / constructors)
-    NapiCallFunction,
-    /// napi_create_reference (creating persistent reference to a JS value)
-    NapiCreateReference,
-    /// napi_delete_reference (deleting a persistent reference)
-    NapiDeleteReference,
-    /// napi_create_async_work (creating async work item)
-    NapiCreateAsyncWork,
-    /// napi_delete_async_work (deleting async work item)
-    NapiDeleteAsyncWork,
-    /// napi_create_threadsafe_function (creating threadsafe function)
-    NapiCreateThreadsafeFunction,
-    /// napi_release_threadsafe_function / napi_unref_threadsafe_function
-    NapiReleaseThreadsafeFunction,
-    /// napi_throw_* (throwing JavaScript errors)
-    NapiThrowError,
-    /// napi_wrap / napi_unwrap (wrapping C++ objects in JS objects)
+    /// napi value creation (napi_create_string_utf8, napi_create_object, etc.)
+    NapiValueCreation,
+    /// napi buffer/arraybuffer creation (napi_create_buffer, napi_create_arraybuffer)
+    NapiBufferCreation,
+    /// napi function call (napi_call_function)
+    NapiFunctionCall,
+    /// napi handle scope open (napi_open_handle_scope)
+    NapiHandleScopeOpen,
+    /// napi handle scope close (napi_close_handle_scope)
+    NapiHandleScopeClose,
+    /// napi reference creation (napi_create_reference)
+    NapiReferenceCreate,
+    /// napi reference deletion (napi_delete_reference)
+    NapiReferenceDelete,
+    /// napi object wrap (napi_wrap)
     NapiObjectWrap,
-    /// napi_set_* (setting JavaScript properties, named/typed arrays, elements)
-    NapiSetProperty,
-    /// napi_remove_wrap / napi_remove_ref (cleanup operations)
-    NapiCleanup,
-    /// napi_ref / napi_unref (reference counting for threadsafe functions)
-    NapiRefCount,
-    /// napi_get_and_clear_last_exception / napi_is_exception_pending (error state)
+    /// napi object unwrap (napi_unwrap)
+    NapiObjectUnwrap,
+    /// napi async work (napi_create_async_work)
+    NapiAsyncWorkCreate,
+    /// napi async work deletion (napi_delete_async_work)
+    NapiAsyncWorkDelete,
+    /// napi callback registration (napi_create_function, JS callback)
+    NapiCallbackRegistration,
+    /// napi property descriptor (napi_define_properties, napi_set_property)
+    NapiPropertyAccess,
+    /// napi type checking (napi_instanceof, napi_typeof)
+    NapiTypeCheck,
+    /// napi error/exception handling (napi_throw_error, napi_throw_type_error)
     NapiErrorHandling,
-    /// N-API callback function (napi_callback, napi_threadsafe_function_call_js)
-    NapiCallback,
-    /// N-API class / property descriptor definition
-    NapiClassDefinition,
-    /// Unknown N-API pattern
+    /// napi environment lifecycle (napi_get_env, process exit)
+    NapiEnvLifecycle,
+    /// Unknown napi pattern
     Unknown,
 }
 
-/// Analysis result for a Node.js/N-API function.
+/// Analysis result for a Node.js/napi function.
 #[derive(Debug, Clone)]
 pub struct NapiFunctionAnalysis {
     /// The function name analyzed
     pub function_name: String,
-    /// Detected N-API semantic patterns
+    /// Detected semantic patterns
     pub patterns: Vec<NapiSemanticPattern>,
-    /// Whether this function is an N-API callback
-    pub is_napi_callback: bool,
-    /// Whether this function manages persistent references
-    pub manages_references: bool,
-    /// Whether this function manages async work
-    pub manages_async_work: bool,
+    /// Whether this function creates references (potential leak if unbalanced)
+    pub creates_references: bool,
+    /// Whether this function deletes references
+    pub deletes_references: bool,
+    /// Whether this function manages handle scopes
+    pub manages_handle_scopes: bool,
     /// Recommended FFI safety assessment
     pub ffi_safety: NapiFFISafety,
 }
 
 impl NapiFunctionAnalysis {
-    /// Convert N-API analysis results into SemanticFact records.
+    /// Convert napi analysis results into SemanticFact records.
     pub fn to_semantic_facts(&self) -> Vec<SemanticFact> {
         let key = SemanticKey::Symbol(self.function_name.clone());
         let mut facts = Vec::new();
 
         for pattern in &self.patterns {
             match pattern {
-                NapiSemanticPattern::NapiCreateValue => {
+                NapiSemanticPattern::NapiValueCreation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("NodeAdapter: napi value creation in {}", self.function_name),
+                    ));
+                }
+                NapiSemanticPattern::NapiBufferCreation => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::HeapProvenance,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "NodeAdapter: napi buffer creation in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                NapiSemanticPattern::NapiHandleScopeOpen
+                | NapiSemanticPattern::NapiHandleScopeClose => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::RuntimeManagedResource,
+                        FactConfidence::Medium,
+                        FactSource::LanguageAdapter,
+                        format!(
+                            "NodeAdapter: handle scope operation in {}",
+                            self.function_name
+                        ),
+                    ));
+                }
+                NapiSemanticPattern::NapiReferenceCreate => {
                     facts.push(SemanticFact::new(
                         key.clone(),
                         SemanticKind::RuntimeManagedResource,
                         FactConfidence::High,
                         FactSource::LanguageAdapter,
-                        format!("NapiAdapter: create JS value in {}", self.function_name),
+                        format!("NodeAdapter: reference creation in {}", self.function_name),
                     ));
                 }
-                NapiSemanticPattern::NapiCreateReference => {
-                    facts.push(SemanticFact::new(
-                        key.clone(),
-                        SemanticKind::HeapProvenance,
-                        FactConfidence::High,
-                        FactSource::LanguageAdapter,
-                        format!("NapiAdapter: create reference in {}", self.function_name),
-                    ));
-                }
-                NapiSemanticPattern::NapiDeleteReference => {
+                NapiSemanticPattern::NapiReferenceDelete => {
                     facts.push(SemanticFact::new(
                         key.clone(),
                         SemanticKind::RaiiDropRelease,
-                        FactConfidence::Medium,
-                        FactSource::LanguageAdapter,
-                        format!("NapiAdapter: delete reference in {}", self.function_name),
-                    ));
-                }
-                NapiSemanticPattern::NapiCreateAsyncWork => {
-                    facts.push(SemanticFact::new(
-                        key.clone(),
-                        SemanticKind::HeapProvenance,
                         FactConfidence::High,
                         FactSource::LanguageAdapter,
-                        format!("NapiAdapter: create async work in {}", self.function_name),
-                    ));
-                }
-                NapiSemanticPattern::NapiDeleteAsyncWork => {
-                    facts.push(SemanticFact::new(
-                        key.clone(),
-                        SemanticKind::RaiiDropRelease,
-                        FactConfidence::Medium,
-                        FactSource::LanguageAdapter,
-                        format!("NapiAdapter: delete async work in {}", self.function_name),
-                    ));
-                }
-                NapiSemanticPattern::NapiCreateThreadsafeFunction => {
-                    facts.push(SemanticFact::new(
-                        key.clone(),
-                        SemanticKind::HeapProvenance,
-                        FactConfidence::High,
-                        FactSource::LanguageAdapter,
-                        format!(
-                            "NapiAdapter: create threadsafe fn in {}",
-                            self.function_name
-                        ),
-                    ));
-                }
-                NapiSemanticPattern::NapiReleaseThreadsafeFunction => {
-                    facts.push(SemanticFact::new(
-                        key.clone(),
-                        SemanticKind::RaiiDropRelease,
-                        FactConfidence::Medium,
-                        FactSource::LanguageAdapter,
-                        format!(
-                            "NapiAdapter: release threadsafe fn in {}",
-                            self.function_name
-                        ),
+                        format!("NodeAdapter: reference deletion in {}", self.function_name),
                     ));
                 }
                 NapiSemanticPattern::NapiObjectWrap => {
                     facts.push(SemanticFact::new(
                         key.clone(),
-                        SemanticKind::DeclaredCrossBoundary,
+                        SemanticKind::CppUniquePtr,
                         FactConfidence::Medium,
                         FactSource::LanguageAdapter,
-                        format!("NapiAdapter: object wrap in {}", self.function_name),
+                        format!("NodeAdapter: object wrap in {}", self.function_name),
                     ));
                 }
-                NapiSemanticPattern::NapiCallback => {
+                NapiSemanticPattern::NapiAsyncWorkCreate => {
                     facts.push(SemanticFact::new(
                         key.clone(),
-                        SemanticKind::DeclaredCrossBoundary,
+                        SemanticKind::RuntimeManagedResource,
                         FactConfidence::High,
                         FactSource::LanguageAdapter,
-                        format!("NapiAdapter: callback in {}", self.function_name),
+                        format!("NodeAdapter: async work creation in {}", self.function_name),
                     ));
                 }
-                NapiSemanticPattern::NapiCleanup => {
+                NapiSemanticPattern::NapiAsyncWorkDelete => {
                     facts.push(SemanticFact::new(
                         key.clone(),
                         SemanticKind::RaiiDropRelease,
+                        FactConfidence::High,
+                        FactSource::LanguageAdapter,
+                        format!("NodeAdapter: async work deletion in {}", self.function_name),
+                    ));
+                }
+                NapiSemanticPattern::NapiFunctionCall => {
+                    facts.push(SemanticFact::new(
+                        key.clone(),
+                        SemanticKind::DeclaredCrossBoundary,
                         FactConfidence::Medium,
                         FactSource::LanguageAdapter,
-                        format!("NapiAdapter: cleanup in {}", self.function_name),
+                        format!("NodeAdapter: napi function call in {}", self.function_name),
                     ));
                 }
                 _ => {}
@@ -198,7 +188,7 @@ impl NapiFunctionAnalysis {
                 FactConfidence::Low,
                 FactSource::LanguageAdapter,
                 format!(
-                    "NapiAdapter: FFI safety concern {:?} in {}",
+                    "NodeAdapter: FFI safety concern {:?} in {}",
                     self.ffi_safety, self.function_name
                 ),
             ));
@@ -208,68 +198,95 @@ impl NapiFunctionAnalysis {
     }
 }
 
-/// FFI safety assessment for Node.js/N-API functions.
+/// FFI safety assessment for Node.js/napi functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NapiFFISafety {
-    /// Safe: pure N-API internal, no resource management concerns
-    SafeInternal,
-    /// Safe: proper reference/async-work lifecycle management
-    SafeResourceManaged,
-    /// Concern: reference leak (create without delete)
-    ConcernReferenceLeak,
-    /// Concern: async work leak (create without delete)
-    ConcernAsyncWorkLeak,
-    /// Concern: threadsafe function leak (create without release)
-    ConcernThreadsafeLeak,
+    /// Safe: no napi operations, pure computation
+    SafeNoNapi,
+    /// Safe: balanced handle scope usage
+    SafeHandleScope,
+    /// Safe: balanced reference management
+    SafeReferenceManaged,
+    /// Concern: unclosed handle scope (memory leak)
+    ConcernUnclosedHandleScope,
+    /// Concern: unreleased reference (memory leak)
+    ConcernUnreleasedReference,
+    /// Concern: object wrap without finalizer
+    ConcernWrapWithoutFinalizer,
     /// Unknown: cannot determine safety
     Unknown,
 }
 
 impl NapiFFISafety {
     /// Returns true if this assessment indicates a safe pattern.
+    ///
+    /// # Objective
+    /// Determine whether the FFI safety assessment indicates that the analyzed
+    /// napi function is safe from memory safety perspective.
+    ///
+    /// # Invariants
+    /// - `SafeNoNapi`, `SafeHandleScope`, and `SafeReferenceManaged` are safe.
+    /// - All `Concern*` variants and `Unknown` are unsafe.
+    ///
+    /// # Returns
+    /// `true` if the assessment indicates a safe pattern, `false` otherwise.
     pub fn is_safe(&self) -> bool {
         matches!(
             self,
-            NapiFFISafety::SafeInternal | NapiFFISafety::SafeResourceManaged
+            NapiFFISafety::SafeNoNapi
+                | NapiFFISafety::SafeHandleScope
+                | NapiFFISafety::SafeReferenceManaged
         )
     }
 
     /// Returns the safety score (0.0 = dangerous, 1.0 = safe).
+    ///
+    /// # Objective
+    /// Provide a numeric safety score for risk assessment.
+    ///
+    /// # Invariants
+    /// - Score range is always between 0.0 and 1.0.
+    /// - Safe variants score >= 0.85.
+    /// - Concern variants score <= 0.3.
+    /// - Unknown scores exactly 0.5.
+    ///
+    /// # Returns
+    /// A `f32` value between 0.0 and 1.0.
     pub fn safety_score(&self) -> f32 {
         match self {
-            NapiFFISafety::SafeInternal => 0.95,
-            NapiFFISafety::SafeResourceManaged => 0.85,
-            NapiFFISafety::ConcernReferenceLeak => 0.3,
-            NapiFFISafety::ConcernAsyncWorkLeak => 0.25,
-            NapiFFISafety::ConcernThreadsafeLeak => 0.2,
+            NapiFFISafety::SafeNoNapi => 0.95,
+            NapiFFISafety::SafeHandleScope => 0.9,
+            NapiFFISafety::SafeReferenceManaged => 0.85,
+            NapiFFISafety::ConcernUnclosedHandleScope => 0.3,
+            NapiFFISafety::ConcernUnreleasedReference => 0.2,
+            NapiFFISafety::ConcernWrapWithoutFinalizer => 0.15,
             NapiFFISafety::Unknown => 0.5,
         }
     }
 }
 
-/// Node.js/N-API adapter for semantic analysis.
+/// Node.js/napi adapter for semantic analysis.
 ///
-/// This adapter provides N-API-specific semantic analysis by combining
+/// This adapter provides napi-specific semantic analysis by combining
 /// function name pattern matching with IR body instruction analysis.
-/// It detects N-API function call patterns, resource management
-/// operations, and potential memory leak patterns.
-///
-/// # N-API Resource Categories
-///
-/// 1. **Persistent references** (`napi_create_reference` /
-///    `napi_delete_reference`): Must be paired to avoid leaking JS objects.
-/// 2. **Async work** (`napi_create_async_work` / `napi_delete_async_work`):
-///    Must be paired to avoid leaking async work items.
-/// 3. **Threadsafe functions** (`napi_create_threadsafe_function` /
-///    `napi_release_threadsafe_function`): Must be paired to avoid
-///    leaking callbacks across threads.
-pub struct NapiAdapter {
+pub struct NodeAdapter {
     /// Language hint for Node.js, used to identify the source language
     language: Language,
 }
 
-impl NapiAdapter {
-    /// Creates a new N-API adapter with NodeJs language hint.
+impl NodeAdapter {
+    /// Creates a new Node.js adapter.
+    ///
+    /// # Objective
+    /// Initialize the Node.js adapter with the correct language identifier
+    /// for use in the semantic engine pipeline.
+    ///
+    /// # Invariants
+    /// - Language is always set to `Language::NodeJs`.
+    /// - The adapter is ready to use immediately after creation.
+    ///
+    /// # Returns
+    /// A new `NodeAdapter` instance ready for semantic analysis.
     pub fn new() -> Self {
         Self {
             language: Language::NodeJs,
@@ -277,11 +294,35 @@ impl NapiAdapter {
     }
 
     /// Returns the language hint for this adapter.
+    ///
+    /// # Objective
+    /// Provide the language identifier for this adapter.
+    ///
+    /// # Returns
+    /// The `Language::NodeJs` enum variant.
     pub fn language(&self) -> Language {
         self.language
     }
 
-    /// Analyzes a Node.js/N-API function from its IR body and name.
+    /// Analyzes a Node.js/napi function from its IR body and name.
+    ///
+    /// # Objective
+    /// Perform comprehensive semantic analysis of a napi function by
+    /// combining function name pattern matching with IR instruction
+    /// analysis. This determines memory management behavior and FFI
+    /// safety assessment.
+    ///
+    /// # Invariants
+    /// - The function name is always stored in the result.
+    /// - Patterns from name and body are combined.
+    /// - FFI safety assessment covers all detected patterns.
+    ///
+    /// # Arguments
+    /// * `function_name` - The name of the function to analyze.
+    /// * `body` - Optional IR body containing instruction-level data.
+    ///
+    /// # Returns
+    /// A `NapiFunctionAnalysis` with all detected patterns and safety assessment.
     pub fn analyze_function(
         &self,
         function_name: &str,
@@ -290,218 +331,328 @@ impl NapiAdapter {
         // Collect all detected patterns from both name and IR body analysis
         let mut patterns = Vec::new();
 
-        // Step 1: Analyze function name to detect N-API patterns
-        // This is the primary detection mechanism for known function names
+        // Step 1: Analyze function name to detect napi patterns
         let name_patterns = self.analyze_function_name(function_name);
         patterns.extend(name_patterns);
 
         // Step 2: Analyze IR body for instruction-level evidence
-        // This complements name-based analysis with actual call targets
         if let Some(body) = body {
             let body_patterns = self.analyze_function_body(body);
             patterns.extend(body_patterns);
         }
 
-        // Step 3: Determine resource management flags from collected patterns
-        // Reference management: napi_create_reference / napi_delete_reference
-        let manages_references = patterns
+        // Step 3: Determine memory management flags
+        let creates_references = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateReference));
-
-        // Async work management: napi_create_async_work / napi_delete_async_work
-        let manages_async_work = patterns
+            .any(|p| matches!(p, NapiSemanticPattern::NapiReferenceCreate));
+        let deletes_references = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateAsyncWork));
+            .any(|p| matches!(p, NapiSemanticPattern::NapiReferenceDelete));
+        let manages_handle_scopes = patterns.iter().any(|p| {
+            matches!(
+                p,
+                NapiSemanticPattern::NapiHandleScopeOpen
+                    | NapiSemanticPattern::NapiHandleScopeClose
+            )
+        });
 
-        // Callback detection
-        let is_napi_callback = patterns
-            .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCallback));
-
-        // Step 4: Compute FFI safety assessment based on all evidence
+        // Step 4: Compute FFI safety assessment
         let ffi_safety = self.determine_ffi_safety(function_name, &patterns, body);
 
         // Assemble final analysis result
         NapiFunctionAnalysis {
             function_name: function_name.to_string(),
             patterns,
-            is_napi_callback,
-            manages_references,
-            manages_async_work,
+            creates_references,
+            deletes_references,
+            manages_handle_scopes,
             ffi_safety,
         }
     }
 
-    /// Analyzes function name to detect N-API semantic patterns.
+    /// Analyzes function name to detect napi semantic patterns.
+    ///
+    /// # Objective
+    /// Detect napi-specific semantic patterns from the function name using
+    /// prefix-based pattern matching.
+    ///
+    /// # Invariants
+    /// - Functions starting with `napi_` are always detected as napi patterns.
+    /// - Functions with `node_api_` prefix are also detected.
+    ///
+    /// # Arguments
+    /// * `function_name` - The function name to analyze for napi patterns.
+    ///
+    /// # Returns
+    /// A Vec of `NapiSemanticPattern` detected from the function name.
     fn analyze_function_name(&self, function_name: &str) -> Vec<NapiSemanticPattern> {
         let mut patterns = Vec::new();
 
-        // N-API value creation functions: napi_create_*
-        // These create JavaScript values (objects, arrays, strings, buffers, etc.)
-        if function_name.starts_with("napi_create_") {
-            patterns.push(NapiSemanticPattern::NapiCreateValue);
-
-            // napi_create_reference is a special case of reference management
-            if function_name == "napi_create_reference" {
-                patterns.push(NapiSemanticPattern::NapiCreateReference);
-            } else if function_name == "napi_create_async_work" {
-                patterns.push(NapiSemanticPattern::NapiCreateAsyncWork);
-            } else if function_name == "napi_create_threadsafe_function" {
-                patterns.push(NapiSemanticPattern::NapiCreateThreadsafeFunction);
-            }
+        // Only process functions that look like napi functions
+        if !function_name.starts_with("napi_") && !function_name.starts_with("node_api_") {
+            return patterns;
         }
 
-        // N-API get operations: napi_get_*
-        // These retrieve JavaScript values and properties
-        if function_name.starts_with("napi_get_") {
-            patterns.push(NapiSemanticPattern::NapiGetValue);
-        }
-
-        // N-API call operations: napi_call_*
-        // These call JavaScript functions and constructors
-        if function_name.starts_with("napi_call_") {
-            patterns.push(NapiSemanticPattern::NapiCallFunction);
-        }
-
-        // N-API set operations: napi_set_*
-        // These set JavaScript properties and elements
-        if function_name.starts_with("napi_set_") {
-            patterns.push(NapiSemanticPattern::NapiSetProperty);
-        }
-
-        // N-API delete operations
-        if function_name == "napi_delete_reference" {
-            patterns.push(NapiSemanticPattern::NapiDeleteReference);
-        } else if function_name == "napi_delete_async_work" {
-            patterns.push(NapiSemanticPattern::NapiDeleteAsyncWork);
-        }
-
-        // Threadsafe function release
-        if function_name == "napi_release_threadsafe_function"
-            || function_name == "napi_unref_threadsafe_function"
+        // napi value creation functions
+        if function_name.starts_with("napi_create_string")
+            || function_name.starts_with("napi_create_object")
+            || function_name.starts_with("napi_create_array")
+            || function_name.starts_with("napi_create_function")
+            || function_name.starts_with("napi_create_error")
+            || function_name.starts_with("napi_create_symbol")
+            || function_name.starts_with("napi_create_external")
+            || function_name.starts_with("napi_create_dataview")
+            || function_name.starts_with("napi_create_typedarray")
+            || function_name.starts_with("napi_create_promise")
+            || function_name.starts_with("napi_create_bigint")
+            || function_name.starts_with("napi_create_date")
         {
-            patterns.push(NapiSemanticPattern::NapiReleaseThreadsafeFunction);
+            patterns.push(NapiSemanticPattern::NapiValueCreation);
         }
 
-        // Object wrap / unwrap
-        if function_name == "napi_wrap" || function_name == "napi_unwrap" {
+        // napi buffer/arraybuffer creation
+        if function_name.starts_with("napi_create_buffer")
+            || function_name.starts_with("napi_create_arraybuffer")
+            || function_name.starts_with("napi_create_external_buffer")
+        {
+            patterns.push(NapiSemanticPattern::NapiBufferCreation);
+        }
+
+        // napi function calls
+        if function_name.starts_with("napi_call_function") {
+            patterns.push(NapiSemanticPattern::NapiFunctionCall);
+        }
+
+        // napi handle scope management
+        if function_name.starts_with("napi_open_handle_scope") {
+            patterns.push(NapiSemanticPattern::NapiHandleScopeOpen);
+        }
+        if function_name.starts_with("napi_close_handle_scope") {
+            patterns.push(NapiSemanticPattern::NapiHandleScopeClose);
+        }
+        if function_name.starts_with("napi_open_escapable_handle_scope") {
+            patterns.push(NapiSemanticPattern::NapiHandleScopeOpen);
+        }
+        if function_name.starts_with("napi_close_escapable_handle_scope") {
+            patterns.push(NapiSemanticPattern::NapiHandleScopeClose);
+        }
+
+        // napi reference management
+        if function_name.starts_with("napi_create_reference") {
+            patterns.push(NapiSemanticPattern::NapiReferenceCreate);
+        }
+        if function_name.starts_with("napi_delete_reference") {
+            patterns.push(NapiSemanticPattern::NapiReferenceDelete);
+        }
+        if function_name.starts_with("napi_reference_ref")
+            || function_name.starts_with("napi_reference_unref")
+        {
+            patterns.push(NapiSemanticPattern::NapiReferenceCreate);
+        }
+
+        // napi object wrapping
+        if function_name.starts_with("napi_wrap") {
             patterns.push(NapiSemanticPattern::NapiObjectWrap);
         }
-
-        // Remove wrap / remove ref (cleanup)
-        if function_name == "napi_remove_wrap" || function_name == "napi_remove_ref" {
-            patterns.push(NapiSemanticPattern::NapiCleanup);
+        if function_name.starts_with("napi_unwrap") || function_name.starts_with("napi_remove_wrap")
+        {
+            patterns.push(NapiSemanticPattern::NapiObjectUnwrap);
         }
 
-        // Reference counting operations
-        if function_name == "napi_ref" || function_name == "napi_unref" {
-            patterns.push(NapiSemanticPattern::NapiRefCount);
+        // napi async work
+        if function_name.starts_with("napi_create_async_work") {
+            patterns.push(NapiSemanticPattern::NapiAsyncWorkCreate);
+        }
+        if function_name.starts_with("napi_delete_async_work") {
+            patterns.push(NapiSemanticPattern::NapiAsyncWorkDelete);
+        }
+        if function_name.starts_with("napi_queue_async_work")
+            || function_name.starts_with("napi_cancel_async_work")
+        {
+            // These are async work lifecycle operations
+            patterns.push(NapiSemanticPattern::NapiAsyncWorkCreate);
         }
 
-        // N-API throw operations: napi_throw_*
-        if function_name.starts_with("napi_throw_") {
-            patterns.push(NapiSemanticPattern::NapiThrowError);
+        // napi callback registration
+        if function_name.starts_with("napi_create_function") {
+            patterns.push(NapiSemanticPattern::NapiCallbackRegistration);
+        }
+        if function_name.starts_with("napi_get_cb_info")
+            || function_name.starts_with("napi_get_new_target")
+        {
+            patterns.push(NapiSemanticPattern::NapiCallbackRegistration);
         }
 
-        // N-API error handling
-        if function_name == "napi_get_and_clear_last_exception"
-            || function_name == "napi_is_exception_pending"
+        // napi property access
+        if function_name.starts_with("napi_get_property")
+            || function_name.starts_with("napi_set_property")
+            || function_name.starts_with("napi_define_properties")
+            || function_name.starts_with("napi_has_property")
+            || function_name.starts_with("napi_delete_property")
+            || function_name.starts_with("napi_get_named_property")
+            || function_name.starts_with("napi_set_named_property")
+        {
+            patterns.push(NapiSemanticPattern::NapiPropertyAccess);
+        }
+
+        // napi type checking
+        if function_name.starts_with("napi_typeof")
+            || function_name.starts_with("napi_instanceof")
+            || function_name.starts_with("napi_is_array")
+            || function_name.starts_with("napi_is_error")
+            || function_name.starts_with("napi_is_dataview")
+            || function_name.starts_with("napi_is_typedarray")
+            || function_name.starts_with("napi_is_promise")
+            || function_name.starts_with("napi_is_external")
+            || function_name.starts_with("napi_strict_equals")
+        {
+            patterns.push(NapiSemanticPattern::NapiTypeCheck);
+        }
+
+        // napi error handling
+        if function_name.starts_with("napi_throw_error")
+            || function_name.starts_with("napi_throw_type_error")
+            || function_name.starts_with("napi_throw_range_error")
+            || function_name.starts_with("napi_is_error")
         {
             patterns.push(NapiSemanticPattern::NapiErrorHandling);
         }
 
-        // N-API callback patterns: function types passed as callbacks
-        if function_name == "napi_create_function"
-            || function_name.contains("napi_callback")
-            || function_name.contains("napi_threadsafe_function_call_js")
+        // napi environment lifecycle
+        if function_name.starts_with("napi_get_env")
+            || function_name.starts_with("napi_get_global")
+            || function_name.starts_with("napi_get_undefined")
+            || function_name.starts_with("napi_get_null")
+            || function_name.starts_with("napi_get_boolean")
+            || function_name.starts_with("napi_run_script")
+            || function_name.starts_with("napi_get_version")
+            || function_name.starts_with("napi_get_node_version")
         {
-            patterns.push(NapiSemanticPattern::NapiCallback);
-        }
-
-        // N-API class / property descriptor definitions
-        if function_name == "napi_define_class" || function_name == "napi_define_properties" {
-            patterns.push(NapiSemanticPattern::NapiClassDefinition);
+            patterns.push(NapiSemanticPattern::NapiEnvLifecycle);
         }
 
         patterns
     }
 
-    /// Analyzes function body to detect N-API semantic patterns from IR instructions.
+    /// Analyzes function body to detect napi patterns from IR instructions.
+    ///
+    /// # Objective
+    /// Scan IR instructions within a function body to detect napi-specific
+    /// semantic patterns by examining call instruction callees.
+    ///
+    /// # Invariants
+    /// - Only `Call` instructions are analyzed.
+    /// - Each callee is checked against known napi patterns.
+    ///
+    /// # Arguments
+    /// * `body` - The IR function body containing instructions to analyze.
+    ///
+    /// # Returns
+    /// A Vec of `NapiSemanticPattern` detected from IR instructions.
     fn analyze_function_body(&self, body: &FunctionBody) -> Vec<NapiSemanticPattern> {
         let mut patterns = Vec::new();
 
-        // Scan all instructions for call patterns that indicate N-API usage
+        // Scan all instructions for call patterns that indicate napi usage
         for instruction in &body.instructions {
             if let IRInstructionKind::Call = instruction.kind {
                 if let Some(ref callee) = instruction.callee {
-                    // N-API value creation functions
-                    if callee.starts_with("napi_create_") {
-                        patterns.push(NapiSemanticPattern::NapiCreateValue);
-
-                        if callee == "napi_create_reference" {
-                            patterns.push(NapiSemanticPattern::NapiCreateReference);
-                        } else if callee == "napi_create_async_work" {
-                            patterns.push(NapiSemanticPattern::NapiCreateAsyncWork);
-                        } else if callee == "napi_create_threadsafe_function" {
-                            patterns.push(NapiSemanticPattern::NapiCreateThreadsafeFunction);
-                        }
-                    }
-                    // N-API get operations
-                    else if callee.starts_with("napi_get_") {
-                        patterns.push(NapiSemanticPattern::NapiGetValue);
-                    }
-                    // N-API call operations
-                    else if callee.starts_with("napi_call_") {
-                        patterns.push(NapiSemanticPattern::NapiCallFunction);
-                    }
-                    // N-API set operations
-                    else if callee.starts_with("napi_set_") {
-                        patterns.push(NapiSemanticPattern::NapiSetProperty);
-                    }
-                    // N-API delete operations
-                    else if callee == "napi_delete_reference" {
-                        patterns.push(NapiSemanticPattern::NapiDeleteReference);
-                    } else if callee == "napi_delete_async_work" {
-                        patterns.push(NapiSemanticPattern::NapiDeleteAsyncWork);
-                    }
-                    // Threadsafe function release
-                    else if callee == "napi_release_threadsafe_function"
-                        || callee == "napi_unref_threadsafe_function"
+                    // napi value creation
+                    if callee.starts_with("napi_create_string")
+                        || callee.starts_with("napi_create_object")
+                        || callee.starts_with("napi_create_array")
+                        || callee.starts_with("napi_create_function")
+                        || callee.starts_with("napi_create_error")
+                        || callee.starts_with("napi_create_symbol")
+                        || callee.starts_with("napi_create_external")
+                        || callee.starts_with("napi_create_dataview")
+                        || callee.starts_with("napi_create_typedarray")
+                        || callee.starts_with("napi_create_promise")
+                        || callee.starts_with("napi_create_bigint")
+                        || callee.starts_with("napi_create_date")
                     {
-                        patterns.push(NapiSemanticPattern::NapiReleaseThreadsafeFunction);
+                        patterns.push(NapiSemanticPattern::NapiValueCreation);
                     }
-                    // Object wrap / unwrap
-                    else if callee == "napi_wrap" || callee == "napi_unwrap" {
+                    // napi buffer creation
+                    else if callee.starts_with("napi_create_buffer")
+                        || callee.starts_with("napi_create_arraybuffer")
+                        || callee.starts_with("napi_create_external_buffer")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiBufferCreation);
+                    }
+                    // napi handle scope
+                    else if callee.starts_with("napi_open_handle_scope")
+                        || callee.starts_with("napi_open_escapable_handle_scope")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiHandleScopeOpen);
+                    } else if callee.starts_with("napi_close_handle_scope")
+                        || callee.starts_with("napi_close_escapable_handle_scope")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiHandleScopeClose);
+                    }
+                    // napi reference management
+                    else if callee.starts_with("napi_create_reference")
+                        || callee.starts_with("napi_reference_ref")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiReferenceCreate);
+                    } else if callee.starts_with("napi_delete_reference")
+                        || callee.starts_with("napi_reference_unref")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiReferenceDelete);
+                    }
+                    // napi object wrapping
+                    else if callee.starts_with("napi_wrap") {
                         patterns.push(NapiSemanticPattern::NapiObjectWrap);
+                    } else if callee.starts_with("napi_unwrap")
+                        || callee.starts_with("napi_remove_wrap")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiObjectUnwrap);
                     }
-                    // Cleanup operations
-                    else if callee == "napi_remove_wrap" || callee == "napi_remove_ref" {
-                        patterns.push(NapiSemanticPattern::NapiCleanup);
+                    // napi async work
+                    else if callee.starts_with("napi_create_async_work")
+                        || callee.starts_with("napi_queue_async_work")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiAsyncWorkCreate);
+                    } else if callee.starts_with("napi_delete_async_work")
+                        || callee.starts_with("napi_cancel_async_work")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiAsyncWorkDelete);
                     }
-                    // Reference counting
-                    else if callee == "napi_ref" || callee == "napi_unref" {
-                        patterns.push(NapiSemanticPattern::NapiRefCount);
+                    // napi callback
+                    else if callee.starts_with("napi_create_function") {
+                        patterns.push(NapiSemanticPattern::NapiCallbackRegistration);
                     }
-                    // N-API throw operations
-                    else if callee.starts_with("napi_throw_") {
-                        patterns.push(NapiSemanticPattern::NapiThrowError);
+                    // napi function call
+                    else if callee.starts_with("napi_call_function") {
+                        patterns.push(NapiSemanticPattern::NapiFunctionCall);
                     }
-                    // N-API error handling
-                    else if callee == "napi_get_and_clear_last_exception"
-                        || callee == "napi_is_exception_pending"
+                    // napi property
+                    else if callee.starts_with("napi_get_property")
+                        || callee.starts_with("napi_set_property")
+                        || callee.starts_with("napi_define_properties")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiPropertyAccess);
+                    }
+                    // napi type check
+                    else if callee.starts_with("napi_typeof")
+                        || callee.starts_with("napi_instanceof")
+                        || callee.starts_with("napi_is_array")
+                    {
+                        patterns.push(NapiSemanticPattern::NapiTypeCheck);
+                    }
+                    // napi error handling
+                    else if callee.starts_with("napi_throw_error")
+                        || callee.starts_with("napi_throw_type_error")
+                        || callee.starts_with("napi_throw_range_error")
                     {
                         patterns.push(NapiSemanticPattern::NapiErrorHandling);
                     }
-                    // N-API callback patterns
-                    else if callee == "napi_create_function"
-                        || callee.contains("napi_callback")
-                        || callee.contains("napi_threadsafe_function_call_js")
+                    // napi environment
+                    else if callee.starts_with("napi_get_global")
+                        || callee.starts_with("napi_get_undefined")
+                        || callee.starts_with("napi_run_script")
+                        || callee.starts_with("napi_get_version")
                     {
-                        patterns.push(NapiSemanticPattern::NapiCallback);
-                    }
-                    // N-API class / property descriptor definitions
-                    else if callee == "napi_define_class" || callee == "napi_define_properties" {
-                        patterns.push(NapiSemanticPattern::NapiClassDefinition);
+                        patterns.push(NapiSemanticPattern::NapiEnvLifecycle);
                     }
                 }
             }
@@ -510,122 +661,110 @@ impl NapiAdapter {
         patterns
     }
 
-    /// Determines FFI safety for a Node.js/N-API function based on detected patterns.
+    /// Determines FFI safety for a napi function based on detected patterns.
+    ///
+    /// # Objective
+    /// Compute the FFI safety assessment by analyzing the combination of
+    /// detected patterns. This detects potential memory leaks in napi
+    /// native addon functions.
+    ///
+    /// # Invariants
+    /// - Balanced handle scope open/close indicates `SafeHandleScope`.
+    /// - Balanced reference create/delete indicates `SafeReferenceManaged`.
+    /// - Handle scope open without close indicates `ConcernUnclosedHandleScope`.
+    /// - Reference create without delete indicates `ConcernUnreleasedReference`.
+    /// - Object wrap without unwrap indicates `ConcernWrapWithoutFinalizer`.
+    /// - No napi patterns returns `SafeNoNapi`.
+    ///
+    /// # Arguments
+    /// * `_function_name` - The function name (reserved for heuristic analysis).
+    /// * `patterns` - The detected napi semantic patterns.
+    /// * `_body` - Optional IR body (reserved for future analysis).
+    ///
+    /// # Returns
+    /// A `NapiFFISafety` assessment for the function.
     fn determine_ffi_safety(
         &self,
         _function_name: &str,
         patterns: &[NapiSemanticPattern],
         _body: Option<&FunctionBody>,
     ) -> NapiFFISafety {
-        // Priority 1: Reference leak detection
+        // Priority 1: Handle scope leak detection
+        let has_scope_open = patterns
+            .iter()
+            .any(|p| matches!(p, NapiSemanticPattern::NapiHandleScopeOpen));
+        let has_scope_close = patterns
+            .iter()
+            .any(|p| matches!(p, NapiSemanticPattern::NapiHandleScopeClose));
+
+        if has_scope_open && !has_scope_close {
+            return NapiFFISafety::ConcernUnclosedHandleScope;
+        }
+
+        // Priority 2: Reference leak detection
         let has_ref_create = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateReference));
+            .any(|p| matches!(p, NapiSemanticPattern::NapiReferenceCreate));
         let has_ref_delete = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiDeleteReference));
+            .any(|p| matches!(p, NapiSemanticPattern::NapiReferenceDelete));
 
         if has_ref_create && !has_ref_delete {
-            return NapiFFISafety::ConcernReferenceLeak;
+            return NapiFFISafety::ConcernUnreleasedReference;
         }
 
-        // Priority 2: Async work leak detection
-        let has_async_create = patterns
+        // Priority 3: Object wrap without cleanup
+        let has_wrap = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateAsyncWork));
-        let has_async_delete = patterns
+            .any(|p| matches!(p, NapiSemanticPattern::NapiObjectWrap));
+        let has_unwrap = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiDeleteAsyncWork));
+            .any(|p| matches!(p, NapiSemanticPattern::NapiObjectUnwrap));
 
-        if has_async_create && !has_async_delete {
-            return NapiFFISafety::ConcernAsyncWorkLeak;
+        if has_wrap && !has_unwrap {
+            return NapiFFISafety::ConcernWrapWithoutFinalizer;
         }
 
-        // Priority 3: Threadsafe function leak detection
-        let has_tsfn_create = patterns
-            .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateThreadsafeFunction));
-        let has_tsfn_release = patterns
-            .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiReleaseThreadsafeFunction));
-
-        if has_tsfn_create && !has_tsfn_release {
-            return NapiFFISafety::ConcernThreadsafeLeak;
+        // Priority 4: Balanced patterns
+        if has_scope_open && has_scope_close {
+            return NapiFFISafety::SafeHandleScope;
+        }
+        if has_ref_create && has_ref_delete {
+            return NapiFFISafety::SafeReferenceManaged;
         }
 
-        // Priority 4: Balanced resource management
-        let has_any_alloc = has_ref_create || has_async_create || has_tsfn_create;
-        let has_any_release = has_ref_delete || has_async_delete || has_tsfn_release;
-
-        if has_any_alloc && has_any_release {
-            return NapiFFISafety::SafeResourceManaged;
+        // Priority 5: No napi patterns
+        if patterns.is_empty() {
+            return NapiFFISafety::SafeNoNapi;
         }
 
-        // Priority 5: Pure N-API internal (no resource management)
-        if !patterns.is_empty() {
-            // Functions that only create/get/call/set values without
-            // managing persistent resources are considered safe internal
-            return NapiFFISafety::SafeInternal;
-        }
-
-        // Default: insufficient information for assessment
+        // Default: insufficient information
         NapiFFISafety::Unknown
     }
 
-    /// Detects potential reference leaks in N-API calls.
+    /// Detects potential memory leak in async work.
     ///
     /// # Objective
-    /// Analyze whether a function creates persistent references without
-    /// deleting them, which would cause JavaScript objects to leak.
-    ///
-    /// # Invariants
-    /// - Returns `true` if `napi_create_reference` is present without
-    ///   `napi_delete_reference`.
-    /// - Returns `false` otherwise.
+    /// Check if async work is created but not deleted, which would
+    /// cause a native resource leak.
     ///
     /// # Arguments
-    /// * `patterns` - The detected N-API semantic patterns for the function.
+    /// * `patterns` - The detected napi semantic patterns.
     ///
     /// # Returns
-    /// `true` if a reference leak risk is detected, `false` otherwise.
-    pub fn detect_reference_leak(&self, patterns: &[NapiSemanticPattern]) -> bool {
-        let has_create = patterns
-            .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateReference));
-        let has_delete = patterns
-            .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiDeleteReference));
-        has_create && !has_delete
-    }
-
-    /// Detects potential async work leaks.
-    ///
-    /// # Objective
-    /// Analyze whether a function creates async work items without
-    /// deleting them, which can cause resource leaks.
-    ///
-    /// # Invariants
-    /// - Returns `true` if `napi_create_async_work` is present without
-    ///   `napi_delete_async_work`.
-    /// - Returns `false` otherwise.
-    ///
-    /// # Arguments
-    /// * `patterns` - The detected N-API semantic patterns for the function.
-    ///
-    /// # Returns
-    /// `true` if an async work leak risk is detected, `false` otherwise.
+    /// `true` if async work leak is detected, `false` otherwise.
     pub fn detect_async_work_leak(&self, patterns: &[NapiSemanticPattern]) -> bool {
         let has_create = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiCreateAsyncWork));
+            .any(|p| matches!(p, NapiSemanticPattern::NapiAsyncWorkCreate));
         let has_delete = patterns
             .iter()
-            .any(|p| matches!(p, NapiSemanticPattern::NapiDeleteAsyncWork));
+            .any(|p| matches!(p, NapiSemanticPattern::NapiAsyncWorkDelete));
         has_create && !has_delete
     }
 }
 
-impl Default for NapiAdapter {
+impl Default for NodeAdapter {
     fn default() -> Self {
         Self::new()
     }
@@ -636,301 +775,248 @@ mod tests {
     use super::*;
     use omniscope_ir::parser::{FunctionBody, IRInstruction, IRInstructionKind};
 
-    /// Objective: Verify napi_create_* function analysis
-    /// Invariants: napi_create_string_utf8 must be detected as NapiCreateValue
+    /// Objective: Verify napi value creation detection from function name
+    /// Invariants: napi_create_* functions must be detected as NapiValueCreation
     #[test]
-    fn test_napi_create_value_analysis() {
-        let adapter = NapiAdapter::new();
+    fn test_napi_value_creation_detection() {
+        let adapter = NodeAdapter::new();
         let analysis = adapter.analyze_function("napi_create_string_utf8", None);
 
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiCreateValue),
-            "napi_create_string_utf8 must be detected as NapiCreateValue, got {:?}",
-            analysis.patterns
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            NapiFFISafety::SafeInternal,
-            "napi_create_string_utf8 must be SafeInternal"
+                .contains(&NapiSemanticPattern::NapiValueCreation),
+            "napi_create_string_utf8 must be detected as NapiValueCreation"
         );
     }
 
-    /// Objective: Verify napi_create_reference function analysis
-    /// Invariants: napi_create_reference must be detected as reference management
+    /// Objective: Verify napi buffer creation detection
+    /// Invariants: napi_create_buffer must be detected as NapiBufferCreation
     #[test]
-    fn test_napi_create_reference_analysis() {
-        let adapter = NapiAdapter::new();
+    fn test_napi_buffer_creation_detection() {
+        let adapter = NodeAdapter::new();
+        let analysis = adapter.analyze_function("napi_create_buffer", None);
+
+        assert!(
+            analysis
+                .patterns
+                .contains(&NapiSemanticPattern::NapiBufferCreation),
+            "napi_create_buffer must be detected as NapiBufferCreation"
+        );
+    }
+
+    /// Objective: Verify handle scope detection
+    /// Invariants: napi_open_handle_scope / napi_close_handle_scope must be detected
+    #[test]
+    fn test_handle_scope_detection() {
+        let adapter = NodeAdapter::new();
+
+        let analysis = adapter.analyze_function("napi_open_handle_scope", None);
+        assert!(
+            analysis
+                .patterns
+                .contains(&NapiSemanticPattern::NapiHandleScopeOpen),
+            "napi_open_handle_scope must be detected as NapiHandleScopeOpen"
+        );
+
+        let analysis = adapter.analyze_function("napi_close_handle_scope", None);
+        assert!(
+            analysis
+                .patterns
+                .contains(&NapiSemanticPattern::NapiHandleScopeClose),
+            "napi_close_handle_scope must be detected as NapiHandleScopeClose"
+        );
+    }
+
+    /// Objective: Verify reference management detection
+    /// Invariants: napi_create_reference / napi_delete_reference must be detected
+    #[test]
+    fn test_reference_management_detection() {
+        let adapter = NodeAdapter::new();
+
         let analysis = adapter.analyze_function("napi_create_reference", None);
+        assert!(
+            analysis
+                .patterns
+                .contains(&NapiSemanticPattern::NapiReferenceCreate),
+            "napi_create_reference must be detected as NapiReferenceCreate"
+        );
+        assert!(
+            analysis.creates_references,
+            "napi_create_reference must set creates_references"
+        );
 
+        let analysis = adapter.analyze_function("napi_delete_reference", None);
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiCreateValue),
-            "napi_create_reference must be detected as NapiCreateValue"
+                .contains(&NapiSemanticPattern::NapiReferenceDelete),
+            "napi_delete_reference must be detected as NapiReferenceDelete"
         );
         assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCreateReference),
-            "napi_create_reference must be detected as NapiCreateReference"
-        );
-        assert!(
-            analysis.manages_references,
-            "napi_create_reference must manage references"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            NapiFFISafety::ConcernReferenceLeak,
-            "napi_create_reference without delete must have ConcernReferenceLeak"
+            analysis.deletes_references,
+            "napi_delete_reference must set deletes_references"
         );
     }
 
-    /// Objective: Verify napi_get_* function analysis
-    /// Invariants: napi_get_named_property must be detected as NapiGetValue
-    #[test]
-    fn test_napi_get_value_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_get_named_property", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiGetValue),
-            "napi_get_named_property must be detected as NapiGetValue, got {:?}",
-            analysis.patterns
-        );
-    }
-
-    /// Objective: Verify napi_call_* function analysis
-    /// Invariants: napi_call_function must be detected as NapiCallFunction
-    #[test]
-    fn test_napi_call_function_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_call_function", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCallFunction),
-            "napi_call_function must be detected as NapiCallFunction, got {:?}",
-            analysis.patterns
-        );
-    }
-
-    /// Objective: Verify napi_throw_* function analysis
-    /// Invariants: napi_throw_error must be detected as NapiThrowError
-    #[test]
-    fn test_napi_throw_error_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_throw_error", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiThrowError),
-            "napi_throw_error must be detected as NapiThrowError, got {:?}",
-            analysis.patterns
-        );
-    }
-
-    /// Objective: Verify napi_wrap function analysis
+    /// Objective: Verify object wrap detection
     /// Invariants: napi_wrap must be detected as NapiObjectWrap
     #[test]
-    fn test_napi_object_wrap_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_wrap", None);
+    fn test_object_wrap_detection() {
+        let adapter = NodeAdapter::new();
 
+        let analysis = adapter.analyze_function("napi_wrap", None);
         assert!(
             analysis
                 .patterns
                 .contains(&NapiSemanticPattern::NapiObjectWrap),
-            "napi_wrap must be detected as NapiObjectWrap, got {:?}",
-            analysis.patterns
+            "napi_wrap must be detected as NapiObjectWrap"
         );
-    }
 
-    /// Objective: Verify napi_create_async_work without delete detection
-    /// Invariants: Must be detected as ConcernAsyncWorkLeak
-    #[test]
-    fn test_napi_async_work_leak_concern() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_create_async_work", None);
-
+        let analysis = adapter.analyze_function("napi_unwrap", None);
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiCreateAsyncWork),
-            "napi_create_async_work must be detected as NapiCreateAsyncWork"
+                .contains(&NapiSemanticPattern::NapiObjectUnwrap),
+            "napi_unwrap must be detected as NapiObjectUnwrap"
         );
-        assert!(
-            analysis.manages_async_work,
-            "napi_create_async_work must manage async work"
-        );
+    }
+
+    /// Objective: Verify unclosed handle scope leak detection
+    /// Invariants: Only open_handle_scope without close must be ConcernUnclosedHandleScope
+    #[test]
+    fn test_unclosed_handle_scope_leak() {
+        let adapter = NodeAdapter::new();
+        let analysis = adapter.analyze_function("napi_open_handle_scope", None);
+
         assert_eq!(
             analysis.ffi_safety,
-            NapiFFISafety::ConcernAsyncWorkLeak,
-            "napi_create_async_work without delete must have ConcernAsyncWorkLeak"
+            NapiFFISafety::ConcernUnclosedHandleScope,
+            "Unclosed handle scope must be ConcernUnclosedHandleScope"
         );
     }
 
-    /// Objective: Verify napi_delete_async_work function analysis
-    /// Invariants: Must be detected as NapiDeleteAsyncWork
+    /// Objective: Verify unreleased reference leak detection
+    /// Invariants: Only create_reference without delete must be ConcernUnreleasedReference
     #[test]
-    fn test_napi_delete_async_work_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_delete_async_work", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiDeleteAsyncWork),
-            "napi_delete_async_work must be detected as NapiDeleteAsyncWork"
-        );
-    }
-
-    /// Objective: Verify napi_create_threadsafe_function without release detection
-    /// Invariants: Must be detected as ConcernThreadsafeLeak
-    #[test]
-    fn test_napi_threadsafe_leak_concern() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_create_threadsafe_function", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCreateThreadsafeFunction),
-            "napi_create_threadsafe_function must be detected as NapiCreateThreadsafeFunction"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            NapiFFISafety::ConcernThreadsafeLeak,
-            "napi_create_threadsafe_function without release must have ConcernThreadsafeLeak"
-        );
-    }
-
-    /// Objective: Verify napi_delete_reference function analysis
-    /// Invariants: Must be detected as NapiDeleteReference
-    #[test]
-    fn test_napi_delete_reference_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_delete_reference", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiDeleteReference),
-            "napi_delete_reference must be detected as NapiDeleteReference"
-        );
-    }
-
-    /// Objective: Verify napi_callback detection
-    /// Invariants: napi_create_function must be detected as NapiCallback
-    #[test]
-    fn test_napi_callback_detection() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_create_function", None);
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCallback),
-            "napi_create_function must be detected as NapiCallback"
-        );
-        assert!(
-            analysis.is_napi_callback,
-            "napi_create_function must be flagged as callback"
-        );
-    }
-
-    /// Objective: Verify reference leak detection helper
-    /// Invariants: detect_reference_leak must correctly identify unpaired create
-    #[test]
-    fn test_detect_reference_leak() {
-        let adapter = NapiAdapter::new();
-
-        // Test with only create reference
+    fn test_unreleased_reference_leak() {
+        let adapter = NodeAdapter::new();
         let analysis = adapter.analyze_function("napi_create_reference", None);
-        assert!(
-            adapter.detect_reference_leak(&analysis.patterns),
-            "create_reference without delete must be detected as leak"
-        );
 
-        // Test with delete reference only
-        let analysis_delete = adapter.analyze_function("napi_delete_reference", None);
-        assert!(
-            !adapter.detect_reference_leak(&analysis_delete.patterns),
-            "delete_reference alone must not be detected as leak"
-        );
-
-        // Test with balanced create+delete
-        let mut patterns = vec![
-            NapiSemanticPattern::NapiCreateReference,
-            NapiSemanticPattern::NapiDeleteReference,
-        ];
-        assert!(
-            !adapter.detect_reference_leak(&patterns),
-            "balanced create+delete must not be detected as leak"
-        );
-
-        // Test empty patterns
-        patterns.clear();
-        assert!(
-            !adapter.detect_reference_leak(&patterns),
-            "empty patterns must not be detected as leak"
+        assert_eq!(
+            analysis.ffi_safety,
+            NapiFFISafety::ConcernUnreleasedReference,
+            "Unreleased reference must be ConcernUnreleasedReference"
         );
     }
 
-    /// Objective: Verify async work leak detection helper
-    /// Invariants: detect_async_work_leak must correctly identify unpaired create
+    /// Objective: Verify balanced handle scope is safe
+    /// Invariants: Both open and close handle scope must be SafeHandleScope
     #[test]
-    fn test_detect_async_work_leak() {
-        let adapter = NapiAdapter::new();
+    fn test_balanced_handle_scope() {
+        let adapter = NodeAdapter::new();
+        let mut analysis = adapter.analyze_function("napi_open_handle_scope", None);
+        analysis
+            .patterns
+            .push(NapiSemanticPattern::NapiHandleScopeClose);
 
-        // Test with only create async work
+        let ffi_safety =
+            adapter.determine_ffi_safety("napi_open_handle_scope", &analysis.patterns, None);
+
+        assert_eq!(
+            ffi_safety,
+            NapiFFISafety::SafeHandleScope,
+            "Balanced handle scope must be SafeHandleScope"
+        );
+    }
+
+    /// Objective: Verify balanced reference management is safe
+    /// Invariants: Both create and delete reference must be SafeReferenceManaged
+    #[test]
+    fn test_balanced_reference_management() {
+        let adapter = NodeAdapter::new();
+        let mut analysis = adapter.analyze_function("napi_create_reference", None);
+        analysis
+            .patterns
+            .push(NapiSemanticPattern::NapiReferenceDelete);
+
+        let ffi_safety =
+            adapter.determine_ffi_safety("napi_create_reference", &analysis.patterns, None);
+
+        assert_eq!(
+            ffi_safety,
+            NapiFFISafety::SafeReferenceManaged,
+            "Balanced reference management must be SafeReferenceManaged"
+        );
+    }
+
+    /// Objective: Verify regular function without napi patterns is safe
+    /// Invariants: Non-napi function must have SafeNoNapi and empty patterns
+    #[test]
+    fn test_non_napi_function() {
+        let adapter = NodeAdapter::new();
+        let analysis = adapter.analyze_function("my_custom_function", None);
+
+        assert!(
+            analysis.patterns.is_empty(),
+            "Non-napi function must have no patterns"
+        );
+        assert!(
+            !analysis.creates_references,
+            "Non-napi function must not create references"
+        );
+        assert!(
+            !analysis.manages_handle_scopes,
+            "Non-napi function must not manage handle scopes"
+        );
+        assert_eq!(
+            analysis.ffi_safety,
+            NapiFFISafety::SafeNoNapi,
+            "Non-napi function must be SafeNoNapi"
+        );
+    }
+
+    /// Objective: Verify async work leak detection
+    /// Invariants: Created async work without deletion must be detected as leak
+    #[test]
+    fn test_async_work_leak_detection() {
+        let adapter = NodeAdapter::new();
+
+        // Only create, no delete
         let analysis = adapter.analyze_function("napi_create_async_work", None);
         assert!(
             adapter.detect_async_work_leak(&analysis.patterns),
-            "create_async_work without delete must be detected as leak"
+            "Async work without deletion must be detected as leak"
         );
 
-        // Test with balanced create+delete
-        let mut patterns = vec![
-            NapiSemanticPattern::NapiCreateAsyncWork,
-            NapiSemanticPattern::NapiDeleteAsyncWork,
+        // Balanced create and delete
+        let patterns = vec![
+            NapiSemanticPattern::NapiAsyncWorkCreate,
+            NapiSemanticPattern::NapiAsyncWorkDelete,
         ];
         assert!(
             !adapter.detect_async_work_leak(&patterns),
-            "balanced create+delete must not be detected as leak"
-        );
-
-        // Test empty patterns
-        patterns.clear();
-        assert!(
-            !adapter.detect_async_work_leak(&patterns),
-            "empty patterns must not be detected as leak"
+            "Async work with deletion must not be detected as leak"
         );
     }
 
-    /// Objective: Verify N-API call semantics using embedded IR
-    /// Invariants: IR body with napi calls must be correctly detected
+    /// Objective: Verify napi function call semantics using embedded IR
+    /// Invariants: napi call patterns in IR body must be detected
     #[test]
     fn test_napi_call_semantics_with_ir() {
-        let adapter = NapiAdapter::new();
+        let adapter = NodeAdapter::new();
 
-        // Create a function body with N-API calls
         let body = FunctionBody {
             name: "test_napi_function".to_string(),
             instructions: vec![
                 IRInstruction {
                     kind: IRInstructionKind::Call,
                     dest: Some("%env".to_string()),
-                    operands: vec!["i8*".to_string()],
-                    callee: Some("napi_get_cb_info".to_string()),
+                    operands: vec![],
+                    callee: Some("napi_get_global".to_string()),
                     atomic_op: None,
                     icmp_pred: None,
-                    raw_text: "%env = call i8* @napi_get_cb_info()".to_string(),
+                    raw_text: "%env = call i8* @napi_get_global()".to_string(),
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
@@ -940,42 +1026,13 @@ mod tests {
                 IRInstruction {
                     kind: IRInstructionKind::Call,
                     dest: Some("%str".to_string()),
-                    operands: vec!["i8*".to_string(), "i8*".to_string()],
+                    operands: vec!["i8*".to_string(), "%env".to_string(), "i8*".to_string()],
                     callee: Some("napi_create_string_utf8".to_string()),
                     atomic_op: None,
                     icmp_pred: None,
-                    raw_text: "%str = call i8* @napi_create_string_utf8(i8* %env, i8* \"hello\")"
+                    raw_text: "%str = call i8* @napi_create_string_utf8(i8* %env, i8* %input)"
                         .to_string(),
                     result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: Some("%ref".to_string()),
-                    operands: vec!["i8*".to_string(), "i8*".to_string(), "%str".to_string()],
-                    callee: Some("napi_create_reference".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "%ref = call i8* @napi_create_reference(i8* %env, i8* %str)"
-                        .to_string(),
-                    result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: None,
-                    operands: vec!["i8*".to_string(), "i8*".to_string(), "%ref".to_string()],
-                    callee: Some("napi_delete_reference".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "call void @napi_delete_reference(i8* %env, i8* %ref)".to_string(),
-                    result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
                     conversion_opcode: None,
@@ -984,12 +1041,12 @@ mod tests {
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
                     dest: None,
-                    operands: vec![],
+                    operands: vec!["i8* %str".to_string()],
                     callee: None,
                     atomic_op: None,
                     icmp_pred: None,
-                    raw_text: "ret void".to_string(),
-                    result_type: Some("void".to_string()),
+                    raw_text: "ret i8* %str".to_string(),
+                    result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
                     conversion_opcode: None,
@@ -1000,380 +1057,131 @@ mod tests {
 
         let analysis = adapter.analyze_function("test_napi_function", Some(&body));
 
-        // Verify N-API patterns are detected from IR body
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiCreateValue),
+                .contains(&NapiSemanticPattern::NapiValueCreation),
             "napi_create_string_utf8 must be detected from IR body"
         );
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiGetValue),
-            "napi_get_cb_info must be detected from IR body"
-        );
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCreateReference),
-            "napi_create_reference must be detected from IR body"
-        );
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiDeleteReference),
-            "napi_delete_reference must be detected from IR body"
-        );
-
-        // Verify resource management flags
-        assert!(
-            analysis.manages_references,
-            "Function with napi_create_reference must manage references"
-        );
-
-        // Verify FFI safety assessment (balanced reference management)
-        assert_eq!(
-            analysis.ffi_safety,
-            NapiFFISafety::SafeResourceManaged,
-            "N-API with balanced reference create/delete must be SafeResourceManaged"
+                .contains(&NapiSemanticPattern::NapiEnvLifecycle),
+            "napi_get_global must be detected from IR body"
         );
     }
 
-    /// Objective: Verify napi_wrap + napi_unwrap with IR body
-    /// Invariants: Both must be detected from IR body
+    /// Objective: Verify SemanticFact conversion for napi patterns
+    /// Invariants: napi patterns must produce correct SemanticFacts
     #[test]
-    fn test_napi_object_wrap_with_ir() {
-        let adapter = NapiAdapter::new();
+    fn test_napi_semantic_facts() {
+        let adapter = NodeAdapter::new();
 
-        let body = FunctionBody {
-            name: "test_object_wrap".to_string(),
-            instructions: vec![
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: Some("%result".to_string()),
-                    operands: vec![
-                        "i8*".to_string(),
-                        "i8*".to_string(),
-                        "%obj".to_string(),
-                        "%native".to_string(),
-                    ],
-                    callee: Some("napi_wrap".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "%result = call i32 @napi_wrap(i8* %env, i8* %obj, i8* %native)"
-                        .to_string(),
-                    result_type: Some("i32".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Ret,
-                    dest: None,
-                    operands: vec![],
-                    callee: None,
-                    raw_text: "ret void".to_string(),
-                    result_type: Some("void".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                    atomic_op: None,
-                    icmp_pred: None,
-                },
-            ],
-        };
-
-        let analysis = adapter.analyze_function("test_object_wrap", Some(&body));
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiObjectWrap),
-            "napi_wrap must be detected from IR body"
-        );
-    }
-
-    /// Objective: Verify napi_set_* detection with IR body
-    /// Invariants: napi_set_named_property must be detected from IR body
-    #[test]
-    fn test_napi_set_property_with_ir() {
-        let adapter = NapiAdapter::new();
-
-        let body = FunctionBody {
-            name: "test_set_property".to_string(),
-            instructions: vec![
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: Some("%result".to_string()),
-                    operands: vec!["i8*".to_string(), "%obj".to_string(), "%key".to_string()],
-                    callee: Some("napi_set_named_property".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text:
-                        "%result = call i32 @napi_set_named_property(i8* %env, i8* %obj, i8* %key)"
-                            .to_string(),
-                    result_type: Some("i32".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Ret,
-                    dest: None,
-                    operands: vec![],
-                    callee: None,
-                    raw_text: "ret void".to_string(),
-                    result_type: Some("void".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                    atomic_op: None,
-                    icmp_pred: None,
-                },
-            ],
-        };
-
-        let analysis = adapter.analyze_function("test_set_property", Some(&body));
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiSetProperty),
-            "napi_set_named_property must be detected from IR body"
-        );
-    }
-
-    /// Objective: Verify napi_create_async_work + napi_delete_async_work with IR
-    /// Invariants: Balanced async work must be SafeResourceManaged
-    #[test]
-    fn test_async_work_balanced_with_ir() {
-        let adapter = NapiAdapter::new();
-
-        let body = FunctionBody {
-            name: "test_async_work".to_string(),
-            instructions: vec![
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: Some("%work".to_string()),
-                    operands: vec!["i8*".to_string()],
-                    callee: Some("napi_create_async_work".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "%work = call i8* @napi_create_async_work()".to_string(),
-                    result_type: Some("i8*".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Call,
-                    dest: None,
-                    operands: vec!["i8*".to_string(), "%work".to_string()],
-                    callee: Some("napi_delete_async_work".to_string()),
-                    atomic_op: None,
-                    icmp_pred: None,
-                    raw_text: "call void @napi_delete_async_work(i8* %work)".to_string(),
-                    result_type: Some("void".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                },
-                IRInstruction {
-                    kind: IRInstructionKind::Ret,
-                    dest: None,
-                    operands: vec![],
-                    callee: None,
-                    raw_text: "ret void".to_string(),
-                    result_type: Some("void".to_string()),
-                    element_type: None,
-                    function_signature: None,
-                    conversion_opcode: None,
-                    binary_opcode: None,
-                    atomic_op: None,
-                    icmp_pred: None,
-                },
-            ],
-        };
-
-        let analysis = adapter.analyze_function("test_async_work", Some(&body));
-
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCreateAsyncWork),
-            "napi_create_async_work must be detected from IR body"
-        );
-        assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiDeleteAsyncWork),
-            "napi_delete_async_work must be detected from IR body"
-        );
-        assert!(
-            analysis.manages_async_work,
-            "Function with async work must flag manages_async_work"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            NapiFFISafety::SafeResourceManaged,
-            "Balanced async work must be SafeResourceManaged"
-        );
-    }
-
-    /// Objective: Verify SemanticFact conversion for napi_create_value
-    /// Invariants: NapiCreateValue must produce RuntimeManagedResource fact
-    #[test]
-    fn test_to_semantic_facts_create_value() {
-        let analysis = NapiFunctionAnalysis {
-            function_name: "napi_create_string_utf8".to_string(),
-            patterns: vec![NapiSemanticPattern::NapiCreateValue],
-            is_napi_callback: false,
-            manages_references: false,
-            manages_async_work: false,
-            ffi_safety: NapiFFISafety::SafeInternal,
-        };
-
+        // Value creation produces HeapProvenance fact
+        let analysis = adapter.analyze_function("napi_create_string_utf8", None);
         let facts = analysis.to_semantic_facts();
-
-        let has_value_create = facts.iter().any(|f| {
-            f.kind == SemanticKind::RuntimeManagedResource
-                && f.confidence == FactConfidence::High
-                && matches!(&f.key, SemanticKey::Symbol(name) if name == "napi_create_string_utf8")
-        });
-
-        assert!(
-            has_value_create,
-            "NapiCreateValue must produce RuntimeManagedResource fact"
-        );
-    }
-
-    /// Objective: Verify SemanticFact conversion for napi_create_reference
-    /// Invariants: NapiCreateReference must produce HeapProvenance fact
-    #[test]
-    fn test_to_semantic_facts_create_reference() {
-        let analysis = NapiFunctionAnalysis {
-            function_name: "napi_create_reference".to_string(),
-            patterns: vec![NapiSemanticPattern::NapiCreateReference],
-            is_napi_callback: false,
-            manages_references: true,
-            manages_async_work: false,
-            ffi_safety: NapiFFISafety::ConcernReferenceLeak,
-        };
-
-        let facts = analysis.to_semantic_facts();
-
-        let has_heap_provenance = facts.iter().any(|f| {
+        let has_value_fact = facts.iter().any(|f| {
             f.kind == SemanticKind::HeapProvenance
                 && f.confidence == FactConfidence::High
-                && matches!(&f.key, SemanticKey::Symbol(name) if name == "napi_create_reference")
-        });
-
-        let has_safety_concern = facts.iter().any(|f| {
-            f.kind == SemanticKind::Unknown
-                && f.confidence == FactConfidence::Low
                 && f.source == FactSource::LanguageAdapter
         });
-
         assert!(
-            has_heap_provenance,
-            "NapiCreateReference must produce HeapProvenance fact"
+            has_value_fact,
+            "napi value creation must produce HeapProvenance fact"
         );
+
+        // Reference creation produces RuntimeManagedResource fact
+        let analysis = adapter.analyze_function("napi_create_reference", None);
+        let facts = analysis.to_semantic_facts();
+        let has_ref_fact = facts.iter().any(|f| {
+            f.kind == SemanticKind::RuntimeManagedResource
+                && f.confidence == FactConfidence::High
+                && f.source == FactSource::LanguageAdapter
+        });
         assert!(
-            has_safety_concern,
-            "ConcernReferenceLeak must produce safety concern fact"
+            has_ref_fact,
+            "napi_create_reference must produce RuntimeManagedResource fact"
+        );
+
+        // Reference deletion produces RaiiDropRelease fact
+        let analysis = adapter.analyze_function("napi_delete_reference", None);
+        let facts = analysis.to_semantic_facts();
+        let has_delete_fact = facts.iter().any(|f| {
+            f.kind == SemanticKind::RaiiDropRelease
+                && f.confidence == FactConfidence::High
+                && f.source == FactSource::LanguageAdapter
+        });
+        assert!(
+            has_delete_fact,
+            "napi_delete_reference must produce RaiiDropRelease fact"
         );
     }
 
-    /// Objective: Verify napi_create_threadsafe_function + release detection
-    /// Invariants: Balanced threadsafe function must be SafeResourceManaged
+    /// Objective: Verify object wrap without cleanup detection
+    /// Invariants: napi_wrap without napi_unwrap must be ConcernWrapWithoutFinalizer
     #[test]
-    fn test_threadsafe_function_balanced_with_patterns() {
-        let adapter = NapiAdapter::new();
-
-        let patterns = vec![
-            NapiSemanticPattern::NapiCreateThreadsafeFunction,
-            NapiSemanticPattern::NapiReleaseThreadsafeFunction,
-        ];
-
-        let ffi_safety = adapter.determine_ffi_safety("test_tsfn", &patterns, None);
+    fn test_object_wrap_without_cleanup() {
+        let adapter = NodeAdapter::new();
+        let analysis = adapter.analyze_function("napi_wrap", None);
 
         assert_eq!(
-            ffi_safety,
-            NapiFFISafety::SafeResourceManaged,
-            "Balanced threadsafe function must be SafeResourceManaged"
+            analysis.ffi_safety,
+            NapiFFISafety::ConcernWrapWithoutFinalizer,
+            "napi_wrap without napi_remove_wrap must be ConcernWrapWithoutFinalizer"
         );
+    }
 
-        // Also verify with pattern-based analysis
-        let mut analysis = adapter.analyze_function("napi_create_threadsafe_function", None);
-        analysis
-            .patterns
-            .push(NapiSemanticPattern::NapiReleaseThreadsafeFunction);
-
-        let ffi_safety_combined =
-            adapter.determine_ffi_safety("test_tsfn", &analysis.patterns, None);
+    /// Objective: Verify napi adapter creation
+    /// Invariants: Adapter must be created with correct language setting
+    #[test]
+    fn test_node_adapter_creation() {
+        let adapter = NodeAdapter::new();
         assert_eq!(
-            ffi_safety_combined,
-            NapiFFISafety::SafeResourceManaged,
-            "Combined create+release must be SafeResourceManaged"
+            adapter.language(),
+            Language::NodeJs,
+            "Node adapter must have NodeJs language setting"
         );
     }
 
-    /// Objective: Verify napi_define_class detection
-    /// Invariants: napi_define_class must be detected as NapiClassDefinition
+    /// Objective: Verify safety score correctness
+    /// Invariants: Safe patterns must have higher scores than concerning patterns
     #[test]
-    fn test_napi_class_definition_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_define_class", None);
-
+    fn test_ffi_safety_scores() {
         assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiClassDefinition),
-            "napi_define_class must be detected as NapiClassDefinition, got {:?}",
-            analysis.patterns
+            NapiFFISafety::SafeNoNapi.safety_score() > NapiFFISafety::Unknown.safety_score(),
+            "SafeNoNapi must have higher score than Unknown"
         );
-    }
-
-    /// Objective: Verify napi_remove_wrap cleanup detection
-    /// Invariants: napi_remove_wrap must be detected as NapiCleanup
-    #[test]
-    fn test_napi_cleanup_analysis() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("napi_remove_wrap", None);
-
         assert!(
-            analysis
-                .patterns
-                .contains(&NapiSemanticPattern::NapiCleanup),
-            "napi_remove_wrap must be detected as NapiCleanup, got {:?}",
-            analysis.patterns
+            NapiFFISafety::SafeHandleScope.safety_score()
+                > NapiFFISafety::ConcernUnclosedHandleScope.safety_score(),
+            "SafeHandleScope must have higher score than ConcernUnclosedHandleScope"
+        );
+        assert!(
+            NapiFFISafety::ConcernUnreleasedReference.safety_score()
+                < NapiFFISafety::Unknown.safety_score(),
+            "ConcernUnreleasedReference must have lower score than Unknown"
         );
     }
 
-    /// Objective: Verify mixed N-API patterns with IR body
-    /// Invariants: Multiple patterns from a single function must all be detected
+    /// Objective: Verify function with handle scope and reference management
+    /// Invariants: Balanced scope and reference is properly assessed
     #[test]
-    fn test_mixed_napi_patterns_with_ir() {
-        let adapter = NapiAdapter::new();
+    fn test_mixed_napi_patterns() {
+        let adapter = NodeAdapter::new();
+
+        use omniscope_ir::parser::{FunctionBody, IRInstruction, IRInstructionKind};
 
         let body = FunctionBody {
-            name: "mixed_napi_function".to_string(),
+            name: "test_mixed_napi".to_string(),
             instructions: vec![
                 IRInstruction {
                     kind: IRInstructionKind::Call,
-                    dest: Some("%env".to_string()),
-                    operands: vec!["i8*".to_string()],
-                    callee: Some("napi_get_cb_info".to_string()),
+                    dest: Some("%scope".to_string()),
+                    operands: vec!["i8*".to_string(), "%env".to_string()],
+                    callee: Some("napi_open_handle_scope".to_string()),
                     atomic_op: None,
                     icmp_pred: None,
-                    raw_text: "%env = call i8* @napi_get_cb_info()".to_string(),
+                    raw_text: "%scope = call i8* @napi_open_handle_scope(i8* %env)".to_string(),
                     result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
@@ -1382,12 +1190,12 @@ mod tests {
                 },
                 IRInstruction {
                     kind: IRInstructionKind::Call,
-                    dest: Some("%result".to_string()),
-                    operands: vec!["i8*".to_string(), "i8*".to_string()],
-                    callee: Some("napi_call_function".to_string()),
+                    dest: Some("%val".to_string()),
+                    operands: vec!["i8*".to_string(), "%env".to_string(), "i8*".to_string()],
+                    callee: Some("napi_create_string_utf8".to_string()),
                     atomic_op: None,
                     icmp_pred: None,
-                    raw_text: "%result = call i8* @napi_call_function(i8* %env, i8* %cb)"
+                    raw_text: "%val = call i8* @napi_create_string_utf8(i8* %env, i8* %input)"
                         .to_string(),
                     result_type: Some("i8*".to_string()),
                     element_type: None,
@@ -1398,11 +1206,12 @@ mod tests {
                 IRInstruction {
                     kind: IRInstructionKind::Call,
                     dest: None,
-                    operands: vec!["i8*".to_string(), "i8*".to_string()],
-                    callee: Some("napi_throw_error".to_string()),
+                    operands: vec!["i8*".to_string(), "%env".to_string(), "%scope".to_string()],
+                    callee: Some("napi_close_handle_scope".to_string()),
                     atomic_op: None,
                     icmp_pred: None,
-                    raw_text: "call void @napi_throw_error(i8* %env, i8* %msg)".to_string(),
+                    raw_text: "call void @napi_close_handle_scope(i8* %env, i8* %scope)"
+                        .to_string(),
                     result_type: Some("void".to_string()),
                     element_type: None,
                     function_signature: None,
@@ -1412,77 +1221,71 @@ mod tests {
                 IRInstruction {
                     kind: IRInstructionKind::Ret,
                     dest: None,
-                    operands: vec![],
+                    operands: vec!["i8* %val".to_string()],
                     callee: None,
-                    raw_text: "ret void".to_string(),
-                    result_type: Some("void".to_string()),
+                    atomic_op: None,
+                    icmp_pred: None,
+                    raw_text: "ret i8* %val".to_string(),
+                    result_type: Some("i8*".to_string()),
                     element_type: None,
                     function_signature: None,
                     conversion_opcode: None,
                     binary_opcode: None,
-                    atomic_op: None,
-                    icmp_pred: None,
                 },
             ],
         };
 
-        let analysis = adapter.analyze_function("mixed_napi_function", Some(&body));
+        let analysis = adapter.analyze_function("test_mixed_napi", Some(&body));
 
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiGetValue),
-            "napi_get_cb_info must be detected from IR body"
+                .contains(&NapiSemanticPattern::NapiHandleScopeOpen),
+            "Handle scope open must be detected"
         );
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiCallFunction),
-            "napi_call_function must be detected from IR body"
+                .contains(&NapiSemanticPattern::NapiHandleScopeClose),
+            "Handle scope close must be detected"
         );
         assert!(
             analysis
                 .patterns
-                .contains(&NapiSemanticPattern::NapiThrowError),
-            "napi_throw_error must be detected from IR body"
+                .contains(&NapiSemanticPattern::NapiValueCreation),
+            "Value creation must be detected"
         );
-
-        // No resource management → SafeInternal
+        assert!(
+            analysis.manages_handle_scopes,
+            "Function must manage handle scopes"
+        );
         assert_eq!(
             analysis.ffi_safety,
-            NapiFFISafety::SafeInternal,
-            "Mixed N-API without resource management must be SafeInternal"
+            NapiFFISafety::SafeHandleScope,
+            "Balanced handle scope must be SafeHandleScope"
         );
     }
 
-    /// Objective: Verify unknown function analysis
-    /// Invariants: Unrecognized functions must have empty patterns and Unknown safety
+    /// Objective: Verify escapable handle scope detection
+    /// Invariants: Escapable handle scope functions must be detected
     #[test]
-    fn test_unknown_function() {
-        let adapter = NapiAdapter::new();
-        let analysis = adapter.analyze_function("some_unknown_function", None);
+    fn test_escapable_handle_scope_detection() {
+        let adapter = NodeAdapter::new();
 
+        let analysis = adapter.analyze_function("napi_open_escapable_handle_scope", None);
         assert!(
-            analysis.patterns.is_empty(),
-            "Unknown function must have no patterns, got {:?}",
-            analysis.patterns
+            analysis
+                .patterns
+                .contains(&NapiSemanticPattern::NapiHandleScopeOpen),
+            "napi_open_escapable_handle_scope must be detected as NapiHandleScopeOpen"
         );
+
+        let analysis = adapter.analyze_function("napi_close_escapable_handle_scope", None);
         assert!(
-            !analysis.is_napi_callback,
-            "Unknown function must not be a callback"
-        );
-        assert!(
-            !analysis.manages_references,
-            "Unknown function must not manage references"
-        );
-        assert!(
-            !analysis.manages_async_work,
-            "Unknown function must not manage async work"
-        );
-        assert_eq!(
-            analysis.ffi_safety,
-            NapiFFISafety::Unknown,
-            "Unknown function must have Unknown safety"
+            analysis
+                .patterns
+                .contains(&NapiSemanticPattern::NapiHandleScopeClose),
+            "napi_close_escapable_handle_scope must be detected as NapiHandleScopeClose"
         );
     }
 }

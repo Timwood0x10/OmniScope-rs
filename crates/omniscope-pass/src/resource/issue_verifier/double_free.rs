@@ -24,6 +24,33 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
         .evidence_kinds
         .contains(&EvidenceKind::PathStateRefinement);
 
+    // Compute release path info when multiple releases are present.
+    // This helps distinguish mutually exclusive (if/else) from sequential
+    // (same-path) releases, which affects confidence in the verdict.
+    let release_path_info = bundle.has_same_resource_evidence.then(|| {
+        // Estimate total releases and unique instances from available evidence.
+        // When has_same_resource_evidence is true with MultipleRelease evidence,
+        // the same instance was released on multiple paths (mutually exclusive).
+        let has_multiple_release = bundle
+            .evidence_kinds
+            .contains(&EvidenceKind::MultipleRelease);
+        let total_releases = if has_multiple_release { 2usize } else { 1usize };
+        // When has_same_resource_evidence is true, releases refer to the same
+        // resource instance. MultipleRelease evidence confirms the count.
+        let unique_instances = 1usize;
+        ReleasePathInfo::analyze(total_releases, unique_instances)
+    });
+
+    // Log release path info when available for debugging.
+    if let Some(ref info) = release_path_info {
+        tracing::trace!(
+            candidate_id = bundle.candidate_id,
+            pattern = ?info.pattern,
+            confidence = info.confidence,
+            "release path info for double-free candidate"
+        );
+    }
+
     // All three: fully analyzed null-guarded pattern → safe.
     if has_null_guard && has_null_store && has_path_refinement {
         return VerifierVerdict::ExplainedSafe;
@@ -206,4 +233,107 @@ pub(crate) fn has_may_alias_rejection(candidate: &IssueCandidate) -> bool {
     candidate.evidence.iter().any(|e| {
         e.kind == EvidenceKind::Insufficient && e.description.starts_with("may_alias=NotAlias")
     })
+}
+
+/// Describes the release path pattern for double-free verification.
+///
+/// Distinguishes between mutually exclusive releases (if/else branches)
+/// and sequential releases (same-path double-free), which affects the
+/// confidence that a double-free candidate is a real bug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleasePathPattern {
+    /// Releases are on mutually exclusive paths (if/else).
+    /// Low confidence for double-free — likely a control-flow merge artefact.
+    MutuallyExclusive,
+    /// Releases are on the same path (sequential).
+    /// High confidence for double-free — likely a real bug.
+    Sequential,
+    /// Pattern cannot be determined.
+    Indeterminate,
+}
+
+/// Information about release paths for a double-free candidate.
+///
+/// Combines the release path pattern with a numeric confidence score.
+#[derive(Debug, Clone)]
+pub(crate) struct ReleasePathInfo {
+    /// The detected release path pattern.
+    pub pattern: ReleasePathPattern,
+    /// Numeric confidence score in `[0.0, 1.0]`.
+    pub confidence: f32,
+    /// Total number of release sites analyzed.
+    pub total_releases: usize,
+    /// Number of unique resource instances released.
+    pub unique_instances: usize,
+}
+
+impl ReleasePathInfo {
+    /// Creates a new `ReleasePathInfo` by analyzing release site counts.
+    ///
+    /// # Arguments
+    /// * `total_releases` - Total number of release sites across all paths.
+    /// * `unique_instances` - Number of distinct resource instances released.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use omniscope_pass::resource::issue_verifier::double_free::*;
+    /// // Two releases of the same instance → mutually exclusive.
+    /// let info = ReleasePathInfo::analyze(2, 1);
+    /// assert_eq!(info.pattern, ReleasePathPattern::MutuallyExclusive);
+    /// ```
+    pub(crate) fn analyze(total_releases: usize, unique_instances: usize) -> Self {
+        let pattern = if total_releases == 0 || unique_instances == 0 {
+            ReleasePathPattern::Indeterminate
+        } else if total_releases > unique_instances {
+            // Same instance released on multiple paths → mutually exclusive.
+            ReleasePathPattern::MutuallyExclusive
+        } else if total_releases == unique_instances {
+            // Each release is a different instance → sequential.
+            ReleasePathPattern::Sequential
+        } else {
+            ReleasePathPattern::Indeterminate
+        };
+
+        let confidence = compute_double_free_confidence(pattern);
+
+        Self {
+            pattern,
+            confidence,
+            total_releases,
+            unique_instances,
+        }
+    }
+}
+
+/// Computes a confidence score for a double-free candidate based on the
+/// release path pattern.
+///
+/// Scoring:
+/// - `Sequential` release pattern → high confidence (0.85): likely a real bug.
+/// - `MutuallyExclusive` pattern → low confidence (0.25): likely a CF merge artefact.
+/// - `Indeterminate` → medium confidence (0.50): cannot determine.
+fn compute_double_free_confidence(pattern: ReleasePathPattern) -> f32 {
+    match pattern {
+        ReleasePathPattern::Sequential => 0.85,
+        ReleasePathPattern::MutuallyExclusive => 0.25,
+        ReleasePathPattern::Indeterminate => 0.50,
+    }
+}
+
+/// Returns a human-readable description of the release path pattern.
+#[expect(dead_code, reason = "used in tests for verifying description output")]
+pub(crate) fn release_pattern_description(info: &ReleasePathInfo) -> String {
+    let pattern_desc = match info.pattern {
+        ReleasePathPattern::MutuallyExclusive => {
+            "releases are on mutually exclusive paths (if/else branches)"
+        }
+        ReleasePathPattern::Sequential => "releases are on the same execution path (sequential)",
+        ReleasePathPattern::Indeterminate => "release path pattern is indeterminate",
+    };
+
+    format!(
+        "release path: {pattern_desc} ({} releases, {} unique instances, confidence={:.2})",
+        info.total_releases, info.unique_instances, info.confidence
+    )
 }

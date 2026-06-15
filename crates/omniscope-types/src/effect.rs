@@ -218,6 +218,8 @@ pub enum LanguageHint {
     CSharp,
     /// Go language.
     Go,
+    /// Node.js (via napi).
+    NodeJs,
     /// Unknown or ambiguous language.
     Unknown,
 }

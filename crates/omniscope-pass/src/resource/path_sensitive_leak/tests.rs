@@ -10,8 +10,9 @@ use crate::pass::{Pass, PassContext, PassKind};
 use crate::resource::raw_fact_collector::RawResourceFact;
 
 use super::analysis::{
-    collect_exit_states, determine_leak_type, format_exit_state_summary, PathExitState,
-    ResourcePathState,
+    collect_exit_states, combine_path_states, detect_release_path_pattern, determine_leak_type,
+    format_exit_state_summary, PathCombinationResult, PathConfidence, PathExitState,
+    ReleasePathPattern, ResourcePathState,
 };
 use super::helpers::{
     count_alloc_release_in_facts, FunctionTermination, LeakPath, PathAnalysisResult,
@@ -1530,4 +1531,346 @@ fn test_contract_graph_release_matching() {
     // Test 5: Find matching release with wrong family
     let matches = graph.find_matching_release("test_func", FamilyId::MIMALLOC, 0);
     assert_eq!(matches.len(), 0, "No matching release for wrong family");
+}
+
+// ── PathConfidence tests ──
+
+/// Objective: Verify PathConfidence ordering and conversions.
+/// Invariants: High > Medium > Low; to_score produces deterministic values.
+#[test]
+fn test_path_confidence_ordering() {
+    assert!(
+        PathConfidence::High > PathConfidence::Medium,
+        "High confidence must be greater than Medium"
+    );
+    assert!(
+        PathConfidence::Medium > PathConfidence::Low,
+        "Medium confidence must be greater than Low"
+    );
+    assert!(
+        PathConfidence::High.to_score() > PathConfidence::Medium.to_score(),
+        "High score must exceed Medium score"
+    );
+    assert!(
+        PathConfidence::Medium.to_score() > PathConfidence::Low.to_score(),
+        "Medium score must exceed Low score"
+    );
+    assert!(
+        PathConfidence::High.is_at_least_medium(),
+        "High must be at least medium"
+    );
+    assert!(
+        PathConfidence::Medium.is_at_least_medium(),
+        "Medium must be at least medium"
+    );
+    assert!(
+        !PathConfidence::Low.is_at_least_medium(),
+        "Low must not be at least medium"
+    );
+}
+
+/// Objective: Verify PathConfidence::to_score returns expected values.
+/// Invariants: High=0.9, Medium=0.6, Low=0.3.
+#[test]
+fn test_path_confidence_scores() {
+    assert_eq!(
+        PathConfidence::High.to_score(),
+        0.9,
+        "High confidence score should be 0.9"
+    );
+    assert_eq!(
+        PathConfidence::Medium.to_score(),
+        0.6,
+        "Medium confidence score should be 0.6"
+    );
+    assert_eq!(
+        PathConfidence::Low.to_score(),
+        0.3,
+        "Low confidence score should be 0.3"
+    );
+}
+
+// ── PathCombinationResult tests ──
+
+/// Objective: Verify PathCombinationResult correctly identifies
+/// all-safe and all-leak scenarios.
+/// Invariants: is_all_safe true when owned=0, unknown=0.
+/// is_all_leak true when safe=0, unknown=0.
+#[test]
+fn test_path_combination_all_safe() {
+    let result = PathCombinationResult {
+        total_paths: 3,
+        owned_paths: 0,
+        safe_paths: 3,
+        unknown_paths: 0,
+        confidence: PathConfidence::High,
+    };
+    assert!(
+        result.is_all_safe(),
+        "All safe paths must be identified as safe"
+    );
+    assert!(!result.is_all_leak(), "All safe must not be all leak");
+    assert_eq!(
+        result.leak_ratio(),
+        0.0,
+        "Leak ratio must be 0.0 when no owned paths"
+    );
+}
+
+/// Objective: Verify PathCombinationResult correctly identifies
+/// all-leak scenario.
+/// Invariants: is_all_leak true when safe=0, unknown=0.
+#[test]
+fn test_path_combination_all_leak() {
+    let result = PathCombinationResult {
+        total_paths: 2,
+        owned_paths: 2,
+        safe_paths: 0,
+        unknown_paths: 0,
+        confidence: PathConfidence::High,
+    };
+    assert!(
+        result.is_all_leak(),
+        "All leaking paths must be identified as leak"
+    );
+    assert!(!result.is_all_safe(), "All leak must not be all safe");
+    assert_eq!(
+        result.leak_ratio(),
+        1.0,
+        "Leak ratio must be 1.0 when all paths own"
+    );
+}
+
+/// Objective: Verify PathCombinationResult correctly computes
+/// leak ratio for mixed scenarios.
+/// Invariants: leak_ratio = owned / total.
+#[test]
+fn test_path_combination_mixed() {
+    let result = PathCombinationResult {
+        total_paths: 4,
+        owned_paths: 1,
+        safe_paths: 3,
+        unknown_paths: 0,
+        confidence: PathConfidence::Medium,
+    };
+    assert!(!result.is_all_safe(), "Mixed must not be all safe");
+    assert!(!result.is_all_leak(), "Mixed must not be all leak");
+    assert_eq!(
+        result.leak_ratio(),
+        0.25,
+        "Leak ratio must be owned/total = 0.25"
+    );
+}
+
+/// Objective: Verify PathCombinationResult handles zero total paths.
+/// Invariants: leak_ratio = 0.0 when total = 0.
+#[test]
+fn test_path_combination_empty() {
+    let result = PathCombinationResult {
+        total_paths: 0,
+        owned_paths: 0,
+        safe_paths: 0,
+        unknown_paths: 0,
+        confidence: PathConfidence::Low,
+    };
+    assert!(!result.is_all_safe(), "Empty must not be all safe");
+    assert!(!result.is_all_leak(), "Empty must not be all leak");
+    assert_eq!(
+        result.leak_ratio(),
+        0.0,
+        "Leak ratio must be 0.0 for empty results"
+    );
+}
+
+/// Objective: Verify PathCombinationResult correctly handles
+/// unknown paths — they should not count toward safe or leak.
+/// Invariants: Unknown paths excluded from is_all_safe and is_all_leak.
+#[test]
+fn test_path_combination_with_unknown() {
+    let result = PathCombinationResult {
+        total_paths: 3,
+        owned_paths: 1,
+        safe_paths: 1,
+        unknown_paths: 1,
+        confidence: PathConfidence::Low,
+    };
+    assert!(
+        !result.is_all_safe(),
+        "Unknown paths must prevent is_all_safe"
+    );
+    assert!(
+        !result.is_all_leak(),
+        "Unknown paths must prevent is_all_leak"
+    );
+    assert_eq!(
+        result.leak_ratio(),
+        1.0 / 3.0,
+        "Leak ratio must account for unknown paths in total"
+    );
+}
+
+// ── combine_path_states tests ──
+
+/// Objective: Verify combine_path_states correctly aggregates
+/// a mix of Owned and Released states.
+/// Invariants: owned_paths + safe_paths + unknown_paths = total_paths.
+#[test]
+fn test_combine_path_states_mixed() {
+    let states = vec![
+        PathExitState {
+            resource_state: ResourcePathState::Owned,
+            _evidence: Vec::new(),
+        },
+        PathExitState {
+            resource_state: ResourcePathState::Released,
+            _evidence: Vec::new(),
+        },
+        PathExitState {
+            resource_state: ResourcePathState::EscapedToCaller,
+            _evidence: Vec::new(),
+        },
+        PathExitState {
+            resource_state: ResourcePathState::Owned,
+            _evidence: Vec::new(),
+        },
+    ];
+
+    let result = combine_path_states(&states);
+    assert_eq!(result.total_paths, 4, "Total paths must match input length");
+    assert_eq!(result.owned_paths, 2, "Must count 2 Owned states");
+    assert_eq!(
+        result.safe_paths, 2,
+        "Must count 2 safe states (Released + EscapedToCaller)"
+    );
+    assert_eq!(result.unknown_paths, 0, "Must have 0 unknown paths");
+    assert_eq!(
+        result.confidence,
+        PathConfidence::Low,
+        "2:2 ratio (majority=50%) must produce Low confidence"
+    );
+}
+
+/// Objective: Verify combine_path_states correctly handles
+/// all-safe exit states.
+/// Invariants: High confidence when all paths are safe.
+#[test]
+fn test_combine_path_states_all_safe() {
+    let states = vec![
+        PathExitState {
+            resource_state: ResourcePathState::Released,
+            _evidence: Vec::new(),
+        },
+        PathExitState {
+            resource_state: ResourcePathState::Released,
+            _evidence: Vec::new(),
+        },
+        PathExitState {
+            resource_state: ResourcePathState::EscapedToCaller,
+            _evidence: Vec::new(),
+        },
+    ];
+
+    let result = combine_path_states(&states);
+    assert!(result.is_all_safe(), "All safe paths must be is_all_safe");
+    assert_eq!(
+        result.confidence,
+        PathConfidence::High,
+        "All safe must produce High confidence"
+    );
+}
+
+/// Objective: Verify combine_path_states correctly handles
+/// all-owned exit states (definite leak).
+/// Invariants: High confidence when all paths are owned.
+#[test]
+fn test_combine_path_states_all_owned() {
+    let states = vec![
+        PathExitState {
+            resource_state: ResourcePathState::Owned,
+            _evidence: Vec::new(),
+        },
+        PathExitState {
+            resource_state: ResourcePathState::Owned,
+            _evidence: Vec::new(),
+        },
+    ];
+
+    let result = combine_path_states(&states);
+    assert!(result.is_all_leak(), "All owned paths must be is_all_leak");
+    assert_eq!(
+        result.confidence,
+        PathConfidence::High,
+        "All owned must produce High confidence"
+    );
+    assert_eq!(
+        result.leak_ratio(),
+        1.0,
+        "Leak ratio must be 1.0 when all paths own"
+    );
+}
+
+/// Objective: Verify combine_path_states handles empty input.
+/// Invariants: zero counts, Low confidence.
+#[test]
+fn test_combine_path_states_empty() {
+    let result = combine_path_states(&[]);
+    assert_eq!(result.total_paths, 0, "Empty input must produce zero total");
+    assert_eq!(
+        result.confidence,
+        PathConfidence::Low,
+        "Empty input must produce Low confidence"
+    );
+}
+
+// ── detect_release_path_pattern tests ──
+
+/// Objective: Verify detect_release_path_pattern correctly detects
+/// mutually exclusive releases (same instance, multiple paths).
+/// Invariants: total > unique → MutuallyExclusive.
+#[test]
+fn test_detect_release_pattern_mutually_exclusive() {
+    let pattern = detect_release_path_pattern(3, 1);
+    assert_eq!(
+        pattern,
+        ReleasePathPattern::MutuallyExclusive,
+        "3 releases of 1 instance must be mutually exclusive"
+    );
+}
+
+/// Objective: Verify detect_release_path_pattern correctly detects
+/// sequential releases (each release is a different instance).
+/// Invariants: total == unique → SequentialRelease.
+#[test]
+fn test_detect_release_pattern_sequential() {
+    let pattern = detect_release_path_pattern(2, 2);
+    assert_eq!(
+        pattern,
+        ReleasePathPattern::SequentialRelease,
+        "2 releases of 2 instances must be sequential"
+    );
+}
+
+/// Objective: Verify detect_release_path_pattern returns Indeterminate
+/// when there are no released instances.
+/// Invariants: zero total → Indeterminate.
+#[test]
+fn test_detect_release_pattern_no_releases() {
+    let pattern = detect_release_path_pattern(0, 0);
+    assert_eq!(
+        pattern,
+        ReleasePathPattern::Indeterminate,
+        "No releases must be Indeterminate"
+    );
+}
+
+/// Objective: Verify detect_release_path_pattern handles single release.
+/// Invariants: one release of one instance → SequentialRelease.
+#[test]
+fn test_detect_release_pattern_single() {
+    let pattern = detect_release_path_pattern(1, 1);
+    assert_eq!(
+        pattern,
+        ReleasePathPattern::SequentialRelease,
+        "Single release must be SequentialRelease"
+    );
 }

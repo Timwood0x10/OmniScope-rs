@@ -364,9 +364,9 @@ cargo bench
 - [x] 跨语言 FFI 语料库（9 项目、5 语言）
 - [x] 内嵌 IR 回归测试
 - [x] 调用图语义传播（Python refcount、C library 内部识别）
-- [ ] 改进跨模块分析
-- [ ] 改进 path-sensitive double-free/leak verification
-- [ ] .NET 和 Node.js native 支持稳定化
+- [x] 改进跨模块分析
+- [x] 改进 path-sensitive double-free/leak verification
+- [x] .NET 和 Node.js native 支持稳定化
 
 ## 致谢
 

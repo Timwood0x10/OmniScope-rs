@@ -4,6 +4,9 @@
 //! - SafeHandle usage detection
 //! - CriticalHandle usage detection
 //! - IDisposable pattern detection
+//! - Finalizer pattern detection
+//! - Using statement pattern detection
+//! - Dispose(bool) pattern detection
 
 use super::CSharpSemanticPattern;
 
@@ -43,6 +46,65 @@ pub fn is_safe_handle_usage(function_name: &str) -> bool {
 /// `true` if the function is identified as using IDisposable, `false` otherwise.
 pub fn is_idisposable_pattern(function_name: &str) -> bool {
     function_name.contains("IDisposable") || function_name.contains(".Dispose()")
+}
+
+/// Checks if a function name indicates a finalizer pattern.
+///
+/// # Objective
+/// Detect C# finalizer patterns (~ClassName) in function names.
+/// Finalizers are used for cleanup before garbage collection.
+///
+/// # Invariants
+/// - Returns true for destructor-like patterns (~ClassName).
+/// - Returns false for non-finalizer patterns.
+///
+/// # Arguments
+/// * `function_name` - The function name to check for finalizer patterns.
+///
+/// # Returns
+/// `true` if the function is identified as a finalizer, `false` otherwise.
+pub fn is_finalizer_pattern(function_name: &str) -> bool {
+    function_name.contains("~") || function_name.contains("Finalize")
+}
+
+/// Checks if a function name indicates a Dispose(bool) pattern.
+///
+/// # Objective
+/// Detect the Dispose(bool disposing) overload pattern used in the
+/// standard IDisposable implementation pattern.
+///
+/// # Invariants
+/// - Returns true for Dispose(*bool*) or Dispose(*Boolean*) patterns.
+/// - Returns false for non-Dispose(bool) patterns.
+///
+/// # Arguments
+/// * `function_name` - The function name to check for Dispose(bool) pattern.
+///
+/// # Returns
+/// `true` if the function is identified as Dispose(bool), `false` otherwise.
+pub fn is_dispose_bool_pattern(function_name: &str) -> bool {
+    function_name.contains("Dispose(")
+        && (function_name.contains("bool") || function_name.contains("Boolean"))
+}
+
+/// Checks if a function name indicates a using statement pattern.
+///
+/// # Objective
+/// Detect C# using statement patterns which ensure IDisposable.GetProcessor()
+/// is called on scope exit. The compiler transforms `using (var x = ...)`
+/// into a try/finally block with Dispose() call.
+///
+/// # Invariants
+/// - Returns true for using statement related patterns.
+/// - Returns false otherwise.
+///
+/// # Arguments
+/// * `function_name` - The function name to check for using statement patterns.
+///
+/// # Returns
+/// `true` if the function uses using statement pattern, `false` otherwise.
+pub fn is_using_statement(function_name: &str) -> bool {
+    function_name.contains("using") && function_name.contains("Dispose")
 }
 
 /// Detects disposal-related patterns from a function name.
@@ -159,6 +221,56 @@ mod tests {
         assert!(
             !has_proper_resource_cleanup("MyNamespace.MyClass.MyMethod"),
             "Non-proper cleanup must not be detected"
+        );
+    }
+
+    /// Objective: Verify finalizer pattern detection
+    /// Invariants: Finalize and ~ClassName patterns must be detected
+    #[test]
+    fn test_finalizer_pattern_detection() {
+        assert!(
+            is_finalizer_pattern("~MyClass"),
+            "~MyClass must be detected as finalizer"
+        );
+        assert!(
+            is_finalizer_pattern("MyClass.Finalize"),
+            "Finalize must be detected as finalizer"
+        );
+        assert!(
+            !is_finalizer_pattern("MyClass.Dispose()"),
+            "Dispose must not be detected as finalizer"
+        );
+    }
+
+    /// Objective: Verify Dispose(bool) pattern detection
+    /// Invariants: Dispose(bool) overload must be detected
+    #[test]
+    fn test_dispose_bool_pattern_detection() {
+        assert!(
+            is_dispose_bool_pattern("MyClass.Dispose(bool)"),
+            "Dispose(bool) must be detected"
+        );
+        assert!(
+            is_dispose_bool_pattern("MyClass.Dispose(Boolean)"),
+            "Dispose(Boolean) must be detected"
+        );
+        assert!(
+            !is_dispose_bool_pattern("MyClass.Dispose()"),
+            "Dispose() without bool must not be detected as Dispose(bool)"
+        );
+    }
+
+    /// Objective: Verify using statement pattern detection
+    /// Invariants: Using statement patterns must be detected
+    #[test]
+    fn test_using_statement_detection() {
+        assert!(
+            is_using_statement("using_Dispose_MyResource"),
+            "Using with Dispose must be detected"
+        );
+        assert!(
+            !is_using_statement("MyClass.Dispose()"),
+            "Dispose without using must not be detected as using statement"
         );
     }
 }

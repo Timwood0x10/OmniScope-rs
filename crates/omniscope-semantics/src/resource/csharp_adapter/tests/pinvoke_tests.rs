@@ -1,6 +1,7 @@
 //! Tests for P/Invoke pattern detection in C# adapter.
 
 use super::super::*;
+use crate::resource::semantic_tree::{FactConfidence, FactSource, SemanticKind};
 
 /// Objective: Verify P/Invoke call detection
 /// Invariants: P/Invoke and DllImport must be detected as PInvokeCall
@@ -202,5 +203,223 @@ fn test_marshal_safety_assessment() {
         ffi_safety,
         CSharpFFISafety::SafeMarshal,
         "Balanced Marshal allocation and deallocation must be SafeMarshal"
+    );
+}
+
+/// Objective: Verify Marshal class operations (PtrToStructure, StructureToPtr)
+/// Invariants: Marshal.PtrToStructure and Marshal.StructureToPtr must be detected
+#[test]
+fn test_marshal_structure_operations() {
+    let adapter = CSharpAdapter::new();
+
+    // Marshal.PtrToStructure
+    let analysis = adapter.analyze_function("Marshal.PtrToStructure", None);
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::PInvokeCall),
+        "Marshal.PtrToStructure must be detected as PInvokeCall"
+    );
+
+    // Marshal.StructureToPtr
+    let analysis = adapter.analyze_function("Marshal.StructureToPtr", None);
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::PInvokeCall),
+        "Marshal.StructureToPtr must be detected as PInvokeCall"
+    );
+
+    // Marshal.SizeOf
+    let analysis = adapter.analyze_function("Marshal.SizeOf", None);
+    assert!(
+        !analysis.patterns.is_empty(),
+        "Marshal.SizeOf must produce at least one pattern"
+    );
+}
+
+/// Objective: Verify Marshal string marshaling detection
+/// Invariants: Marshal.StringToHGlobalAnsi and Marshal.PtrToStringAnsi must be detected
+#[test]
+fn test_marshal_string_marshaling() {
+    let adapter = CSharpAdapter::new();
+
+    // Marshal.StringToHGlobalAnsi (allocation)
+    let analysis = adapter.analyze_function("Marshal.StringToHGlobalAnsi", None);
+    let has_marshal_alloc = analysis
+        .patterns
+        .contains(&CSharpSemanticPattern::MarshalAllocation);
+    let has_pinvoke = analysis
+        .patterns
+        .contains(&CSharpSemanticPattern::PInvokeCall);
+    assert!(
+        has_marshal_alloc || has_pinvoke,
+        "Marshal.StringToHGlobalAnsi must be detected as allocation or P/Invoke"
+    );
+
+    // Marshal.PtrToStringAnsi (deallocation read)
+    let analysis = adapter.analyze_function("Marshal.PtrToStringAnsi", None);
+    assert!(
+        !analysis.patterns.is_empty(),
+        "Marshal.PtrToStringAnsi must produce at least one pattern"
+    );
+
+    // Marshal.StringToCoTaskMemAnsi (allocation)
+    let analysis = adapter.analyze_function("Marshal.StringToCoTaskMemAnsi", None);
+    let has_marshal_alloc = analysis
+        .patterns
+        .contains(&CSharpSemanticPattern::MarshalAllocation);
+    let has_pinvoke = analysis
+        .patterns
+        .contains(&CSharpSemanticPattern::PInvokeCall);
+    assert!(
+        has_marshal_alloc || has_pinvoke,
+        "Marshal.StringToCoTaskMemAnsi must be detected as allocation or P/Invoke"
+    );
+}
+
+/// Objective: Verify COM interop with IR body analysis
+/// Invariants: COM call patterns must be detected from IR body
+#[test]
+fn test_com_interop_with_ir() {
+    let adapter = CSharpAdapter::new();
+
+    use omniscope_ir::parser::{FunctionBody, IRInstruction, IRInstructionKind};
+
+    let body = FunctionBody {
+        name: "test_com_function".to_string(),
+        instructions: vec![
+            IRInstruction {
+                kind: IRInstructionKind::Call,
+                dest: Some("%unk".to_string()),
+                operands: vec!["i8*".to_string(), "%obj".to_string()],
+                callee: Some("Marshal.GetIUnknownForObject".to_string()),
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text: "%unk = call i8* @Marshal.GetIUnknownForObject(i8* %obj)".to_string(),
+                result_type: Some("i8*".to_string()),
+                element_type: None,
+                function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
+            },
+            IRInstruction {
+                kind: IRInstructionKind::Call,
+                dest: None,
+                operands: vec!["i8*".to_string(), "%unk".to_string()],
+                callee: Some("Marshal.GetObjectForIUnknown".to_string()),
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text: "call void @Marshal.GetObjectForIUnknown(i8* %unk)".to_string(),
+                result_type: Some("void".to_string()),
+                element_type: None,
+                function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
+            },
+            IRInstruction {
+                kind: IRInstructionKind::Ret,
+                dest: None,
+                operands: vec![],
+                callee: None,
+                atomic_op: None,
+                icmp_pred: None,
+                raw_text: "ret void".to_string(),
+                result_type: Some("void".to_string()),
+                element_type: None,
+                function_signature: None,
+                conversion_opcode: None,
+                binary_opcode: None,
+            },
+        ],
+    };
+
+    let analysis = adapter.analyze_function("test_com_function", Some(&body));
+
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::COMInterop),
+        "COM interop must be detected from IR body"
+    );
+}
+
+/// Objective: Verify Marshal.GetComInterfaceForObject detection
+/// Invariants: Marshal.GetComInterfaceForObject must be detected as COMInterop
+#[test]
+fn test_marshal_get_com_interface() {
+    let adapter = CSharpAdapter::new();
+
+    // Marshal.GetComInterfaceForObject
+    let analysis = adapter.analyze_function("Marshal.GetComInterfaceForObject", None);
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::COMInterop),
+        "Marshal.GetComInterfaceForObject must be detected as COMInterop"
+    );
+
+    // Marshal.GetIDispatchForObject
+    let analysis = adapter.analyze_function("Marshal.GetIDispatchForObject", None);
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::COMInterop),
+        "Marshal.GetIDispatchForObject must be detected as COMInterop"
+    );
+
+    // Marshal.ReleaseComObject
+    let analysis = adapter.analyze_function("Marshal.ReleaseComObject", None);
+    assert!(
+        analysis
+            .patterns
+            .contains(&CSharpSemanticPattern::COMInterop),
+        "Marshal.ReleaseComObject must be detected as COMInterop"
+    );
+}
+
+/// Objective: Verify SemanticFact generation for P/Invoke patterns
+/// Invariants: P/Invoke patterns must produce correct SemanticFacts
+#[test]
+fn test_pinvoke_semantic_facts() {
+    let adapter = CSharpAdapter::new();
+
+    // P/Invoke call produces CsharpPinvokeMarshal fact
+    let analysis = adapter.analyze_function("P/Invoke::kernel32.dll::CreateFile", None);
+    let facts = analysis.to_semantic_facts();
+    let has_pinvoke_fact = facts.iter().any(|f| {
+        f.kind == SemanticKind::CsharpPinvokeMarshal
+            && f.confidence == FactConfidence::High
+            && f.source == FactSource::LanguageAdapter
+    });
+    assert!(
+        has_pinvoke_fact,
+        "P/Invoke must produce CsharpPinvokeMarshal fact with High confidence"
+    );
+
+    // Marshal allocation produces HeapProvenance fact
+    let analysis = adapter.analyze_function("Marshal.AllocHGlobal", None);
+    let facts = analysis.to_semantic_facts();
+    let has_alloc_fact = facts.iter().any(|f| {
+        f.kind == SemanticKind::HeapProvenance
+            && f.confidence == FactConfidence::High
+            && f.source == FactSource::LanguageAdapter
+    });
+    assert!(
+        has_alloc_fact,
+        "Marshal.AllocHGlobal must produce HeapProvenance fact"
+    );
+
+    // Marshal deallocation produces RaiiDropRelease fact
+    let analysis = adapter.analyze_function("Marshal.FreeHGlobal", None);
+    let facts = analysis.to_semantic_facts();
+    let has_dealloc_fact = facts.iter().any(|f| {
+        f.kind == SemanticKind::RaiiDropRelease
+            && f.confidence == FactConfidence::Medium
+            && f.source == FactSource::LanguageAdapter
+    });
+    assert!(
+        has_dealloc_fact,
+        "Marshal.FreeHGlobal must produce RaiiDropRelease fact"
     );
 }

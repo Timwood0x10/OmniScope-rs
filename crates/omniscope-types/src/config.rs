@@ -96,6 +96,8 @@ pub enum Language {
     Java,
     /// C# (via P/Invoke)
     CSharp,
+    /// Node.js (via napi)
+    NodeJs,
     /// Unknown language
     #[default]
     Unknown,
@@ -111,7 +113,12 @@ impl Language {
     pub fn has_ffi(&self) -> bool {
         matches!(
             self,
-            Language::Rust | Language::Go | Language::Python | Language::Java | Language::CSharp
+            Language::Rust
+                | Language::Go
+                | Language::Python
+                | Language::Java
+                | Language::CSharp
+                | Language::NodeJs
         )
     }
 }
@@ -126,6 +133,7 @@ impl std::fmt::Display for Language {
             Language::Python => write!(f, "Python"),
             Language::Java => write!(f, "Java"),
             Language::CSharp => write!(f, "C#"),
+            Language::NodeJs => write!(f, "Node.js"),
             Language::Unknown => write!(f, "Unknown"),
         }
     }
@@ -191,6 +199,10 @@ mod tests {
         );
         assert!(Language::Java.has_ffi(), "Java should have FFI capability");
         assert!(Language::CSharp.has_ffi(), "C# should have FFI capability");
+        assert!(
+            Language::NodeJs.has_ffi(),
+            "Node.js should have FFI capability"
+        );
         assert!(
             !Language::C.has_ffi(),
             "C should not have FFI (it IS the FFI target)"
