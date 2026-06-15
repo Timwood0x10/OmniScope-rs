@@ -274,14 +274,8 @@ impl ReleasePathInfo {
     /// * `total_releases` - Total number of release sites across all paths.
     /// * `unique_instances` - Number of distinct resource instances released.
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use omniscope_pass::resource::issue_verifier::double_free::*;
-    /// // Two releases of the same instance → mutually exclusive.
-    /// let info = ReleasePathInfo::analyze(2, 1);
-    /// assert_eq!(info.pattern, ReleasePathPattern::MutuallyExclusive);
-    /// ```
+    /// > **Note:** This is a `pub(crate)` API — full doc-test coverage is
+    /// > provided via unit tests in the same module.
     pub(crate) fn analyze(total_releases: usize, unique_instances: usize) -> Self {
         let pattern = if total_releases == 0 || unique_instances == 0 {
             ReleasePathPattern::Indeterminate

@@ -11,6 +11,9 @@ pub mod pipeline;
 pub mod project_pipeline;
 pub mod result;
 
+#[cfg(test)]
+mod tests;
+
 // Re-exports
 pub use pipeline::Pipeline;
 pub use project_pipeline::{ProjectPipeline, ProjectReport};

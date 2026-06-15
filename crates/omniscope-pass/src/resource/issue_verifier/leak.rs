@@ -261,16 +261,8 @@ impl PathAwareLeakDescription {
     /// * `leaking_paths` - Number of leaking paths.
     /// * `safe_paths` - Number of safe paths.
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use omniscope_pass::resource::issue_verifier::leak::*;
-    /// # use omniscope_types::FamilyId;
-    /// let desc = PathAwareLeakDescription::build(
-    ///     "malloc", "my_func", FamilyId::C_HEAP, 4, 3, 1,
-    /// );
-    /// assert!(desc.to_string().contains("3 of 4 paths leak"));
-    /// ```
+    /// > **Note:** This is a `pub(crate)` API — full doc-test coverage is
+    /// > provided via unit tests in the same module.
     #[expect(dead_code, reason = "used in tests and doc-tests")]
     pub(crate) fn build(
         alloc_function: &str,

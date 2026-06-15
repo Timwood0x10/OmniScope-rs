@@ -430,19 +430,8 @@ impl PathCombinationResult {
 /// the distribution. This is useful for producing a summary verdict when
 /// an allocation has multiple exit states from different execution paths.
 ///
-/// # Examples
-///
-/// ```
-/// # use omniscope_pass::resource::path_sensitive_leak::analysis::*;
-/// let states = vec![
-///     PathExitState { resource_state: ResourcePathState::Owned, _evidence: vec![] },
-///     PathExitState { resource_state: ResourcePathState::Released, _evidence: vec![] },
-/// ];
-/// let result = combine_path_states(&states);
-/// assert!(result.total_paths == 2);
-/// assert!(result.owned_paths == 1);
-/// assert!(result.safe_paths == 1);
-/// ```
+/// > **Note:** This is a `pub(super)` API — full doc-test coverage is
+/// > provided via unit tests in `tests.rs`.
 pub(super) fn combine_path_states(exit_states: &[PathExitState]) -> PathCombinationResult {
     let total_paths = exit_states.len();
     let mut owned_paths = 0usize;
@@ -522,14 +511,8 @@ pub(super) enum ReleasePathPattern {
 /// instance, they are likely mutually exclusive branches (if/else).
 /// When instances differ, releases are sequential.
 ///
-/// # Examples
-///
-/// ```
-/// # use omniscope_pass::resource::path_sensitive_leak::analysis::*;
-/// // Two Released states for the same instance → mutually exclusive.
-/// let pattern = detect_release_path_pattern(2, 1);
-/// assert_eq!(pattern, ReleasePathPattern::MutuallyExclusive);
-/// ```
+/// > **Note:** This is a `pub(super)` API — full doc-test coverage is
+/// > provided via unit tests in `tests.rs`.
 pub(super) fn detect_release_path_pattern(
     total_released_instances: usize,
     unique_instances: usize,
