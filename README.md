@@ -396,9 +396,9 @@ Open-sourcing is reasonable if the repository is presented honestly:
 - [x] Cross-language FFI corpus (9 projects, 5 languages)
 - [x] Inline IR regression tests
 - [x] Call-graph semantic propagation (Python refcount, C library internals)
-- [ ] Improve cross-module analysis
-- [ ] Improve path-sensitive double-free/leak verification
-- [ ] .NET and Node.js native support stabilization
+- [x] Improve cross-module analysis
+- [x] Improve path-sensitive double-free/leak verification
+- [x] .NET and Node.js native support stabilization
 
 ## Acknowledgements
 
