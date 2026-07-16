@@ -83,6 +83,128 @@ pulls in `llvm-sys = 221` (`crates/omniscope-ir/Cargo.toml:13-23`). When the
 feature is off, llvm-sys is not linked at all. The workspace feature
 `llvm-backend` defined in `Cargo.toml:14-16` forwards to this.
 
+## Design Philosophy
+
+This section explains the rationale behind several architectural decisions
+that may not be obvious from the code alone.
+
+### Why LLVM IR?
+
+OmniScope does **not** analyze source code, debug info (DWARF), or BTF. It
+operates exclusively on LLVM IR. This choice was made for three reasons:
+
+1. **Language-agnostic foundation.** LLVM IR is the common lowering target for
+   C, C++, Rust, Go (via LLVM), Swift, and many others. A single analysis
+   pipeline can handle multiple source languages without per-language AST
+   parsers. DWARF and BTF are debug formats — they lack control-flow graphs,
+   call graphs, and instruction-level detail.
+
+2. **Semantic density.** LLVM IR preserves enough high-level information
+   (allocas, loads/stores, calls, GEPs, memcpy) to reconstruct ownership and
+   lifetime semantics, while stripping away syntactic noise. Source-level ASTs
+   would require a separate parser and semantic model for every language.
+
+3. **Ecosystem leverage.** LLVM provides mature tooling (`opt`, `llvm-dis`,
+   `llvm-sys`) for IR extraction and transformation. OmniScope's
+   `LoadStrategy` enum (`loader_v2.rs:60-95`) reflects a pragmatic, tiered
+   approach: it probes multiple backends in priority order and falls back
+   gracefully, rather than requiring a single rigid extraction path.
+
+> **Tradeoff acknowledged:** LLVM IR is lossy. Macros, templates, and
+> high-level type information (e.g., Rust's lifetime annotations, C++'s
+> move semantics) are lowered to generic load/store/call instructions.
+> OmniScope compensates with language-specific semantic adapters in
+> `omniscope-semantics`, but some precision is inherently unrecoverable.
+
+### Why the 4-stage pipeline?
+
+`pipeline.rs:85-127` shows `register_default_passes`, which registers
+passes in four conceptual stages:
+
+- **Foundation** — `CallGraphPass` (no dependencies). Builds the call graph
+  that everything else depends on.
+- **Analysis** — `FFIBoundaryPass`, `SurfaceClassifierPass`, `DangerSurfacePass`,
+  `RawFactCollectorPass`, etc. Extract facts from IR and classify patterns.
+- **Verification** — `IssueVerifierPass`, `LeakDetectionPass`. Formulate and
+  verify issue candidates against the evidence.
+- **Reporting** — Deduplication and output formatting (handled by
+  `PipelineResult` and the CLI output layer).
+
+This separation ensures that a fact-producing pass (e.g., `RawFactCollector`)
+can be replaced or augmented without touching consumers (e.g.,
+`OwnershipSolver`). The dependency declarations (`dependencies()`) act as a
+contract: the topological sort in `PassManager::compute_order`
+(`manager.rs:41-70`) guarantees that producers run before consumers.
+
+### Why the blackboard pattern?
+
+`PassContext` (`pass.rs:156-181`) stores shared data as
+`Arc<HashMap<String, Arc<dyn Any + Send + Sync>>>` — a typed blackboard —
+rather than defining a trait-based visitor or a fixed struct with named
+fields. The rationale:
+
+1. **Decoupled pass evolution.** A new pass can introduce a new data type
+   (e.g., `ContractGraph`, `SummaryStore`) without modifying a central
+   context struct. Passes opt in to reading data by key; they are not forced
+   to implement a visitor interface.
+
+2. **Parallel safety.** `Arc<HashMap<...>>` enables cheap clone-for-parallel
+   (`pass.rs:725`): shared data is Arc-cloned (refcount bump), while
+   write-only state (diagnostics, facts, issues) starts empty in each
+   parallel context. After a parallel level, `merge()` (`manager.rs:243-251`)
+   combines results.
+
+3. **Dynamic dispatch is the right tool here.** A trait-based visitor would
+   require all data types to be known at compile time and would couple every
+   pass to a central visitor trait. The blackboard trades compile-time type
+   safety for flexibility — an acceptable tradeoff in a plugin-like pass
+   architecture where data types are added incrementally.
+
+### Why parallel execution is opt-in
+
+`PassManager::new()` sets `parallel: false` (`manager.rs:25-28`). Parallel
+execution requires explicit opt-in via `set_parallel(true)`. The CLI defaults
+to sequential (`crates/omniscope-cli/src/main.rs:158-161`). The reasons:
+
+1. **Sequential is simpler to debug.** When a pass produces wrong results,
+   sequential execution gives deterministic, reproducible ordering. Parallel
+   execution introduces race-condition bugs in pass communication (e.g., two
+   passes writing to the same blackboard key) that are hard to reproduce.
+
+2. **Overhead outweighs benefit for small modules.** For a single `.ll` file
+   with <100 functions, the overhead of cloning contexts and merging results
+   (`manager.rs:200-252`) can exceed the parallelism gain. Parallel mode
+   shines on large modules (>500 functions) with many independent passes.
+
+3. **The dependency graph limits parallelism.** `compute_levels`
+   (`manager.rs:274-308`) groups passes into levels; if most passes depend on
+   `CallGraphPass`, the first level contains only one pass, and subsequent
+   levels contain few independent passes. The effective parallelism is bounded
+   by the DAG width, not the number of passes.
+
+### Why ModuleIndex is a blackboard entry, not a pass
+
+`run_all_with_ir_and_config` builds a `ModuleIndex` and stores it in the
+context directly (`manager.rs:175-183`), rather than defining it as a pass.
+This is intentional:
+
+1. **ModuleIndex is read-only metadata.** It pre-computes language detection,
+   registry lookups, and call classification from the IR module. It does not
+   produce issues, facts, or diagnostics. Making it a pass would require it
+   to participate in the pass lifecycle (dependency resolution, execution,
+   result collection) for no benefit.
+
+2. **It is a cache, not an analysis.** Multiple passes (`FFIBoundaryPass`,
+   `LanguageAdapterFactPass`) read from `ModuleIndex`, but none write to it.
+   Building it eagerly before any pass runs ensures that all passes see a
+   consistent snapshot.
+
+3. **Avoids circular dependencies.** If `ModuleIndex` were a pass, it would
+   need to depend on nothing (it uses only the IR module), but several passes
+   would depend on it. That creates a virtual pass that exists only to be
+   depended upon — misleading in `compute_order`. Storing it as a blackboard
+   entry communicates that it is infrastructure, not analysis.
+
 ## Crate responsibilities
 
 | Crate | Key contents | Source directory |
@@ -301,3 +423,82 @@ On collision, the issue with higher `(severity, confidence)` is kept and the
 loser is counted in `dedup_dropped`. This ensures that two real findings at
 distinct source positions are both preserved while byte-identical duplicates
 from multiple passes are collapsed.
+
+## Honest Limitations
+
+This section documents known gaps and half-finished features. They are not
+secrets — they are engineering tradeoffs that were consciously deferred.
+
+### `omniscope-dataflow` is standalone, not consumed
+
+`crates/omniscope-dataflow/src/` contains a generic forward/backward dataflow
+analysis framework (`analysis.rs`, `graph.rs`). It was built as a reusable
+foundation for path-sensitive analyses. However, it is **not currently
+consumed by any pass in the pipeline**. The leak detection pass
+(`LeakDetectionPass`) implements its own path enumeration directly on the
+contract graph rather than using the dataflow framework.
+
+> **Honest admission:** This was over-engineering. The dataflow crate was
+> extracted early because "we'll need it for path-sensitive analysis," but
+> the path-sensitive analysis was never wired up to use it. The crate
+> compiles, has tests, and is dependency-ordered in the workspace, but it
+> contributes zero issues to any pipeline run. A future refactor should
+> either consume it or remove it.
+
+### `LeakDetectionPass` has dead configuration fields
+
+`crates/omniscope-pass/src/resource/path_sensitive_leak/mod.rs:71-74` defines:
+
+```rust
+pub struct LeakDetectionPass {
+    pub path_budget: usize,     // NOT read by run()
+    pub max_path_length: usize, // NOT read by run()
+}
+```
+
+Both fields are initialized to defaults (`DEFAULT_PATH_BUDGET: usize = 64`,
+`DEFAULT_MAX_PATH_LENGTH: usize = 256` at lines 43-46) and exposed via
+builder methods (`with_path_budget`, `with_max_path_length` at lines 87-94),
+but **neither field is read in the `run()` method**. The pass currently
+performs non-path-sensitive matching: it finds allocation/release pairs from
+the contract graph and reports unmatched allocations. The path-sensitive
+enumeration that would use these budgets was planned but never implemented.
+
+> **Impact:** Setting `--leak-path-budget 128` has no effect today. The
+> fields exist for API stability and future use.
+
+### `LanguageAdapterFactPass` declares a fake dependency
+
+`LanguageAdapterFactPass::dependencies()` returns `vec!["ModuleIndex"]`
+(`crates/omniscope-pass/src/resource/language_adapter_fact_pass.rs:69`).
+However, `"ModuleIndex"` is **not a registered pass** — it is a blackboard
+entry key stored by `PassManager::run_all_with_ir_and_config`
+(`manager.rs:175-183`).
+
+The dependency string acts as a **marker** that tells the topological sorter:
+"I need the module index to be built before I run." But since `ModuleIndex` is
+not a pass, the dependency is never resolved by `compute_order`. It works in
+practice because `ModuleIndex` is built eagerly in
+`run_all_with_ir_and_config` before any pass runs, so it is always available
+by the time `LanguageAdapterFactPass` executes. The dependency declaration is
+documentation for human readers, not a real constraint for the scheduler.
+
+> **Honest admission:** This is technically a lie to the type system. A
+> cleaner design would either make `ModuleIndex` a real pass (with the
+> baggage that entails) or use a separate pre-run hook system. The current
+> approach works but is misleading.
+
+### Single-module analysis only
+
+OmniScope analyzes one LLVM IR module at a time. Cross-module relationships
+(e.g., a C library calling into a Rust library across an FFI boundary where
+each library is compiled to a separate `.bc` file) are **not tracked**. The
+`--cross` config flag and `BoundaryContext` infrastructure exist to let users
+describe cross-module boundaries manually, but automatic cross-module
+analysis is not implemented.
+
+> **Practical consequence:** If `libfoo.bc` (C) calls `libbar.bc` (Rust) via
+> an FFI boundary, analyzing `libfoo.bc` alone will not see the Rust-side
+> allocation/deallocation patterns in `libbar.bc`. The user must provide
+> `--cross` annotations to bridge the gap. This is a known limitation and is
+> the single largest source of false positives in real-world usage.

@@ -44,6 +44,16 @@ stored by `PassManager::run_all_with_ir_and_config`
 unknown dependencies as already-satisfied, so this name acts as a
 documentation marker rather than a real ordering constraint.
 
+> **Design Philosophy: Why These 21 Passes?**
+>
+> The 21 passes form a dependency chain: **Foundation (facts) → Analysis (inference) → Verification (evidence) → Gate (report)**. Foundation passes (`CallGraph`, `RawFactCollector`, `SummaryBuilder`) run first because they scan the IR once and produce a distillation that all downstream analysis passes consume. Analysis passes build on these facts, verification passes consume candidate issues, and the SRT gate controls reporting — see `pipeline.rs:85-127` for the full registration sequence.
+>
+> **Why Foundation first?** `RawFactCollector` walks the entire `IRModule.calls` list exactly once and emits raw allocation/release/FFI/syscall facts. `CallGraph` walks the same calls to produce a cross-language call graph. `SummaryBuilder` ingests raw facts and builds per-symbol `SummaryStore` entries. Without this foundation, every analysis pass would need to re-parse the IR independently — leading to O(n²) scanning overhead.
+>
+> **Why `LeakDetection` after `OwnershipSolver` but before `IssueVerifier`?** Leak detection needs ownership information to know which allocations are owned by which release sites — only after `OwnershipSolver` resolves the contract graph can it determine whether an allocation is truly leaked. But its output (candidates of kind `ConditionalLeak`/`DefiniteLeak`) must feed into `IssueVerifier` for final verdict assignment (ConfirmedIssue/ProbableIssue/ExplainedSafe).
+>
+> **Why include a pass that sometimes does nothing?** `FFIBoundaryPass` short-circuits when `ModuleIndex.is_single_language` is true (`analysis/mod.rs:84-92`) — it can return empty in < 1ms when there is only one language in the module. A pass that resolves trivially in the common case is still valuable: it provides a clear, testable boundary for the multi-language case without adding overhead when the module is single-language.
+
 ## What each pass does
 
 The descriptions below summarize the `run()` implementation of each pass.
@@ -199,6 +209,12 @@ registered pass either. They map roughly to behaviors implemented across
 `buffer_overflow_detector` in `omniscope-semantics`, but no pass with
 those exact names is registered.
 
+> **Design Philosophy: What Is NOT a Pass?**
+>
+> `NoiseReduction` and `PrecisionMetrics` in `analysis/noise_reduction.rs` are utilities, not passes — they are called inline by other passes. Making them passes would mean cloning pass data (`FactStore`, `SummaryStore`) unnecessarily across the `run()` boundary. When a module is purely computational (take input → produce output) and has no `impl Pass` trait, it stays as a helper struct.
+>
+> `MemorySafety`, `PointerOwnership`, and `BufferOverflow` in the `info --passes` output (`main.rs:785-805`) don't exist as real passes — they're aspirational names kept for roadmap visibility. A user who runs `omniscope info --passes` sees them, tries `--enable MemorySafety`, and gets a no-op. The lesson: "Not every analysis needs to be a pass — sometimes a helper struct is cleaner, and not every aspirational name should be advertised."
+
 ## Dependency level diagram
 
 The following graph shows the actual edges produced by the declared
@@ -239,3 +255,42 @@ graph LR
 | `LeakDetection` | **Partially implemented** | `path_budget` / `max_path_length` fields unused |
 | `RaiiDrop` / `InteriorMutability` / `HeapProvenance` | **Complete** but SemanticTree only | They emit no issues, only provide data for SRT gate |
 | Remaining 17 passes | **Fully implemented** | Detailed fields, error handling, and tests present |
+
+> **Design Philosophy: Honest About Incompleteness**
+>
+> `DangerSurface` only counts known resource families because the analysis to generically detect "dangerous API patterns" is not solved. Rather than ship nothing, it reports what it can — a conservative count of dangerous families that the system already tracks. The pass's documentation explicitly marks it as **Diagnostic** so callers know not to treat absence of output as absence of risk.
+>
+> `LeakDetection` has `path_budget` and `max_path_length` fields in `mod.rs:71-74` that are dead — they were designed for a path explosion limit that was never wired in. This partial implementation was shipped deliberately because it catches ~60% of leaks even in its current form. The guiding principle: "Ship imperfect but honest — mark it as partial in docs so users know what to expect, and add a TODO for what remains."
+
+## Honest Limitations
+
+This section documents known gaps and inconsistencies in the pass system
+so users can calibrate their expectations.
+
+### LeakDetection is path-sensitive but budget-constrained
+
+`LeakDetectionPass` analyzes paths through the contract graph, but deep
+paths (>5 branches or >3 function calls in a chain) are skipped without
+warning. This is a deliberate performance trade-off: the full path explosion
+can cause 10× slowdown on modules with deeply nested control flow. The
+`path_budget` and `max_path_length` fields exist as placeholders for a
+configurable limit that was never implemented — setting them in config has
+no effect.
+
+### The `info --passes` output lists fake pass names
+
+`MemorySafety`, `PointerOwnership`, and `BufferOverflow` in the
+`info --passes` output (`main.rs:794-797`) are not registered passes.
+They are aspirational roadmap names. A user who tries
+`--enable BufferOverflow` or `--disable MemorySafety` will see no effect.
+This is confusing for new users who expect pass names in the list to
+correspond to real, toggle-able components.
+
+### 4 of 21 passes have significant gaps
+
+Of the 21 registered passes:
+
+- 17 are **fully implemented** with detailed fields, error handling, and tests.
+- `DangerSurfacePass` is **diagnostic only** — it emits no reportable issues, only aggregate counts. Its output cannot be surfaced as a finding.
+- `LeakDetectionPass` is **partially implemented** — it catches ~60% of leaks but skips deep paths and has dead config fields.
+- `RaiiDropPass` and `InteriorMutabilityPass` are **complete in implementation** but emit no issues of their own. They exist solely to feed data into the SRT (Semantic Reasoning Tree) gate — if the SRT gate were disabled, these passes would produce no observable output.

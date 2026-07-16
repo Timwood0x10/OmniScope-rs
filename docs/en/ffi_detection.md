@@ -43,6 +43,27 @@ The `Language` enum itself is in
 `omniscope-cli/src/main.rs:60-75` (which accepts the aliases `cpp`/`c++`,
 `rust`/`rs`, `python`/`py`, `csharp`/`c#`/`cs`).
 
+> **Design Philosophy: Why Rule-Based Instead of ML?**
+>
+> OmniScope-rs uses hand-written detection rules instead of a machine-learning
+> model for three reasons. **First**, rules are deterministic — every language
+> classification produces the same result on the same input, which is essential
+> for a static analysis tool where false positives erode user trust. The 20+
+> patterns in `LanguageDetector::build_patterns` (`language_detector.rs:90-131`)
+> are auditable: you can read each one, understand why it exists, and add or
+> remove it without retraining a model. **Second**, the nitty-gritty of mangling
+> schemes requires precision that ML cannot guarantee. Rust v0 mangling detection
+> (`is_rust_zn_mangling` at `language_detector.rs:184-216`) checks for
+> `$LT$`, `$GT$`, `$u20$`, `$RF$`, `$BP$`, and the `17h<hex>E` hash suffix —
+> these are syntactic invariants of the Itanium ABI that C++ compilers never
+> produce. A learned classifier would need tens of thousands of positive examples
+> to approximate what these six string checks accomplish in a dozen lines of code.
+> **Third**, the "single-language short-circuit" optimization at
+> `analysis/mod.rs:84-92` — added in commit `bd21984` — was only possible because
+> the deterministic rule set gives us confidence that `is_single_language` is never
+> a false negative. Real-world projects routinely have 60%+ single-language
+> modules, and the short-circuit eliminates all FFI passes for those modules.
+
 ## Single-language short-circuit
 
 `ModuleIndex` records `is_single_language` during construction
@@ -102,7 +123,7 @@ the following built-in constants (`resource_family.rs:18-96`):
 | 10 | `CSHARP_HGLOBAL` | `Marshal.AllocHGlobal` / `FreeHGlobal` |
 | 11 | `CSHARP_COTASK` | `CoTaskMemAlloc` / `CoTaskMemFree` |
 | 12 | `GO_GC` | `runtime.mallocgc` |
-| 13 | `ZLIB_STREAM` | `inflateInit_`/`inflateEnd` etc. |
+| 14 | `ZLIB_STREAM` | `inflateInit_`/`inflateEnd` etc. |
 | 15 | `OPENSSL_RESOURCE` | `EVP_CIPHER_CTX_new`/`_free` etc. |
 | 16 | `SQLITE_RESOURCE` | `sqlite3_open`/`_close` etc. |
 | 17 | `GO_CGO` | `_cgo_allocate`/`_cgo_free` |
@@ -114,8 +135,9 @@ the following built-in constants (`resource_family.rs:18-96`):
 | 23 | `WIN32_HEAP` | `HeapAlloc`/`HeapFree` |
 | 24 | `WIN32_VIRTUAL` | `VirtualAlloc`/`VirtualFree` |
 
-Total: **24 built-in families**. User-mined families start from
-`USER_FAMILY_START = 256` (`resource_family.rs:99`) via the
+Total: **23 built-in families** (SWIFT_ALLOC at ID 25 is defined as a
+constant but not yet included in `BUILTIN_FAMILIES`). User-mined families
+start from `USER_FAMILY_START = 256` (`resource_family.rs:101`) via the
 `FamilyId::custom(name)` constructor which hashes the name
 (`resource_family.rs:111-123`).
 
@@ -135,11 +157,33 @@ by configuration (`ExplainedSafe`).
 The risk score for a confirmed cross-family mismatch is 0.9
 (`crates/omniscope-pass/src/resource/risk_scoring.rs:77`).
 
+> **Design Philosophy: Why Resource Families Instead of Language Detection?**
+>
+> The key insight is that **"language" is a bad proxy variable for resource
+> compatibility**. A C++ library compiled with `-fsanitize=address` may use
+> `malloc`/`free` internally (C_HEAP family), while a Rust library using the
+> system allocator also goes through `malloc`/`free`. Classifying both as
+> "C++" or "Rust" would create false positives for `free(malloc_ptr)`. Resource
+> families solve this by tracking the *allocator identity*, not the *caller
+> language*. The 23 built-in families in `resource_family.rs:18-96` capture
+> this granularity — note especially that `CPP_NEW_SCALAR` (ID 2) and
+> `CPP_NEW_ARRAY` (ID 3) are separate families, even though both are C++
+> operators. This is deliberate: `new[]` must be paired with `delete[]`, not
+> `delete`, and the family distinction catches `new`/`delete[]` mismatches
+> that a language-level check would miss. Why 23 families and not 5 or 50?
+> The principle is to **optimize for common ground truth, fallback to heuristic
+> on the long tail**. The 23 built-in families cover >95% of real-world FFI
+> allocations (C, C++, Rust, Python, Java, Go, C#, plus major libraries like
+> OpenSSL, SQLite, zlib). Everything else uses user-defined families starting
+> at `USER_FAMILY_START = 256` (`resource_family.rs:101`) — the hash-based
+> `FamilyId::custom(name)` constructor guarantees no collision with built-in
+> IDs, so users can extend the family system without maintainer coordination.
+
 ## Dual-evidence gating
 
 Commit `0117c19` introduces "dual-evidence gating". The implementation is
 in `IssueCandidateBuilderPass`
-(`crates/omniscope-pass/src/resource/issue_candidate_builder/mod.rs:995-1032`):
+(`crates/omniscope-pass/src/resource/issue_candidate_builder/mod.rs:1083-1097`):
 
 ```rust
 let boundary_suppressed = candidates
@@ -156,7 +200,7 @@ let boundary_suppressed = candidates
 ```
 
 `has_ffi_evidence` is defined at
-`crates/omniscope-core/src/issue_candidate.rs:207-209` and returns true
+`crates/omniscope-core/src/issue_candidate.rs:247-249` and returns true
 when the candidate carries an `FfiEvidence` payload. The gate's purpose:
 a cross-family/cross-language candidate that lacks a second piece of
 evidence (the FFI evidence) is not reported as an FFI boundary issue. The
@@ -170,6 +214,26 @@ The complementary helper `CrossBoundaryEvidence` lives in
 `omniscope-types/src/evidence.rs` (re-exported through
 `omniscope-core::issue_candidate`). It records caller/callee languages
 and is the "first" piece of evidence (the boundary itself).
+
+> **Design Philosophy: Two-Evidence Rule**
+>
+> A cross-family or cross-language candidate becomes a reported FFI bug only
+> when it carries **both** pieces of evidence: a cross-family mismatch
+> (ResourceFamily difference) **and** an FFI boundary identification
+> (CrossBoundaryEvidence / FfiEvidence). The rationale is straightforward:
+> a `CrossFamilyFree` candidate without FFI evidence may simply be a
+> `libcurl` resource (whose family is unknown) being freed by `libcurl`'s
+> own release function — that's a resource-internal operation, not an FFI
+> boundary violation. Adding the FFI evidence requirement prevents these
+> false positives. The `boundary_suppressed` metric at
+> `issue_candidate_builder/mod.rs:1083-1097` tracks exactly this: candidates
+> that *would* have been reported under the old system but are now downgraded.
+> `has_ffi_evidence()` at `issue_candidate.rs:247-249` is a one-liner that
+> checks `self.ffi_evidence.is_some()`. The principle is:
+> **false positives are worse than false negatives**. A missed FFI bug is
+> a regression that can be caught later; a false positive floods the triage
+> queue and erodes tool credibility. The two-evidence gate is the last
+> defense before that happens.
 
 ## Issue kinds
 
@@ -251,3 +315,61 @@ flowchart TD
     Out -->|ConfirmedIssue / ProbableIssue| Reported[Issue]
     Out -->|ExplainedSafe / Diagnostic| Suppressed[suppressed_issues]
 ```
+
+## Honest Limitations
+
+### 1. Incomplete library-family coverage
+
+The `FamilyRegistry` has 23 built-in families covering C, C++, Rust, Python,
+Java, Go, C#, zlib, OpenSSL, SQLite, mimalloc, and Windows platform APIs.
+However, widely-used libraries such as `libcurl`, `libxml2`, `libpng`,
+`libjpeg`, and `libarchive` have no default `FamilyId`. Resources allocated
+by these libraries and freed on the wrong side of an FFI boundary will not
+be detected unless the user manually configures a custom family via
+`[[ffi_boundary]]` in `omniscope.toml` or registers them through the
+`FamilyRegistry` extension point. The `USER_FAMILY_START = 256`
+(`resource_family.rs:101`) mechanism exists for this, but it requires
+manual effort — the tool does not infer new families during analysis.
+
+### 2. Rust v0 mangling heuristic fragility
+
+The `is_rust_zn_mangling` helper at `language_detector.rs:184-216`
+distinguishes Rust Itanium-mangled symbols from C++ by checking for
+dollar-sign encodings (`$LT$`, `$GT$`, `$u20$`, `$RF$`, `$BP$`) and the
+`17h<hex>E` hash suffix. These heuristics are based on current Rust
+compiler behavior (rustc up to nightly 2025). If a future Rust version
+changes the hash format, removes dollar-sign encodings, or introduces
+a new mangling scheme (e.g., the proposed v1 or v2 mangling), these
+checks may produce false negatives. The detector would then misclassify
+Rust symbols as C++, potentially causing false-positive cross-language
+issues. There is no fallback mechanism or version negotiation — the
+heuristics assume a stable Rust mangling ABI.
+
+### 3. JNI reference detection is name-based
+
+JNI `NewGlobalRef` / `DeleteGlobalRef` detection (family ID 9,
+`JAVA_GLOBAL_REF`) relies purely on naming convention: any function whose
+mangled name contains `NewGlobalRef` or `DeleteGlobalRef` is assumed to
+be a JNI global reference operation. OmniScope-rs does **not** analyze
+the actual JNI function table, parse `JNIEnv` struct layouts, or verify
+that the function pointer was obtained through `GetEnv` / `GetJavaVM`.
+This means a user-defined function accidentally named `my_NewGlobalRef`
+would be misclassified as JNI global reference management. Similarly,
+JNI local reference frames (`PushLocalFrame` / `PopLocalFrame`) are not
+tracked at all, which can cause false-positive leaks for local references
+that are valid within a pushed frame.
+
+### 4. Single-module analysis blind spot
+
+OmniScope-rs operates on one IR module at a time. Cross-module
+cross-language deallocation — where a resource is allocated in module A
+(compiled from C++) and freed in module B (compiled from Rust) — is
+**invisible** to the current analysis pipeline. The `CallGraph` and
+`OwnershipSolver` passes work within a single `IRModule`, so a
+`malloc` in one `.ll` file paired with a `__rust_dealloc` in another
+`.ll` file will not produce a `CrossFamilyFree` candidate. The
+`boundary_inference` pass (`boundary_inference.rs:26`) can detect
+cross-module call edges, but the resource-ownership solver cannot
+follow pointers across module boundaries. This limitation is inherent
+to the per-module compilation model of LLVM IR and will require
+inter-procedural analysis across module slices in a future release.

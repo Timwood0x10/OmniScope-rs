@@ -103,6 +103,15 @@ disable = ["DangerSurface"]
 | `enable` | string[] | all | Passes to enable |
 | `disable` | string[] | — | Passes to disable |
 
+> **Design Philosophy: Why TOML (Not YAML/JSON)?**
+>
+> TOML was chosen over YAML and JSON for three practical reasons:
+> 1. **No significant indentation errors** — YAML is notoriously brittle; a single misaligned space silently breaks parsing. TOML's bracket-based structure avoids this class of bug entirely.
+> 2. **Comments are supported** — JSON does not allow comments, making it unsuitable for a human-edited config file that needs inline documentation. TOML supports `#` comments.
+> 3. **Native Rust tooling** — The `toml` and `serde` crates provide first-class deserialization into Rust structs with minimal boilerplate. No external schema validator or codegen step is required.
+>
+> The `[[ffi_boundary]]` array-of-tables syntax maps directly to `Vec<FFIBoundaryConfig>` in Rust (see `config.rs`), making deserialization a one-line `toml::from_str` call. The `pattern` field (`exact`, `prefix`, `suffix`, `contains`) was added because real-world FFI boundaries are rarely exact matches — a C library may expose `my_lib_open`, `my_lib_read`, `my_lib_close` and grouping them under `pattern = "prefix"` with `functions = ["my_lib"]` is far more ergonomic than listing every symbol.
+
 ## Generating default config
 
 ```bash
@@ -135,6 +144,14 @@ omniscope validate --config my.toml
 with `OmniScopeConfig::load_from_file` and prints a summary of declared
 FFI boundaries, resource families, and analysis flags.
 
+> **Design Philosophy: Configuration as Code, Not as Annotation**
+>
+> OmniScope uses an external config file rather than in-source annotations for two reasons:
+> 1. **Users should not modify third-party library source** — adding annotation macros to `libcurl` or `libuv` is impractical and creates a fork burden.
+> 2. **OmniScope analyzes LLVM IR, not source** — annotations written in C/C++ source (e.g., `__attribute__`) are stripped by the compiler before IR emission. A standalone TOML file survives compilation unchanged.
+>
+> The `init` subcommand generates example boundaries for C→C++ and Rust→C because these are the two most common cross-language pairs in practice (see `main.rs:1198-1237`). The `infer_boundaries` subcommand is intentionally conservative — it produces fewer edges than explicit config to avoid false positives in automated environments (see `boundary_inference.rs:26`).
+
 ## Source files
 
 | Type | File |
@@ -146,3 +163,13 @@ FFI boundaries, resource families, and analysis flags.
 | Config loading (CLI) | `crates/omniscope-cli/src/main.rs:435-475` |
 | `init` subcommand | `crates/omniscope-cli/src/main.rs:811-878` |
 | `validate` subcommand | `crates/omniscope-cli/src/main.rs:881-969` |
+
+## Honest Limitations
+
+1. **Static boundary description only** — The configuration file describes FFI boundaries statically. Runtime-dynamic FFI (e.g., `dlopen` + `dlsym`) cannot be expressed in the TOML schema because the target symbols are not known until execution.
+
+2. **Heuristic inference** — `infer_boundaries` uses only LLVM module metadata and function names to guess cross-language calls. This is a heuristic and can misclassify functions, especially when symbol naming conventions overlap between languages (e.g., C++ functions with `extern "C"` linkage).
+
+3. **Custom resource family ID visibility** — Custom resource families start at ID 256 (see `resource_family.rs:99`), but there is no CLI command to view allocated IDs. Debugging which ID maps to which family requires reading the source code.
+
+4. **CLI granularity** — The `--cross FROM:TO` flag applies to all functions in the module and offers no per-function granularity. To specify individual functions on a boundary, the full TOML config with `[[ffi_boundary]]` entries is required.

@@ -63,6 +63,18 @@ make dev          # fmt + check + test
 search order tries Homebrew `llvm@22` down to `llvm@17` and finally
 `llvm-config --prefix` (`Makefile:27-32`).
 
+> **Design Philosophy: Why Not a Published Crate?**
+>
+> OmniScope is not published on crates.io — and this is intentional. It is a
+> specialized tool for cross-language static analysis, not a general-purpose
+> library. The workspace with 8 crates (`omniscope-cli`, `omniscope-core`,
+> `omniscope-dataflow`, `omniscope-ir`, `omniscope-pass`,
+> `omniscope-pipeline`, `omniscope-semantics`, `omniscope-types`) exists for
+> **compile-time parallelization**, not for external consumers. Each crate
+> has a single internal consumer; publishing them would add maintenance
+> burden without benefit. If you need to integrate OmniScope into a larger
+> system, the CLI binary and its JSON/SARIF output are the stable interface.
+
 ## CLI commands
 
 `omniscope` exposes five subcommands declared at
@@ -198,6 +210,47 @@ omniscope validate [--config omniscope.toml]
 Loads the file with `OmniScopeConfig::load_from_file` and prints a summary
 of declared FFI boundaries, resource families, and analysis flags.
 
+> **Strategy Selection Rationale**
+>
+> The `--strategy` flag controls *how* the IR file is parsed. Each strategy
+> exists because different inputs and environments benefit from different
+> backends. Here is the reasoning:
+>
+> - **`auto-fast` (default, `main.rs:162-164`)**: For `.ll` files — which are
+>   the common case — the pure-Rust text parser is always faster than
+>   invoking an external C++ binary. `AutoFast` tries the text parser first
+>   for `.ll` files, especially large ones (>10 MB), and falls back to
+>   `auto` for `.bc` files. See `loader_v2.rs:261-269` for the large-file
+>   fast path and `loader_v2.rs:278-286` for the standard `.ll` fast path.
+>
+> - **`direct-cpp-ffi`**: Best for large `.bc` files where you only care
+>   about FFI-related code. The FFI-slice extractor runs
+>   `ir_extractor --slice=ffi` which filters out non-FFI functions at the
+>   extraction stage, producing a module that is often **10x smaller** than
+>   the full IR. This dramatically reduces downstream analysis time.
+>   See `loader_v2.rs:516-601` for the FFI slice implementation and caching.
+>
+> - **`text-parser`**: Use this when LLVM is not installed (it requires no
+>   external toolchain) or when you want fully deterministic, reproducible
+>   output. The text parser reads `.ll` files with a line-by-line parser
+>   written entirely in Rust (`loader_v2.rs:627-629`). It is always
+>   available and has zero external dependencies.
+>
+> - **`cpp-pass`**: Use this when you need the C++ `SafetyExportPass` plugin
+>   specifically — for example, when testing the LLVM pass infrastructure or
+>   debugging pass-level issues. It requires both `opt` and
+>   `libSafetyExportPass.{so,dylib}` (built via `make pass-build`).
+>   See `loader_v2.rs:366-441` for the full pass pipeline.
+>
+> - **`direct-cpp`** and **`llvm-sys`**: Intermediate options. `direct-cpp`
+>   runs `ir_extractor` without the FFI slice filter (full IR extraction).
+>   `llvm-sys` uses the LLVM C API directly and requires the `llvm-backend`
+>   feature flag at build time.
+>
+> **Rule of thumb**: use `auto-fast` (the default). If analysis is too slow
+> on a large `.bc` file, try `direct-cpp-ffi`. If you have no LLVM toolchain,
+> the text parser handles `.ll` files on its own.
+
 ## Configuration file resolution
 
 `load_config` at `main.rs:435-475`:
@@ -260,3 +313,48 @@ The IR loader consults a few env vars (`crates/omniscope-ir/src/loader_v2.rs`):
   needed for the `llvm-backend` feature.
 - `RUST_LOG` — overrides the `--debug`/`--verbose` log level mapping
   (`main.rs:232-238`).
+
+## Honest Limitations
+
+> **Design Philosophy:** This section documents known rough edges and
+> design trade-offs. We believe honest documentation is better than
+> silent surprises.
+
+### LLVM version search is Homebrew-centric
+
+The `Makefile` (`Makefile:27-32`) searches for LLVM installations by
+iterating Homebrew paths in descending version order: `llvm@22` down to
+`llvm@17`. If LLVM is installed via `apt`, `pacman`, a manual source
+build, or any package manager other than Homebrew on macOS, `make
+pass-build` will fail unless you set `LLVM_PREFIX` manually.
+
+### SARIF output targets GitHub Code Scanning
+
+The SARIF exporter emits SARIF v2.1.0 that is validated against
+**GitHub Code Scanning ingestion**, not against generic SARIF viewers.
+If you open `results.sarif` in a standalone tool (e.g. the SARIF
+SARIF Viewer VS Code extension), some rules or locations may not
+render correctly because we optimize for GitHub's schema interpretation.
+
+### The `--strategy` option is powerful — but confusing
+
+> **Design Philosophy:** "Which strategy should I use?" is the most
+> common question from new users. The eight strategy values
+> (`auto-fast`, `auto`, `direct-cpp-ffi`, `direct-cpp`, `llvm-sys`,
+> `cpp-pass`, `text-parser`, `msgpack`) exist because different
+> environments and input types have legitimate performance trade-offs.
+> However, this flexibility comes at the cost of a steep learning curve.
+>
+> Our recommendation: start with the default (`auto-fast`). Only
+> experiment with other strategies when you hit a specific bottleneck
+> (e.g. slow loading of large `.bc` files → try `direct-cpp-ffi`).
+
+### `analyze` and `audit` overlap in functionality
+
+The `audit` subcommand was added because early users wanted a simpler
+interface that only prints a summary (issue count, timings). Over time,
+those same users gravitated to `analyze --format json` because they
+needed machine-readable output. Today, `audit` exists mainly for
+backward compatibility and quick interactive checks. For CI pipelines
+and automated workflows, prefer `analyze --format json --output
+results.json`.
