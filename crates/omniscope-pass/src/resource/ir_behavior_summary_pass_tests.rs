@@ -583,5 +583,4 @@ entry:
             "Expected UseAfterFree candidates from builder"
         );
     }
-
-    }
+}

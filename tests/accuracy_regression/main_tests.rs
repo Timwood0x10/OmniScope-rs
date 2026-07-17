@@ -24,12 +24,7 @@ fn test_accuracy_regression() {
     let ll_files: Vec<PathBuf> = std::fs::read_dir(&ffi_demo_dir)
         .unwrap_or_else(|e| panic!("Cannot read ffi-demo dir: {e}"))
         .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            let path = entry.path();
-            let ext = path.extension().is_some_and(|ext| ext == "ll");
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            ext && !name.starts_with("zig_")
-        })
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ll"))
         .map(|entry| entry.path())
         .collect();
 
@@ -563,12 +558,7 @@ fn test_ffi_demo_dump_all_issues() {
     let ll_files: Vec<PathBuf> = std::fs::read_dir(&ffi_demo_dir)
         .unwrap_or_else(|e| panic!("Cannot read ffi-demo dir: {e}"))
         .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            let path = entry.path();
-            let ext = path.extension().is_some_and(|ext| ext == "ll");
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            ext && !name.starts_with("zig_")
-        })
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ll"))
         .map(|entry| entry.path())
         .collect();
 

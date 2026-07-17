@@ -99,26 +99,45 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
         _ => false,
     };
     if is_deallocator && same_caller && !has_use_after {
-        // When the candidate lacks strong same-instance evidence (resource_id
-        // or MultipleRelease), the double-release almost always comes from
-        // if/else branches where each path frees once — a control-flow merge
-        // artefact. Suppress these as ExplainedSafe.
+        // When both releases come from the same caller function and use a
+        // pure runtime deallocator (free, munmap, __rust_dealloc, etc.),
+        // the double-release candidate is usually a control-flow merge
+        // artefact — either mutually exclusive branches (if/else free) or
+        // sequential release of DIFFERENT pointers (free(ptr_a); free(ptr_b)).
         //
-        // When same-instance evidence IS present, the candidate may be a
-        // genuine sequential double-free (e.g., free(ptr); free(ptr) in one
-        // BB). Let downstream gates (alias, UAF) classify it correctly.
-        let has_strong_instance = bundle.has_same_resource_evidence
-            || bundle
-                .evidence_kinds
-                .contains(&EvidenceKind::MultipleRelease);
-        if !has_strong_instance {
+        // The contract graph's FIFO pairing is unreliable for same-function
+        // releases because it may pair different pointers to the same
+        // resource instance when they share the same (function, family).
+        //
+        // Exception: if BOTH conditions are met, the candidate likely
+        // represents a genuine double-free (free(ptr); free(ptr)):
+        // 1. has_resource_id: contract graph paired these to the same instance
+        // 2. has_alias_rejection == false: may_alias says pointers may be same
+        //
+        // Note: has_alias_rejection == true (NotAlias) combined with
+        // has_resource_id == true means may_alias couldn't determine aliasing
+        // (likely due to arg=None in build_free_site_for_edge). In this case
+        // we DON'T suppress — the resource_id is stronger evidence.
+        let has_resource_id = bundle.resource_id.is_some();
+        if has_resource_id {
+            // Contract graph paired to same instance. Even if may_alias
+            // returns NotAlias (due to arg=None), resource_id is stronger
+            // evidence that this is a genuine double-free.
+            // Let downstream gates (alias, UAF) classify.
+        } else if !bundle.has_alias_rejection {
+            // No resource_id but may_alias says pointers may be same.
+            // This could be a genuine double-free where contract graph
+            // didn't pair to same instance (e.g., different families).
+            // Let downstream gates classify.
+        } else {
+            // No resource_id AND may_alias says NotAlias → different pointers.
             tracing::debug!(
                 candidate_id = bundle.candidate_id,
                 alloc_fn = %bundle.alloc_function,
                 caller = ?bundle.alloc_caller,
                 "DoubleFree mutual-exclusivity gate: pure deallocator with \
-                 same-caller releases and no strong instance evidence — \
-                 likely if/else path merge artefact, downgrading to ExplainedSafe"
+                 same-caller releases, no resource_id and may_alias=NotAlias \
+                 — suppressing as ExplainedSafe (different pointers)"
             );
             return VerifierVerdict::ExplainedSafe;
         }

@@ -428,7 +428,7 @@ fn test_collect_exit_states_from_pointer_states() {
 
     let alloc = RawResourceFact {
         function: 1,
-        function_name: "malloc".to_string(),
+        function_name: "my_alloc".to_string(),
         caller_name: "caller".to_string(),
         family: Some(FamilyId::C_HEAP),
         boundary_evidence: None,
@@ -1050,7 +1050,7 @@ fn test_collect_exit_states_owned_unaffected_by_dedup() {
 
     let alloc = RawResourceFact {
         function: 1,
-        function_name: "malloc".to_string(),
+        function_name: "my_alloc".to_string(),
         caller_name: "caller".to_string(),
         family: Some(FamilyId::C_HEAP),
         boundary_evidence: None,
@@ -1119,7 +1119,7 @@ fn test_collect_exit_states_mixed_released_and_owned() {
 
     let alloc = RawResourceFact {
         function: 1,
-        function_name: "malloc".to_string(),
+        function_name: "my_alloc".to_string(),
         caller_name: "caller".to_string(),
         family: Some(FamilyId::C_HEAP),
         boundary_evidence: None,
@@ -1215,7 +1215,7 @@ fn test_factory_return_no_leak() {
     // Factory function allocates — ownership transfers to caller.
     let alloc = RawResourceFact {
         function: 1,
-        function_name: "malloc".to_string(),
+        function_name: "my_alloc".to_string(),
         caller_name: "create_foo".to_string(),
         family: Some(FamilyId::C_HEAP),
         boundary_evidence: None,
@@ -1254,7 +1254,7 @@ fn test_partial_release_conditional() {
     // 2 allocs + 1 release in same function → partial release.
     let alloc1 = RawResourceFact {
         function: 1,
-        function_name: "malloc".to_string(),
+        function_name: "my_alloc".to_string(),
         caller_name: "partial_func".to_string(),
         family: Some(FamilyId::C_HEAP),
         boundary_evidence: None,
@@ -1264,7 +1264,7 @@ fn test_partial_release_conditional() {
     };
     let alloc2 = RawResourceFact {
         function: 1,
-        function_name: "malloc".to_string(),
+        function_name: "my_alloc".to_string(),
         caller_name: "partial_func".to_string(),
         family: Some(FamilyId::C_HEAP),
         boundary_evidence: None,

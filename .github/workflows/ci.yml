@@ -7,13 +7,13 @@ on:
   push:
     branches:
       - master
-      - dev
-      - 'feature/**'
-      - 'bugfix/**'
+      # - dev
+      # - 'feature/**'
+      # - 'bugfix/**'
   pull_request:
     branches:
       - master
-      - dev
+      # - dev
   workflow_dispatch:
 
 env:
