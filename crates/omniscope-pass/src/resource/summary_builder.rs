@@ -18,6 +18,7 @@ use omniscope_semantics::{
 use omniscope_types::{Effect, FamilyId};
 
 use crate::pass::{Pass, PassContext, PassKind, PassResult};
+use crate::resource::issue_verifier::helpers::is_library_function;
 
 /// Summary builder pass.
 ///
@@ -120,29 +121,13 @@ impl Pass for SummaryBuilderPass {
                 .collect();
 
             // ── Standard library / third-party function detection ──
-            // When debug info is unavailable (no !DILocation in IR), we fall
-            // back to mangled-name pattern matching.  The Itanium ABI uses
-            // a special token `St` for the `std::` namespace — this is a
-            // language-ABI guarantee, not a compiler-specific convention.
+            // Uses a language-agnostic approach: demangle the function name,
+            // extract the first namespace component, and check against known
+            // standard-library namespaces.  External declarations (functions
+            // only declared, not defined) are also treated as library code.
             //
-            // Patterns:
-            //   C++:  _ZNSt...  = std::*       (libc++ / libstdc++ / MSVC STL)
-            //         _ZNKSt... = std::* const  (const methods)
-            //   Rust: _ZN4core  = core::*
-            //         _ZN3std   = std::*
-            //         _ZN5alloc = alloc::*
-            //   Go:   runtime.* (not mangled, plain prefix)
-            let is_stdlib = |name: &str| -> bool {
-                name.starts_with("_ZNSt")
-                    || name.starts_with("_ZNKSt")
-                    || name.starts_with("_ZN4core")
-                    || name.starts_with("_ZN3std")
-                    || name.starts_with("_ZN5alloc")
-                    || name.starts_with("_ZN7runtime")
-                    || name.starts_with("runtime.")
-                    || name.starts_with("sync.")
-            };
-
+            // This covers C++, Rust, Go, C#, Java, Python, Swift, and any
+            // other language using the Itanium ABI mangling scheme.
             for (idx, (name, body)) in module.function_bodies.iter().enumerate() {
                 // Skip if already in registry (built-in symbol).
                 if registry.lookup(name).is_some() {
@@ -157,7 +142,8 @@ impl Pass for SummaryBuilderPass {
                 // Functions from stdlib / third-party libraries should be
                 // treated as opaque external code.  Their internal allocations
                 // are managed by the library itself, not user code.
-                if is_stdlib(name) {
+                // Also check declarations: external functions are library code.
+                if is_library_function(name) || module.declarations.contains_key(name) {
                     let mut summary =
                         omniscope_semantics::ResourceSummary::new(idx as u64, idx as u64, name);
                     summary.origin = omniscope_types::FunctionOrigin::Stdlib;
@@ -165,7 +151,7 @@ impl Pass for SummaryBuilderPass {
                     store.insert(summary);
                     behavior_summary_count += 1;
                     tracing::debug!(
-                        "Stdlib detection: marked '{}' as library (mangled-name pattern)",
+                        "Stdlib detection: marked '{}' as library (namespace/demangle pattern)",
                         name
                     );
                     continue;

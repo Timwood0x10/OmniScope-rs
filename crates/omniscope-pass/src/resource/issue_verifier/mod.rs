@@ -21,7 +21,7 @@
 
 mod cross_family;
 mod double_free;
-mod helpers;
+pub(crate) mod helpers;
 mod leak;
 
 #[cfg(test)]

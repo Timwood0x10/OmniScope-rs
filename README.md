@@ -1,5 +1,13 @@
 # OmniScope-rs
 
+> ⚠️ **Archived** — This project is no longer under development.
+>
+> **Why:** We realized the IR-based approach was fundamentally wrong. The LLVM IR is a lossy intermediate representation — by the time we're analyzing it, we've already thrown away the information needed to distinguish user code from library code. No amount of namespace guessing or pattern matching can recover what was lost at compile time.
+>
+> **New direction:** Source-level FFI boundary detection via [codescope](https://github.com/TimWood/codescope) (C++ tree-sitter analyzer). The source code has all the answers — include sources, function classification, type layout — and we should use them directly instead of guessing from IR.
+>
+> See [`LEGACY.md`](./LEGACY.md) for the full archive rationale and [`aim/plan/omniscope_1.0_ffi_engine.md`](./aim/plan/omniscope_1.0_ffi_engine.md) for the new plan.
+
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![LLVM](https://img.shields.io/badge/LLVM-17%2B-green.svg)](https://llvm.org)
