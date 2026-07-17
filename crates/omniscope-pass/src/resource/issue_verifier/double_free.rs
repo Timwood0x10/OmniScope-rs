@@ -108,7 +108,30 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
         // The contract graph's FIFO pairing is unreliable for same-function
         // releases because it may pair different pointers to the same
         // resource instance when they share the same (function, family).
+
+        // ── SSA register comparison gate ──
+        // When both releases use different SSA registers (e.g., free(%a); free(%b)),
+        // they free different pointers — this is a control-flow merge artefact,
+        // not a genuine double-free. The release_registers field is populated
+        // from the candidate's free_sites which record the arg_register from IR.
         //
+        // This is a stronger signal than the may_alias gate because it directly
+        // compares the SSA values, unaffected by the nth counting bug in
+        // build_free_site_for_edge that can cause arg=None (NotAlias false negative).
+        let has_different_registers = bundle.release_registers.len() >= 2
+            && bundle.release_registers[0] != bundle.release_registers[1];
+        if has_different_registers {
+            tracing::debug!(
+                candidate_id = bundle.candidate_id,
+                registers = ?bundle.release_registers,
+                alloc_fn = %bundle.alloc_function,
+                caller = ?bundle.alloc_caller,
+                "DoubleFree mutual-exclusivity gate: different SSA registers \
+                 — suppressing as ExplainedSafe (free(ptr_a); free(ptr_b))"
+            );
+            return VerifierVerdict::ExplainedSafe;
+        }
+
         // Exception: if BOTH conditions are met, the candidate likely
         // represents a genuine double-free (free(ptr); free(ptr)):
         // 1. has_resource_id: contract graph paired these to the same instance
@@ -118,6 +141,9 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
         // has_resource_id == true means may_alias couldn't determine aliasing
         // (likely due to arg=None in build_free_site_for_edge). In this case
         // we DON'T suppress — the resource_id is stronger evidence.
+        // (The SSA register check above already handles the case where registers
+        //  are available and different; this fallback uses may_alias when registers
+        //  are not available, e.g. missing IR bodies.)
         let has_resource_id = bundle.resource_id.is_some();
         if has_resource_id {
             // Contract graph paired to same instance. Even if may_alias

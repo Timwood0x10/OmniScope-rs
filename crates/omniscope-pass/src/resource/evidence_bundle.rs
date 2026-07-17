@@ -35,6 +35,12 @@ pub(crate) struct EvidenceBundle {
     pub has_same_resource_evidence: bool,
     pub has_reachable_release: bool,
     pub has_alias_rejection: bool,
+    /// SSA registers of the pointer arguments at each release/deallocation site.
+    /// Populated from `candidate.free_sites[].arg_register`. Used by the
+    /// DoubleFree verifier to detect mutually-exclusive releases of different
+    /// pointers (e.g., `free(%a); free(%b)`) where the contract graph's FIFO
+    /// pairing incorrectly paired them to the same resource instance.
+    pub release_registers: Vec<String>,
 }
 
 impl EvidenceBundle {
@@ -85,6 +91,11 @@ impl EvidenceBundle {
             has_reachable_release: has_reachable_release(candidate, &evidence_kinds),
             has_alias_rejection: has_alias_rejection(candidate),
             evidence_kinds,
+            release_registers: candidate
+                .free_sites
+                .iter()
+                .filter_map(|site| site.arg_register.clone())
+                .collect(),
         }
     }
 

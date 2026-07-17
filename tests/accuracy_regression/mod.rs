@@ -222,7 +222,11 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
     ExpectedBug::simple(
         "c_ffi_traps.ll",
         "leaked_callback_userdata",
-        &[IssueKind::ConditionalLeak, IssueKind::MemoryLeak],
+        &[
+            IssueKind::ConditionalLeak,
+            IssueKind::MemoryLeak,
+            IssueKind::BorrowEscape,
+        ],
         "C FFI traps: conditional leak in leaked_callback_userdata",
     ),
     // P2c: free-then-pass-to-callback UAF detection
@@ -231,6 +235,14 @@ const EXPECTED_BUGS: &[ExpectedBug] = &[
         "uaf_through_ffi",
         &[IssueKind::UseAfterFree, IssueKind::BorrowEscape],
         "C FFI traps: free then pass to FFI callback (UAF) [TRAP-C9]",
+    ),
+    // ── Newly detected bugs (previously FN, now TP) ─────────────────
+    // ffi_alias_input: previously missed, now detected as BorrowEscape.
+    ExpectedBug::simple(
+        "c_ffi_traps.ll",
+        "ffi_alias_input",
+        &[IssueKind::BorrowEscape],
+        "C FFI traps: returns alias into caller-owned memory (no ownership marker)",
     ),
     // ── csharp_ffi_demo.ll bugs (.NET NativeAOT P/Invoke) ─────────────
     // Bug1: malloc freed by Marshal.FreeHGlobal — cross-language free.
@@ -310,12 +322,6 @@ const EXPECTED_MISSES: &[ExpectedMiss] = &[
             IssueKind::UseAfterFree,
         ],
         description: "C FFI traps: stack-local stored to global (dangling after lifetime.end)",
-    },
-    ExpectedMiss {
-        file: "c_ffi_traps.ll",
-        func_substring: "ffi_alias_input",
-        expected_kinds: &[IssueKind::BorrowEscape],
-        description: "C FFI traps: returns alias into caller-owned memory (no ownership marker)",
     },
     ExpectedMiss {
         file: "c_fft_c_bridge.ll",

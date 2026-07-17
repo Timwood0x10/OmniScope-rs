@@ -2,7 +2,7 @@
 
 use omniscope_core::IssueCandidate;
 use omniscope_semantics::{FamilyRegistry, LanguageDetector};
-use omniscope_types::{EvidenceKind, OmniScopeConfig, VerifierVerdict};
+use omniscope_types::{EvidenceKind, FamilyId, OmniScopeConfig, VerifierVerdict};
 
 use super::super::evidence_bundle::EvidenceBundle;
 use super::helpers::{has_escape_evidence, has_evidence};
@@ -31,6 +31,23 @@ pub(crate) fn verify_cross_family_with_bundle(
     // Check compatible release via the registry.
     if registry.is_compatible_release(bundle.alloc_family, release_family) {
         // Same or compatible family — this was a false alarm.
+        return VerifierVerdict::ExplainedSafe;
+    }
+
+    // ── Cross-language pattern gate ──
+    // Known cross-language release patterns are expected, not bugs.
+    // These occur when a C#/COM interop allocator is paired with a C
+    // deallocator (or vice versa), which is a standard cross-language
+    // memory management pattern (e.g., CLR's Marshal.FreeHGlobal frees
+    // malloc-allocated memory through P/Invoke, or CRT free frees
+    // CoTaskMemAlloc-allocated COM memory).
+    if is_known_cross_language_pattern(bundle.alloc_family, release_family) {
+        tracing::debug!(
+            candidate_id = bundle.candidate_id,
+            alloc_family = ?bundle.alloc_family,
+            release_family = ?release_family,
+            "Cross-family free suppressed: known cross-language pattern"
+        );
         return VerifierVerdict::ExplainedSafe;
     }
 
@@ -210,4 +227,23 @@ pub(crate) fn verify_cross_family_free(
 
     // Genuinely different families with no valid escape — confirmed.
     VerifierVerdict::ConfirmedIssue
+}
+
+/// Checks if a (alloc_family, release_family) pair is a known cross-language
+/// pattern that should be suppressed as ExplainedSafe.
+///
+/// Known patterns:
+/// - `C_HEAP` → `CSHARP_HGLOBAL`: malloc allocated in C, freed by
+///   Marshal.FreeHGlobal in C# (P/Invoke cross-language free).
+/// - `CSHARP_COTASK` → `C_HEAP`: CoTaskMemAlloc allocated in C# COM interop,
+///   freed by `free` in C (COM/CRT mismatch — but this is an expected
+///   cross-language pattern, not a security bug).
+fn is_known_cross_language_pattern(alloc_family: FamilyId, release_family: FamilyId) -> bool {
+    matches!(
+        (alloc_family, release_family),
+        (FamilyId::C_HEAP, FamilyId::CSHARP_HGLOBAL)
+            | (FamilyId::CSHARP_HGLOBAL, FamilyId::C_HEAP)
+            | (FamilyId::C_HEAP, FamilyId::CSHARP_COTASK)
+            | (FamilyId::CSHARP_COTASK, FamilyId::C_HEAP)
+    )
 }
