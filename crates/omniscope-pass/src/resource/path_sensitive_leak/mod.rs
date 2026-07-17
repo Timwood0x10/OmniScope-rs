@@ -33,7 +33,7 @@ use analysis::{collect_exit_states, determine_leak_type, format_exit_state_summa
 use helpers::{
     build_call_adjacency, caller_returns_owned_resource, check_release_in_summaries,
     classify_function_termination, count_alloc_release_in_facts, function_has_noreturn_exit,
-    is_runtime_managed, reachable_functions, FunctionTermination,
+    is_runtime_managed, reachable_functions, allocation_returned_to_caller, FunctionTermination,
 };
 
 // Re-export public types from helpers.
@@ -247,7 +247,25 @@ impl Pass for LeakDetectionPass {
             {
                 LeakType::Conditional
             } else if !has_release_in_summaries && alloc_count > 0 && release_count == 0 {
-                LeakType::Definite
+                // Check if the caller returns the owned resource to its caller.
+                // Factory functions like dupString() allocate with malloc() and
+                // return the pointer — the caller takes ownership. Without this
+                // check, such allocations are flagged as DefiniteLeak even though
+                // the ownership is intentionally transferred.
+                if caller_returns_owned_resource(&summary_store, alloc) {
+                    LeakType::Safe
+                } else if let Some(ref module) = ir_module {
+                    // Fallback: directly check the function body for the
+                    // "malloc + return" pattern. This handles cases where
+                    // the summary store hasn't been populated yet.
+                    if allocation_returned_to_caller(module, alloc) {
+                        LeakType::Safe
+                    } else {
+                        LeakType::Definite
+                    }
+                } else {
+                    LeakType::Definite
+                }
             } else if alloc_count > 0
                 && release_count > 0
                 && (release_count as usize) < alloc_count as usize

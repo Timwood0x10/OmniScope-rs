@@ -235,15 +235,15 @@ pub(crate) fn verify_cross_family_free(
 /// Known patterns:
 /// - `C_HEAP` → `CSHARP_HGLOBAL`: malloc allocated in C, freed by
 ///   Marshal.FreeHGlobal in C# (P/Invoke cross-language free).
-/// - `CSHARP_COTASK` → `C_HEAP`: CoTaskMemAlloc allocated in C# COM interop,
-///   freed by `free` in C (COM/CRT mismatch — but this is an expected
-///   cross-language pattern, not a security bug).
+/// - `CSHARP_HGLOBAL` → `C_HEAP`: Marshal.AllocHGlobal allocated in C#,
+///   freed by `free` in C (P/Invoke cross-language free).
+///
+/// NOT included: `CoTaskMemAlloc` ↔ `free` — this is a real bug (COM
+/// memory freed by CRT free), not a cross-language pattern.
 fn is_known_cross_language_pattern(alloc_family: FamilyId, release_family: FamilyId) -> bool {
     matches!(
         (alloc_family, release_family),
         (FamilyId::C_HEAP, FamilyId::CSHARP_HGLOBAL)
             | (FamilyId::CSHARP_HGLOBAL, FamilyId::C_HEAP)
-            | (FamilyId::C_HEAP, FamilyId::CSHARP_COTASK)
-            | (FamilyId::CSHARP_COTASK, FamilyId::C_HEAP)
     )
 }

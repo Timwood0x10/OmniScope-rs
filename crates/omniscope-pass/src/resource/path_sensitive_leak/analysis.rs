@@ -137,6 +137,16 @@ pub(super) fn collect_exit_states(
                 else if is_runtime_managed(srt_resolutions, alloc) {
                     // Distinguish: StoredToOwner vs RuntimeManaged vs StoredToRuntime vs StaticLifetime
                     classify_runtime_state(srt_resolutions, alloc)
+                }
+                // Enrich: check if the owned resource is returned to the caller.
+                // Factory functions like dupString() allocate with malloc() and
+                // return the pointer — the caller takes ownership. Without this
+                // check, such allocations are flagged as leaks.
+                else if caller_returns_owned_resource(summary_store, alloc)
+                    || slot.contains("result")
+                    || slot.contains("ret")
+                {
+                    ResourcePathState::EscapedToCaller
                 } else {
                     ResourcePathState::Owned
                 }

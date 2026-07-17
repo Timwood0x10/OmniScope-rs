@@ -132,6 +132,36 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
             return VerifierVerdict::ExplainedSafe;
         }
 
+        // ── Mutual-exclusivity (Branch between releases) gate ──
+        // When both releases use the same SSA register but are in different
+        // basic blocks (separated by a Branch instruction in the IR), they
+        // are mutually exclusive — a classic if/else pattern:
+        //
+        //   if (cond) { free(%ptr); } else { free(%ptr); }  // not a double-free
+        //
+        // The contract graph's FIFO pairing merges these into the same instance,
+        // but the instructions are in different basic blocks. The candidate
+        // builder sets `mutual_exclusive = true` when it detects a Branch
+        // instruction between the two release call sites.
+        //
+        // This check handles the case where both free calls use the same SSA
+        // register (e.g., free(%node); free(%node) in if/else branches) which
+        // the SSA register comparison above cannot distinguish.
+        //
+        // NOTE: This is safe because sequential free calls in the same basic
+        // block (e.g., free(%p); free(%p) — genuine double-free) have no
+        // Branch between them, so `mutual_exclusive` remains false.
+        if bundle.mutual_exclusive {
+            tracing::debug!(
+                candidate_id = bundle.candidate_id,
+                alloc_fn = %bundle.alloc_function,
+                caller = ?bundle.alloc_caller,
+                "DoubleFree mutual-exclusivity gate: Branch between releases \
+                 — suppressing as ExplainedSafe (mutually exclusive basic blocks)"
+            );
+            return VerifierVerdict::ExplainedSafe;
+        }
+
         // Exception: if BOTH conditions are met, the candidate likely
         // represents a genuine double-free (free(ptr); free(ptr)):
         // 1. has_resource_id: contract graph paired these to the same instance

@@ -35,12 +35,21 @@ pub(crate) struct EvidenceBundle {
     pub has_same_resource_evidence: bool,
     pub has_reachable_release: bool,
     pub has_alias_rejection: bool,
+    /// Whether the releases in this candidate are in different basic blocks
+    /// (mutually exclusive branches). Populated from `candidate.mutual_exclusive`.
+    /// Used by the DoubleFree verifier to suppress false positives from
+    /// if/else mutually exclusive free patterns.
+    pub mutual_exclusive: bool,
     /// SSA registers of the pointer arguments at each release/deallocation site.
     /// Populated from `candidate.free_sites[].arg_register`. Used by the
     /// DoubleFree verifier to detect mutually-exclusive releases of different
     /// pointers (e.g., `free(%a); free(%b)`) where the contract graph's FIFO
     /// pairing incorrectly paired them to the same resource instance.
     pub release_registers: Vec<String>,
+    /// Instruction indices of each release call within the caller's function body.
+    /// Used to determine if two release sites are in different basic blocks
+    /// (mutually exclusive branches). Populated from `candidate.free_sites[].instruction_index`.
+    pub release_instruction_indices: Vec<usize>,
 }
 
 impl EvidenceBundle {
@@ -91,10 +100,16 @@ impl EvidenceBundle {
             has_reachable_release: has_reachable_release(candidate, &evidence_kinds),
             has_alias_rejection: has_alias_rejection(candidate),
             evidence_kinds,
+            mutual_exclusive: candidate.mutual_exclusive,
             release_registers: candidate
                 .free_sites
                 .iter()
                 .filter_map(|site| site.arg_register.clone())
+                .collect(),
+            release_instruction_indices: candidate
+                .free_sites
+                .iter()
+                .filter_map(|site| site.instruction_index)
                 .collect(),
         }
     }

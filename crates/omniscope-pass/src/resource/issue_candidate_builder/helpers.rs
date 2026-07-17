@@ -240,6 +240,7 @@ pub(crate) fn build_free_site_for_edge(
     use omniscope_types::Effect;
 
     let edge = &graph.edges[edge_idx];
+    let mut instruction_index: Option<usize> = None;
     let arg = ir_module.and_then(|m| {
         // How many earlier release edges (in graph order) target the same
         // (caller, callee) pair as this edge? That is the index of the
@@ -256,7 +257,7 @@ pub(crate) fn build_free_site_for_edge(
             .count();
         let body = m.function_bodies.get(&edge.caller_name)?;
         let mut seen = 0usize;
-        for inst in &body.instructions {
+        for (i, inst) in body.instructions.iter().enumerate() {
             if !matches!(inst.kind, omniscope_ir::IRInstructionKind::Call) {
                 continue;
             }
@@ -265,6 +266,7 @@ pub(crate) fn build_free_site_for_edge(
                 continue;
             }
             if seen == nth {
+                instruction_index = Some(i);
                 // Reuse the parsing helper from contract_graph_builder via raw text.
                 return crate::resource::may_alias::first_call_arg_register(&inst.raw_text);
             }
@@ -272,7 +274,9 @@ pub(crate) fn build_free_site_for_edge(
         }
         None
     });
-    FreeSite::new(&edge.caller_name, &edge.function_name, arg)
+    let mut site = FreeSite::new(&edge.caller_name, &edge.function_name, arg);
+    site.instruction_index = instruction_index;
+    site
 }
 
 /// Checks if a function name is a pure deallocator — a function whose sole

@@ -234,6 +234,48 @@ pub(super) fn caller_returns_owned_resource(store: &SummaryStore, alloc: &RawRes
     false
 }
 
+/// Checks if the allocation's caller function returns the allocated pointer
+/// to its caller (the "malloc + return" pattern used by factory functions).
+///
+/// This is a direct IR-level check that looks at the function body for a `ret`
+/// instruction that returns a pointer value derived from a `malloc`/`calloc` call.
+/// It serves as a fallback when the summary store hasn't been populated yet.
+///
+/// Factory functions like `dupString()` allocate with `malloc()` and return the
+/// pointer — the caller takes ownership. Without this check, such allocations
+/// would be flagged as DefiniteLeak.
+pub(super) fn allocation_returned_to_caller(
+    module: &IRModule,
+    alloc: &RawResourceFact,
+) -> bool {
+    // Get the function body for the caller.
+    let body = match module.function_bodies.get(&alloc.caller_name) {
+        Some(b) => b,
+        None => return false,
+    };
+
+    // Check if the function returns a pointer (has a `ret` with a pointer operand).
+    // This is a strong signal that the function is a factory/accessor, not a sink.
+    let has_ptr_return = body.instructions.iter().any(|inst| {
+        matches!(inst.kind, IRInstructionKind::Ret)
+            && inst.operands.iter().any(|op| op.starts_with('%') || op.starts_with('@'))
+    });
+    if !has_ptr_return {
+        return false;
+    }
+
+    // Check if the function has at least one allocator call (malloc, calloc, etc.)
+    // that is a direct allocation (not a realloc). The allocator function name is
+    // in `alloc.function_name`.
+    let is_allocator = alloc.function_name == "malloc"
+        || alloc.function_name == "calloc"
+        || alloc.function_name == "realloc"
+        || alloc.function_name == "_Znam"   // C++ operator new[]
+        || alloc.function_name == "_Znwm";  // C++ operator new
+
+    is_allocator && has_ptr_return
+}
+
 /// Checks if the alloc's function or caller is marked as runtime-managed
 /// in the SRT (Semantic Resolution Tree) resolutions.
 ///
