@@ -1,8 +1,8 @@
 #[cfg(test)]
-mod tests {
+mod tests_module {
+    use crate::Pipeline;
     use omniscope_core::IssueKind;
     use omniscope_ir::IRModule;
-    use crate::Pipeline;
 
     /// Full Pipeline diagnostic: run the actual Pipeline on c_ffi_traps.ll
     /// and trace whether the UAF issue for uaf_through_ffi survives to final output.
@@ -132,4 +132,4 @@ mod tests {
             result.issues().iter().map(|i| format!("{:?}({})", i.kind, i.symbol.as_str())).collect::<Vec<_>>()
         );
     }
-}
+} // end mod tests_module

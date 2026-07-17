@@ -12,6 +12,10 @@ pub struct FreeSite {
     pub callee: String,
     /// SSA register / global of the pointer argument, if recoverable.
     pub arg_register: Option<String>,
+    /// Index of the call instruction within the caller's function body instruction list.
+    /// Used to determine if two release sites are in mutually exclusive basic blocks.
+    /// None when the IR body is unavailable.
+    pub instruction_index: Option<usize>,
 }
 
 impl FreeSite {
@@ -21,6 +25,7 @@ impl FreeSite {
             caller: caller.into(),
             callee: callee.into(),
             arg_register: arg,
+            instruction_index: None,
         }
     }
 }

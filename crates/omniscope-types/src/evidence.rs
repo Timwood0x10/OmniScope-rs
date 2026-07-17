@@ -397,6 +397,11 @@ pub struct FreeSite {
     /// Distinct from `function_name` when the free is indirect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caller: Option<String>,
+    /// Index of the call instruction within the caller's function body instruction list.
+    /// Used to determine if two release sites are in mutually exclusive basic blocks.
+    /// None when the IR body is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instruction_index: Option<usize>,
 }
 
 impl FreeSite {
@@ -416,6 +421,7 @@ impl FreeSite {
             is_confirmed: true,
             arg_register,
             caller: None,
+            instruction_index: None,
         }
     }
 

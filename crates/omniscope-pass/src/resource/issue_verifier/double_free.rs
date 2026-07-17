@@ -99,26 +99,101 @@ pub(crate) fn verify_double_release_with_bundle(bundle: &EvidenceBundle) -> Veri
         _ => false,
     };
     if is_deallocator && same_caller && !has_use_after {
-        // When the candidate lacks strong same-instance evidence (resource_id
-        // or MultipleRelease), the double-release almost always comes from
-        // if/else branches where each path frees once — a control-flow merge
-        // artefact. Suppress these as ExplainedSafe.
+        // When both releases come from the same caller function and use a
+        // pure runtime deallocator (free, munmap, __rust_dealloc, etc.),
+        // the double-release candidate is usually a control-flow merge
+        // artefact — either mutually exclusive branches (if/else free) or
+        // sequential release of DIFFERENT pointers (free(ptr_a); free(ptr_b)).
         //
-        // When same-instance evidence IS present, the candidate may be a
-        // genuine sequential double-free (e.g., free(ptr); free(ptr) in one
-        // BB). Let downstream gates (alias, UAF) classify it correctly.
-        let has_strong_instance = bundle.has_same_resource_evidence
-            || bundle
-                .evidence_kinds
-                .contains(&EvidenceKind::MultipleRelease);
-        if !has_strong_instance {
+        // The contract graph's FIFO pairing is unreliable for same-function
+        // releases because it may pair different pointers to the same
+        // resource instance when they share the same (function, family).
+
+        // ── SSA register comparison gate ──
+        // When both releases use different SSA registers (e.g., free(%a); free(%b)),
+        // they free different pointers — this is a control-flow merge artefact,
+        // not a genuine double-free. The release_registers field is populated
+        // from the candidate's free_sites which record the arg_register from IR.
+        //
+        // This is a stronger signal than the may_alias gate because it directly
+        // compares the SSA values, unaffected by the nth counting bug in
+        // build_free_site_for_edge that can cause arg=None (NotAlias false negative).
+        let has_different_registers = bundle.release_registers.len() >= 2
+            && bundle.release_registers[0] != bundle.release_registers[1];
+        if has_different_registers {
+            tracing::debug!(
+                candidate_id = bundle.candidate_id,
+                registers = ?bundle.release_registers,
+                alloc_fn = %bundle.alloc_function,
+                caller = ?bundle.alloc_caller,
+                "DoubleFree mutual-exclusivity gate: different SSA registers \
+                 — suppressing as ExplainedSafe (free(ptr_a); free(ptr_b))"
+            );
+            return VerifierVerdict::ExplainedSafe;
+        }
+
+        // ── Mutual-exclusivity (Branch between releases) gate ──
+        // When both releases use the same SSA register but are in different
+        // basic blocks (separated by a Branch instruction in the IR), they
+        // are mutually exclusive — a classic if/else pattern:
+        //
+        //   if (cond) { free(%ptr); } else { free(%ptr); }  // not a double-free
+        //
+        // The contract graph's FIFO pairing merges these into the same instance,
+        // but the instructions are in different basic blocks. The candidate
+        // builder sets `mutual_exclusive = true` when it detects a Branch
+        // instruction between the two release call sites.
+        //
+        // This check handles the case where both free calls use the same SSA
+        // register (e.g., free(%node); free(%node) in if/else branches) which
+        // the SSA register comparison above cannot distinguish.
+        //
+        // NOTE: This is safe because sequential free calls in the same basic
+        // block (e.g., free(%p); free(%p) — genuine double-free) have no
+        // Branch between them, so `mutual_exclusive` remains false.
+        if bundle.mutual_exclusive {
+            tracing::debug!(
+                candidate_id = bundle.candidate_id,
+                alloc_fn = %bundle.alloc_function,
+                caller = ?bundle.alloc_caller,
+                "DoubleFree mutual-exclusivity gate: Branch between releases \
+                 — suppressing as ExplainedSafe (mutually exclusive basic blocks)"
+            );
+            return VerifierVerdict::ExplainedSafe;
+        }
+
+        // Exception: if BOTH conditions are met, the candidate likely
+        // represents a genuine double-free (free(ptr); free(ptr)):
+        // 1. has_resource_id: contract graph paired these to the same instance
+        // 2. has_alias_rejection == false: may_alias says pointers may be same
+        //
+        // Note: has_alias_rejection == true (NotAlias) combined with
+        // has_resource_id == true means may_alias couldn't determine aliasing
+        // (likely due to arg=None in build_free_site_for_edge). In this case
+        // we DON'T suppress — the resource_id is stronger evidence.
+        // (The SSA register check above already handles the case where registers
+        //  are available and different; this fallback uses may_alias when registers
+        //  are not available, e.g. missing IR bodies.)
+        let has_resource_id = bundle.resource_id.is_some();
+        if has_resource_id {
+            // Contract graph paired to same instance. Even if may_alias
+            // returns NotAlias (due to arg=None), resource_id is stronger
+            // evidence that this is a genuine double-free.
+            // Let downstream gates (alias, UAF) classify.
+        } else if !bundle.has_alias_rejection {
+            // No resource_id but may_alias says pointers may be same.
+            // This could be a genuine double-free where contract graph
+            // didn't pair to same instance (e.g., different families).
+            // Let downstream gates classify.
+        } else {
+            // No resource_id AND may_alias says NotAlias → different pointers.
             tracing::debug!(
                 candidate_id = bundle.candidate_id,
                 alloc_fn = %bundle.alloc_function,
                 caller = ?bundle.alloc_caller,
                 "DoubleFree mutual-exclusivity gate: pure deallocator with \
-                 same-caller releases and no strong instance evidence — \
-                 likely if/else path merge artefact, downgrading to ExplainedSafe"
+                 same-caller releases, no resource_id and may_alias=NotAlias \
+                 — suppressing as ExplainedSafe (different pointers)"
             );
             return VerifierVerdict::ExplainedSafe;
         }

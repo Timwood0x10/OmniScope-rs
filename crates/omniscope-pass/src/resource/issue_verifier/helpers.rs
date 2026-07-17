@@ -7,6 +7,128 @@ use omniscope_core::IssueCandidate;
 use omniscope_semantics::resource::memory_graph::{family_to_resource_class, ResourceClass};
 use omniscope_types::{EvidenceKind, FamilyId, IssueCandidateKind, VerifierVerdict};
 
+// ---------------------------------------------------------------------------
+// Library function detection (language-agnostic)
+// ---------------------------------------------------------------------------
+
+/// Check if a namespace/crate/package name is a known standard library.
+///
+/// This is language-agnostic — covers C++, Rust, Go, C#, Java, Python, Swift.
+fn is_known_stdlib_namespace(ns: &str) -> bool {
+    matches!(
+        ns,
+        // C++ standard library & runtime
+        "std" | "__gnu_cxx" | "__cxxabiv1"
+        // Rust standard library
+        | "core" | "alloc" | "test" | "proc_macro"
+        // Go standard library (commonly encountered)
+        | "runtime" | "sync" | "time" | "net" | "os" | "fmt" | "strings"
+        | "bytes" | "encoding" | "io" | "math" | "sort" | "reflect" | "syscall"
+        | "internal" | "unsafe" | "unicode" | "regexp" | "path" | "bufio"
+        | "strconv" | "context" | "errors" | "flag" | "hash" | "html" | "image"
+        | "log" | "mime" | "rand" | "text" | "archive" | "compress" | "crypto"
+        | "database" | "debug" | "embed" | "expvar" | "go" | "index" | "plugin"
+        | "testing"
+        // C# / .NET standard library
+        | "System" | "Microsoft"
+        // Java / JVM standard library
+        | "java" | "javax" | "jdk" | "com.sun" | "sun"
+        // Python standard library
+        | "_Py" | "Py"
+        // Swift standard library
+        | "Swift" | "Foundation"
+        // Kotlin standard library
+        | "kotlin" | "kotlinx"
+    )
+}
+
+/// Extract the first namespace/crate/package component from a function name.
+///
+/// Works for:
+/// - Itanium ABI mangled names (C++, Rust): `_ZNSt`, `_ZN4core`, `_ZNKSt`, etc.
+/// - Go-style dotted names: `runtime.gc`, `sync.Map`, etc.
+/// - Plain names with compiler builtin prefixes: `__clang_*`, `__cxa_*`
+///
+/// Returns `None` for plain, non-mangled names that don't match a known
+/// builtin pattern.
+fn first_namespace(name: &str) -> Option<&str> {
+    // Itanium ABI: _ZNSt... → std (substitution token)
+    if name.starts_with("_ZNSt") || name.starts_with("_ZNKSt") {
+        return Some("std");
+    }
+
+    // Itanium ABI: _ZN<digits><name>... → extract <name>
+    // Examples: _ZN4core... → core, _ZN3std... → std
+    if name.starts_with("_ZN") {
+        let rest = &name[3..];
+        let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+        if digits_end > 0 {
+            if let Ok(len) = rest[..digits_end].parse::<usize>() {
+                if digits_end + len <= rest.len() {
+                    return Some(&rest[digits_end..digits_end + len]);
+                }
+            }
+        }
+        return None;
+    }
+
+    // Itanium ABI: _ZNK<digits><name>... → extract <name>
+    if name.starts_with("_ZNK") {
+        let rest = &name[4..];
+        let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+        if digits_end > 0 {
+            if let Ok(len) = rest[..digits_end].parse::<usize>() {
+                if digits_end + len <= rest.len() {
+                    return Some(&rest[digits_end..digits_end + len]);
+                }
+            }
+        }
+        return None;
+    }
+
+    // Go-style: namespace.name
+    if let Some(dot_pos) = name.find('.') {
+        return Some(&name[..dot_pos]);
+    }
+
+    None
+}
+
+/// Returns true if the function name belongs to a standard library or
+/// third-party library (i.e., not user-defined code).
+///
+/// Detection strategy:
+/// 1. Demangle the function name and extract the first namespace component.
+/// 2. Check if the namespace is a known standard-library namespace.
+/// 3. Compiler builtins and runtime functions are also excluded.
+///
+/// This is language-agnostic — works for C++, Rust, Go, C#, Java, etc.
+/// Third-party library functions that are external declarations (not defined
+/// in the current module) are detected by the caller via `module.declarations`.
+pub(crate) fn is_library_function(name: &str) -> bool {
+    // Compiler builtins / runtime
+    if name.starts_with("__clang") || name.starts_with("__cxx") || name.starts_with("__gnu") {
+        return true;
+    }
+
+    // Extract the first namespace and check against known library namespaces.
+    if let Some(ns) = first_namespace(name) {
+        if is_known_stdlib_namespace(ns) {
+            return true;
+        }
+    }
+
+    // Go-style plain names: also check the dotted prefix directly
+    if let Some(dot_pos) = name.find('.') {
+        let pkg = &name[..dot_pos];
+        if is_known_stdlib_namespace(pkg) {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Determines if a resource family represents a leakable resource.
 ///
 /// Leakable resources are those that require explicit release and can
@@ -283,6 +405,36 @@ pub(crate) fn is_declaration_only_candidate(
             !user_defined_functions.contains(c.trim_start_matches('@'))
         })
     }
+}
+
+/// Checks if a candidate originates from a standard library / third-party function.
+///
+/// Standard library functions (std::function, std::string, core::*, etc.)
+/// manage their own memory internally.  Their internal allocations are not
+/// user-code bugs.
+///
+/// Detection uses a language-agnostic approach:
+/// 1. Demangle the function name and extract the first namespace component.
+/// 2. Check if the namespace is a known standard-library namespace.
+/// 3. Check if the caller/release caller are themselves library functions.
+pub(crate) fn is_stdlib_candidate(candidate: &IssueCandidate) -> bool {
+    // Check the alloc_function (primary function name).
+    if is_library_function(&candidate.alloc_function) {
+        return true;
+    }
+    // Check the alloc caller (function containing the allocation).
+    if let Some(ref caller) = candidate.alloc_caller {
+        if is_library_function(caller) {
+            return true;
+        }
+    }
+    // Check the release caller (function containing the release).
+    if let Some(ref caller) = candidate.release_caller {
+        if is_library_function(caller) {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn is_same_language_allocator_wrapper_noise(

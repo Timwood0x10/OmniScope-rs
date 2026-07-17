@@ -234,36 +234,108 @@ pub(super) fn caller_returns_owned_resource(store: &SummaryStore, alloc: &RawRes
     false
 }
 
+/// Checks if the allocation's caller function returns the allocated pointer
+/// to its caller (the "malloc + return" pattern used by factory functions).
+///
+/// This is a direct IR-level check that looks at the function body for a `ret`
+/// instruction that returns a pointer value derived from a `malloc`/`calloc` call.
+/// It serves as a fallback when the summary store hasn't been populated yet.
+///
+/// Factory functions like `dupString()` allocate with `malloc()` and return the
+/// pointer — the caller takes ownership. Without this check, such allocations
+/// would be flagged as DefiniteLeak.
+pub(super) fn allocation_returned_to_caller(module: &IRModule, alloc: &RawResourceFact) -> bool {
+    // Get the function body for the caller.
+    let body = match module.function_bodies.get(&alloc.caller_name) {
+        Some(b) => b,
+        None => return false,
+    };
+
+    // Check if the function returns a pointer (has a `ret` with a pointer operand).
+    // This is a strong signal that the function is a factory/accessor, not a sink.
+    let has_ptr_return = body.instructions.iter().any(|inst| {
+        matches!(inst.kind, IRInstructionKind::Ret)
+            && inst
+                .operands
+                .iter()
+                .any(|op| op.starts_with('%') || op.starts_with('@'))
+    });
+    if !has_ptr_return {
+        return false;
+    }
+
+    // Check if the function has at least one allocator call (malloc, calloc, etc.)
+    // that is a direct allocation (not a realloc). The allocator function name is
+    // in `alloc.function_name`.
+    let is_allocator = alloc.function_name == "malloc"
+        || alloc.function_name == "calloc"
+        || alloc.function_name == "realloc"
+        || alloc.function_name == "_Znam"   // C++ operator new[]
+        || alloc.function_name == "_Znwm"; // C++ operator new
+
+    is_allocator && has_ptr_return
+}
+
 /// Checks if the alloc's function or caller is marked as runtime-managed
 /// in the SRT (Semantic Resolution Tree) resolutions.
 ///
 /// If a function is tagged with `RuntimeManagedResource`, `StoredToRuntime`,
 /// or `StoredToOwner`, allocations within it are not local leaks — the
 /// runtime/arena/owner is responsible for cleanup.
+///
+/// When SRT has no resolution for the function, falls back to a static
+/// whitelist of well-known runtime/GC-managed allocators (e.g., C# COM
+/// interop `CoTaskMemAlloc`, P/Invoke `Marshal.AllocHGlobal`).
 pub(super) fn is_runtime_managed(
     srt_resolutions: &Option<std::collections::HashMap<String, Vec<SemanticKind>>>,
     alloc: &RawResourceFact,
 ) -> bool {
-    let Some(resolutions) = srt_resolutions else {
-        return false;
-    };
-
     let managed_kinds = [
         SemanticKind::RuntimeManagedResource,
         SemanticKind::StoredToRuntime,
         SemanticKind::StoredToOwner,
     ];
 
-    // Check both the alloc function name and the caller name.
-    for name in [&alloc.function_name, &alloc.caller_name] {
-        if let Some(kinds) = resolutions.get(name) {
-            if kinds.iter().any(|k| managed_kinds.contains(k)) {
-                return true;
+    // First, check SRT resolutions (most precise).
+    if let Some(resolutions) = srt_resolutions {
+        for name in [&alloc.function_name, &alloc.caller_name] {
+            if let Some(kinds) = resolutions.get(name) {
+                if kinds.iter().any(|k| managed_kinds.contains(k)) {
+                    return true;
+                }
             }
         }
     }
 
-    false
+    // Fallback: check well-known runtime/GC-managed allocators by name.
+    // This handles cases where SRT is empty or has no resolution for the
+    // alloc function (e.g., C# CoTaskMemAlloc, Marshal.AllocHGlobal).
+    is_well_known_runtime_allocator(&alloc.function_name)
+}
+
+/// Checks if a function name is a well-known runtime/GC-managed allocator.
+///
+/// These allocators are managed by their respective runtimes (CLR GC, Go
+/// GC, JVM, etc.) and should not produce DefiniteLeak when the allocation
+/// is not explicitly freed — the runtime will reclaim the memory.
+fn is_well_known_runtime_allocator(name: &str) -> bool {
+    // C# / .NET: COM interop — allocated by COM runtime, freed by CoTaskMemFree
+    name == "CoTaskMemAlloc"
+        // C# / .NET: P/Invoke Marshal — allocated by CLR, freed by FreeHGlobal
+        || name == "Marshal.AllocHGlobal"
+        || name == "Marshal_AllocHGlobal"
+        || name == "AllocHGlobal"
+        // Go runtime: GC-managed allocations
+        || name == "runtime.mallocgc"
+        || name == "runtime.newobject"
+        || name == "runtime.newarray"
+        // JNI: JVM-managed references
+        || name == "NewLocalRef"
+        || name == "NewGlobalRef"
+        || name == "NewWeakGlobalRef"
+        // Python: reference-counted allocations (managed by PyObject lifecycle)
+        || name == "PyObject_New"
+        || name == "PyObject_NewVar"
 }
 
 /// Classify a function's termination behavior by examining its IR body.

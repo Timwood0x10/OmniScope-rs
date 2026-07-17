@@ -86,8 +86,8 @@ fn run_accuracy_with_cross(cross_boundaries: Vec<(&str, &str)>) -> AccuracyResul
         .filter(|entry| {
             let path = entry.path();
             let ext = path.extension().is_some_and(|ext| ext == "ll");
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            ext && !name.starts_with("zig_")
+
+            ext
         })
         .map(|entry| entry.path())
         .collect();

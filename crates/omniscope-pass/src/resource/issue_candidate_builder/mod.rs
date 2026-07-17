@@ -141,6 +141,7 @@ impl Pass for IssueCandidateBuilderPass {
                 // Classify edges in one pass, collecting indices by effect kind.
                 let mut acquire_indices: Vec<usize> = Vec::new();
                 let mut release_indices: Vec<usize> = Vec::new();
+                let mut cross_language_free_indices: Vec<usize> = Vec::new();
                 let mut escape_callback_indices: Vec<usize> = Vec::new();
                 let mut ownership_escape_indices: Vec<usize> = Vec::new();
                 let mut ownership_reclaim_indices: Vec<usize> = Vec::new();
@@ -154,8 +155,13 @@ impl Pass for IssueCandidateBuilderPass {
                             release_indices.push(idx)
                         }
                         Effect::CrossLanguageFree { .. } => {
-                            // CrossLanguageFree is a release with cross-language mismatch
-                            release_indices.push(idx);
+                            // CrossLanguageFree is a release with cross-language mismatch.
+                            // NOT added to release_indices because it would cause spurious
+                            // DoubleFree FP when a single call creates both a Release and
+                            // a CrossLanguageFree edge (e.g., Marshal_FreeHGlobal in C#).
+                            // CrossLanguageFree is handled separately by the CrossLanguageFree
+                            // candidate builder below.
+                            cross_language_free_indices.push(idx);
                         }
                         Effect::EscapesToCallback { .. } => escape_callback_indices.push(idx),
                         Effect::OwnershipEscape { .. } => ownership_escape_indices.push(idx),
@@ -166,11 +172,19 @@ impl Pass for IssueCandidateBuilderPass {
                 }
 
                 // ── CrossFamilyFree ──
+                // Check both regular release edges and cross-language free edges.
+                // CrossLanguageFree edges are NOT in release_indices (to avoid
+                // spurious DoubleFree FP), so we create a combined list here.
+                let all_release_indices: Vec<usize> = release_indices
+                    .iter()
+                    .chain(cross_language_free_indices.iter())
+                    .copied()
+                    .collect();
                 for &ai in &acquire_indices {
                     let alloc_family = graph.edges[ai].family.unwrap_or(FamilyId::C_HEAP);
                     let alloc_func = graph.edges[ai].function_name.as_str();
 
-                    for &ri in &release_indices {
+                    for &ri in &all_release_indices {
                         let release_family = graph.edges[ri].family.unwrap_or(FamilyId::C_HEAP);
                         let release_func = graph.edges[ri].function_name.as_str();
 
@@ -506,6 +520,50 @@ impl Pass for IssueCandidateBuilderPass {
                         .with_release_caller(&graph.edges[ri].caller_name)
                         .with_free_site(site_a.clone())
                         .with_free_site(site_b.clone());
+
+                        // ── Mutual-exclusivity check ──
+                        // Check if the two release calls are in different basic blocks
+                        // by looking for a Branch instruction between them in the IR.
+                        // If they are, the releases are mutually exclusive (if/else
+                        // branches) and this is NOT a genuine double-free.
+                        if let Some(ir) = ir_module {
+                            if let (Some(idx_a), Some(idx_b)) =
+                                (site_a.instruction_index, site_b.instruction_index)
+                            {
+                                if idx_a != idx_b {
+                                    // Check if there's a Branch instruction between the two indices.
+                                    let min_idx = idx_a.min(idx_b);
+                                    let max_idx = idx_a.max(idx_b);
+                                    if let Some(ref caller) = site_a.caller {
+                                        if let Some(body) = ir.function_bodies.get(caller.as_str())
+                                        {
+                                            let has_branch_between =
+                                                (min_idx + 1..max_idx).any(|i| {
+                                                    body.instructions
+                                                        .get(i)
+                                                        .map(|inst| {
+                                                            matches!(
+                                                            inst.kind,
+                                                            omniscope_ir::IRInstructionKind::Branch
+                                                        )
+                                                        })
+                                                        .unwrap_or(false)
+                                                });
+                                            if has_branch_between {
+                                                candidate.mutual_exclusive = true;
+                                                tracing::debug!(
+                                                    "[DR-MUTEX] instance={} indices=({}, {}) \
+                                                     — Branch between releases, mutual exclusive",
+                                                    instance_id,
+                                                    idx_a,
+                                                    idx_b
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         // Add MultipleRelease evidence
                         candidate.add_evidence(
@@ -963,6 +1021,18 @@ impl Pass for IssueCandidateBuilderPass {
                     } else {
                         &instance.function_name
                     };
+
+                    // ── Standard library suppression ──
+                    // Skip leak candidates from C++ standard library functions.
+                    // These manage their own memory internally.
+                    if func_name.starts_with("_ZNSt") || func_name.starts_with("_ZNKSt") {
+                        tracing::debug!(
+                            "[LEAK-SUPPRESS] ConditionalLeak suppressed for '{}' — stdlib function",
+                            func_name
+                        );
+                        continue;
+                    }
+
                     let mut candidate = IssueCandidate::new(
                         id,
                         IssueCandidateKind::ConditionalLeak,

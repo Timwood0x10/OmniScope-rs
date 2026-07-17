@@ -108,6 +108,12 @@ pub struct IssueCandidate {
     /// same underlying allocation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alias_evidence: Vec<AliasEvidence>,
+    /// Whether the releases in this candidate are in different basic blocks
+    /// (mutually exclusive branches). Populated by the candidate builder
+    /// when it detects a Branch instruction between the two release calls.
+    /// Used by the DoubleFree verifier to suppress false positives from
+    /// if/else mutually exclusive free patterns.
+    pub mutual_exclusive: bool,
 }
 
 /// Unique identifier for issue candidates.
@@ -142,6 +148,7 @@ impl IssueCandidate {
             ffi_evidence: None,
             free_sites: Vec::new(),
             alias_evidence: Vec::new(),
+            mutual_exclusive: false,
         }
     }
 

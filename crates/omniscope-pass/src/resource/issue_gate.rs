@@ -211,6 +211,12 @@ where
             if has_kind(key, SemanticKind::RuntimeInternal) {
                 return GateVerdict::SuppressRuntimeInternal;
             }
+            // C# P/Invoke Marshal functions (Marshal.AllocHGlobal, Marshal.FreeHGlobal,
+            // CoTaskMemAlloc, CoTaskMemFree) are legitimate cross-language memory
+            // management APIs. Calling them from C code is expected behavior.
+            if has_kind(key, SemanticKind::CsharpPinvokeMarshal) {
+                return GateVerdict::SuppressRaii;
+            }
         }
 
         // ── OwnershipViolation: same suppression signals as CrossLanguageFree ──
@@ -231,6 +237,12 @@ where
             }
             if has_kind(key, SemanticKind::RuntimeInternal) {
                 return GateVerdict::SuppressRuntimeInternal;
+            }
+            // C# P/Invoke Marshal functions (Marshal.AllocHGlobal, CoTaskMemAlloc)
+            // are legitimate cross-language allocation APIs. C code calling them
+            // is expected C# interop, not an ownership violation.
+            if has_kind(key, SemanticKind::CsharpPinvokeMarshal) {
+                return GateVerdict::SuppressRaii;
             }
             // Python reference counting / copy-constructor patterns.
             // Functions like PyUnicode_FromString copy their input — the
