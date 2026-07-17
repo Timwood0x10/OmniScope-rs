@@ -574,8 +574,14 @@ impl FFIBoundaryPass {
         // management APIs. When C code calls them through P/Invoke, the
         // OwnershipViolation and CrossLanguageFree are expected behavior.
         // This is a generic pattern based on naming convention, not a whitelist.
-        if matches!(kind, IssueKind::OwnershipViolation | IssueKind::CrossLanguageFree) {
-            let callee = boundary.callee_name.trim_start_matches('@').trim_matches('"');
+        if matches!(
+            kind,
+            IssueKind::OwnershipViolation | IssueKind::CrossLanguageFree
+        ) {
+            let callee = boundary
+                .callee_name
+                .trim_start_matches('@')
+                .trim_matches('"');
             let is_csharp_marshal = callee.contains("Marshal_AllocHGlobal")
                 || callee.contains("Marshal.AllocHGlobal")
                 || callee.contains("AllocHGlobal")
@@ -587,9 +593,7 @@ impl FFIBoundaryPass {
             if is_csharp_marshal {
                 debug!(
                     "Suppressed {:?} for {}: C# P/Invoke Marshal call to '{}'",
-                    kind,
-                    boundary.caller_name,
-                    boundary.callee_name,
+                    kind, boundary.caller_name, boundary.callee_name,
                 );
                 return; // Suppress — C# P/Invoke Marshal is expected FFI bridge
             }

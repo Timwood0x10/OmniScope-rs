@@ -243,7 +243,6 @@ pub(crate) fn verify_cross_family_free(
 fn is_known_cross_language_pattern(alloc_family: FamilyId, release_family: FamilyId) -> bool {
     matches!(
         (alloc_family, release_family),
-        (FamilyId::C_HEAP, FamilyId::CSHARP_HGLOBAL)
-            | (FamilyId::CSHARP_HGLOBAL, FamilyId::C_HEAP)
+        (FamilyId::C_HEAP, FamilyId::CSHARP_HGLOBAL) | (FamilyId::CSHARP_HGLOBAL, FamilyId::C_HEAP)
     )
 }

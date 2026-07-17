@@ -535,18 +535,20 @@ impl Pass for IssueCandidateBuilderPass {
                                     let min_idx = idx_a.min(idx_b);
                                     let max_idx = idx_a.max(idx_b);
                                     if let Some(ref caller) = site_a.caller {
-                                        if let Some(body) = ir.function_bodies.get(caller.as_str()) {
-                                            let has_branch_between = (min_idx + 1..max_idx).any(|i| {
-                                                body.instructions
-                                                    .get(i)
-                                                    .map(|inst| {
-                                                        matches!(
+                                        if let Some(body) = ir.function_bodies.get(caller.as_str())
+                                        {
+                                            let has_branch_between =
+                                                (min_idx + 1..max_idx).any(|i| {
+                                                    body.instructions
+                                                        .get(i)
+                                                        .map(|inst| {
+                                                            matches!(
                                                             inst.kind,
                                                             omniscope_ir::IRInstructionKind::Branch
                                                         )
-                                                    })
-                                                    .unwrap_or(false)
-                                            });
+                                                        })
+                                                        .unwrap_or(false)
+                                                });
                                             if has_branch_between {
                                                 candidate.mutual_exclusive = true;
                                                 tracing::debug!(
@@ -1019,6 +1021,18 @@ impl Pass for IssueCandidateBuilderPass {
                     } else {
                         &instance.function_name
                     };
+
+                    // ── Standard library suppression ──
+                    // Skip leak candidates from C++ standard library functions.
+                    // These manage their own memory internally.
+                    if func_name.starts_with("_ZNSt") || func_name.starts_with("_ZNKSt") {
+                        tracing::debug!(
+                            "[LEAK-SUPPRESS] ConditionalLeak suppressed for '{}' — stdlib function",
+                            func_name
+                        );
+                        continue;
+                    }
+
                     let mut candidate = IssueCandidate::new(
                         id,
                         IssueCandidateKind::ConditionalLeak,

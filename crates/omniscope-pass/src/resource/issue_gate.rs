@@ -151,34 +151,6 @@ where
             || (!caller_key.is_empty() && caller_key != k && has_kind(caller_key, kind))
     };
 
-    // ── Standard library noise suppression ──
-    // C++ standard library internal functions (std::function, std::string,
-    // std::vector, etc.) use internal allocations that are managed by the
-    // library itself. These are not user-code bugs.
-    if matches!(
-        issue.kind,
-        omniscope_core::IssueKind::DefiniteLeak
-            | omniscope_core::IssueKind::ConditionalLeak
-            | omniscope_core::IssueKind::MemoryLeak
-            | omniscope_core::IssueKind::CrossFamilyFree
-            | omniscope_core::IssueKind::CrossLanguageFree
-    ) {
-        let symbol = issue.symbol.as_str();
-        // libc++ (clang): _ZNSt3__* = std::__1::*
-        // libstdc++ (gcc): _ZNSt* = std::*
-        // const methods: _ZNKSt3__* = std::__1::* (const)
-        if symbol.starts_with("_ZNSt3__")
-            || symbol.starts_with("_ZNKSt3__")
-            || symbol.starts_with("_ZNSt")
-            || symbol.starts_with("_ZNKSt")
-            // std::__1::function, std::__1::basic_string, etc.
-            || symbol.contains("St3__1")
-            || symbol.contains("St3__")
-        {
-            return GateVerdict::SuppressRaii;
-        }
-    }
-
     match issue.kind {
         // ── BorrowEscape: R-1 heap/global provenance + R-7 library + R-8 from_parameter ──
         omniscope_core::IssueKind::BorrowEscape => {

@@ -285,6 +285,37 @@ pub(crate) fn is_declaration_only_candidate(
     }
 }
 
+/// Checks if a candidate originates from a C++ standard library function.
+///
+/// Standard library functions (std::function, std::string, std::vector, etc.)
+/// manage their own memory internally.  Their internal allocations are not
+/// user-code bugs.
+///
+/// Detection uses the Itanium ABI's `St` token for the `std::` namespace —
+/// a language-ABI guarantee, not a compiler-specific convention.
+pub(crate) fn is_stdlib_candidate(candidate: &IssueCandidate) -> bool {
+    // Check the alloc_function (function name of the allocator, always set).
+    // ConditionalLeak candidates from ownership states don't have alloc_caller
+    // set, but they do have alloc_function from the resource instance.
+    let func_name = &candidate.alloc_function;
+    if func_name.starts_with("_ZNSt") || func_name.starts_with("_ZNKSt") {
+        return true;
+    }
+    // Check the alloc caller (function containing the allocation).
+    if let Some(ref caller) = candidate.alloc_caller {
+        if caller.starts_with("_ZNSt") || caller.starts_with("_ZNKSt") {
+            return true;
+        }
+    }
+    // Check the release caller (function containing the release).
+    if let Some(ref caller) = candidate.release_caller {
+        if caller.starts_with("_ZNSt") || caller.starts_with("_ZNKSt") {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn is_same_language_allocator_wrapper_noise(
     candidate: &IssueCandidate,
     index: &crate::module_index::ModuleIndex,

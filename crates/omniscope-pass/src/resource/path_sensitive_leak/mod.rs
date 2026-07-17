@@ -31,9 +31,9 @@ use crate::resource::raw_fact_collector::RawResourceFact;
 
 use analysis::{collect_exit_states, determine_leak_type, format_exit_state_summary};
 use helpers::{
-    build_call_adjacency, caller_returns_owned_resource, check_release_in_summaries,
-    classify_function_termination, count_alloc_release_in_facts, function_has_noreturn_exit,
-    is_runtime_managed, reachable_functions, allocation_returned_to_caller, FunctionTermination,
+    allocation_returned_to_caller, build_call_adjacency, caller_returns_owned_resource,
+    check_release_in_summaries, classify_function_termination, count_alloc_release_in_facts,
+    function_has_noreturn_exit, is_runtime_managed, reachable_functions, FunctionTermination,
 };
 
 // Re-export public types from helpers.
@@ -213,6 +213,26 @@ impl Pass for LeakDetectionPass {
         for alloc in &alloc_sites {
             let family = alloc.family.unwrap_or(FamilyId::C_HEAP);
 
+            // ── Standard library function filter ──
+            // Skip allocations inside standard library / third-party functions.
+            // These functions manage their own memory internally — their
+            // allocs are not user-code bugs.
+            if let Some(summary) = summary_store.find_by_name(&alloc.caller_name) {
+                if matches!(
+                    summary.origin,
+                    omniscope_types::FunctionOrigin::Stdlib
+                        | omniscope_types::FunctionOrigin::Runtime
+                        | omniscope_types::FunctionOrigin::ThirdParty
+                ) {
+                    tracing::debug!(
+                        "Stdlib filter: skipped alloc in '{}' (origin={:?})",
+                        alloc.caller_name,
+                        summary.origin
+                    );
+                    continue;
+                }
+            }
+
             let (alloc_count, release_count) = count_alloc_release_in_facts(&raw_facts, alloc);
             let has_release_in_summaries = check_release_in_summaries(&summary_store, alloc);
 
@@ -254,7 +274,7 @@ impl Pass for LeakDetectionPass {
                 // the ownership is intentionally transferred.
                 if caller_returns_owned_resource(&summary_store, alloc) {
                     LeakType::Safe
-                } else if let Some(ref module) = ir_module {
+                } else if let Some(module) = ir_module {
                     // Fallback: directly check the function body for the
                     // "malloc + return" pattern. This handles cases where
                     // the summary store hasn't been populated yet.

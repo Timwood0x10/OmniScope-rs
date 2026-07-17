@@ -46,7 +46,7 @@ pub(crate) use helpers::{
     build_verdict_description, deduplicate_leak_candidates, has_escape_evidence,
     is_declaration_only_candidate, is_ffi_bridge_layer_candidate, is_ffi_specific_issue,
     is_leak_candidate, is_leakable_resource, is_memory_resource, is_runtime_allocator_function,
-    is_runtime_deallocator_function, is_same_language_allocator_wrapper_noise,
+    is_runtime_deallocator_function, is_same_language_allocator_wrapper_noise, is_stdlib_candidate,
 };
 pub(crate) use leak::{
     verify_borrow_escape, verify_conditional_leak, verify_conditional_leak_with_bundle,
@@ -224,6 +224,21 @@ impl Pass for IssueVerifierPass {
                 candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
                 candidate.description.get_or_insert_with(|| {
                     "issue candidate refers only to extern declaration(s), not an executable code path".to_string()
+                });
+                verified.push(candidate);
+                continue;
+            }
+
+            // ── Standard library function suppression ──
+            // Suppress candidates from C++ standard library / third-party
+            // functions. These manage their own memory internally — their
+            // allocs are not user-code bugs. The Itanium ABI uses a special
+            // token `St` for the `std::` namespace (language-ABI guarantee).
+            if is_stdlib_candidate(&candidate) {
+                semantic_suppressed += 1;
+                candidate.verdict = Some(VerifierVerdict::ExplainedSafe);
+                candidate.description.get_or_insert_with(|| {
+                    "candidate from standard library function — internal allocations managed by library".to_string()
                 });
                 verified.push(candidate);
                 continue;

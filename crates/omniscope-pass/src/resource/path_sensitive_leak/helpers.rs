@@ -244,10 +244,7 @@ pub(super) fn caller_returns_owned_resource(store: &SummaryStore, alloc: &RawRes
 /// Factory functions like `dupString()` allocate with `malloc()` and return the
 /// pointer — the caller takes ownership. Without this check, such allocations
 /// would be flagged as DefiniteLeak.
-pub(super) fn allocation_returned_to_caller(
-    module: &IRModule,
-    alloc: &RawResourceFact,
-) -> bool {
+pub(super) fn allocation_returned_to_caller(module: &IRModule, alloc: &RawResourceFact) -> bool {
     // Get the function body for the caller.
     let body = match module.function_bodies.get(&alloc.caller_name) {
         Some(b) => b,
@@ -258,7 +255,10 @@ pub(super) fn allocation_returned_to_caller(
     // This is a strong signal that the function is a factory/accessor, not a sink.
     let has_ptr_return = body.instructions.iter().any(|inst| {
         matches!(inst.kind, IRInstructionKind::Ret)
-            && inst.operands.iter().any(|op| op.starts_with('%') || op.starts_with('@'))
+            && inst
+                .operands
+                .iter()
+                .any(|op| op.starts_with('%') || op.starts_with('@'))
     });
     if !has_ptr_return {
         return false;
@@ -271,7 +271,7 @@ pub(super) fn allocation_returned_to_caller(
         || alloc.function_name == "calloc"
         || alloc.function_name == "realloc"
         || alloc.function_name == "_Znam"   // C++ operator new[]
-        || alloc.function_name == "_Znwm";  // C++ operator new
+        || alloc.function_name == "_Znwm"; // C++ operator new
 
     is_allocator && has_ptr_return
 }
